@@ -92,9 +92,67 @@ detect_lan_cidr() {
 	fi
 }
 
-for cmd in cat ip wg-quick; do
+for cmd in cat chmod ip mktemp rm wg-quick; do
 	require_command "$cmd"
 done
+
+runtime_wg_config_path() {
+	local target="${1:-}"
+
+	[[ "$target" == "$WG_RUNTIME_DIR"/*.conf ]]
+}
+
+secure_runtime_wg_config() {
+	local target="$1"
+
+	if runtime_wg_config_path "$target" && [[ -f "$target" ]]; then
+		chmod 700 "$WG_RUNTIME_DIR" 2>/dev/null || true
+		chmod 600 "$target" 2>/dev/null || true
+	fi
+}
+
+filter_wg_quick_stderr() {
+	local target="$1"
+	local line
+
+	while IFS= read -r line; do
+		case "$line" in
+		"stat: cannot read table of mounted file systems: Permission denied")
+			continue
+			;;
+		"/usr/bin/wg-quick: line 47: ((: ( &  & 0007) == 0: syntax error: operand expected (error token is \"&  & 0007) == 0\")")
+			continue
+			;;
+		esac
+
+		if runtime_wg_config_path "$target" && [[ "$line" == "Warning: \`$target' is world accessible" ]]; then
+			continue
+		fi
+
+		printf '%s\n' "$line" >&2
+	done
+}
+
+run_wg_quick() {
+	local action="$1"
+	local target="$2"
+	local stderr_file=""
+	local rc=0
+
+	secure_runtime_wg_config "$target"
+	stderr_file="$(mktemp)"
+
+	if wg-quick "$action" "$target" 2>"$stderr_file"; then
+		rc=0
+	else
+		rc=$?
+	fi
+
+	filter_wg_quick_stderr "$target" <"$stderr_file"
+	rm -f "$stderr_file"
+
+	return "$rc"
+}
 
 if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
 	DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
@@ -145,12 +203,11 @@ fi
 teardown_resolved_dns "$VPN_INTERFACE"
 
 if [[ -f "$FILTERED_CONFIG_PATH" ]]; then
-	wg-quick down "$FILTERED_CONFIG_PATH" || true
+	run_wg_quick down "$FILTERED_CONFIG_PATH" || true
 elif [[ -f "$WG_CONFIG" ]]; then
-	wg-quick down "$WG_CONFIG" || true
+	run_wg_quick down "$WG_CONFIG" || true
 else
-	wg-quick down "$WG_PROFILE" || true
+	run_wg_quick down "$WG_PROFILE" || true
 fi
 
 rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
-

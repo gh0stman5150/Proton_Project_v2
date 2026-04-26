@@ -70,6 +70,68 @@ ensure_directory() {
 ensure_directory "$STATE_DIR" 700
 ensure_directory "$WG_RUNTIME_DIR" 700
 
+runtime_wg_config_path() {
+	local target="${1:-}"
+
+	[[ "$target" == "$WG_RUNTIME_DIR"/*.conf ]]
+}
+
+secure_runtime_wg_config() {
+	local target="${1:-$WG_CONFIG_TO_USE}"
+
+	chmod 700 "$WG_RUNTIME_DIR" 2>/dev/null || true
+
+	if runtime_wg_config_path "$target" && [[ -f "$target" ]]; then
+		chmod 600 "$target" 2>/dev/null || true
+	fi
+}
+
+filter_wg_quick_stderr() {
+	local target="$1"
+	local line
+
+	while IFS= read -r line; do
+		case "$line" in
+		"stat: cannot read table of mounted file systems: Permission denied")
+			continue
+			;;
+		"/usr/bin/wg-quick: line 47: ((: ( &  & 0007) == 0: syntax error: operand expected (error token is \"&  & 0007) == 0\")")
+			continue
+			;;
+		esac
+
+		if runtime_wg_config_path "$target" && [[ "$line" == "Warning: \`$target' is world accessible" ]]; then
+			continue
+		fi
+
+		printf '%s\n' "$line" >&2
+	done
+}
+
+run_wg_quick() {
+	local action="$1"
+	local target="$2"
+	local stderr_file=""
+	local rc=0
+
+	if runtime_wg_config_path "$target"; then
+		secure_runtime_wg_config "$target"
+	fi
+
+	stderr_file="$(mktemp)"
+
+	if wg-quick "$action" "$target" 2>"$stderr_file"; then
+		rc=0
+	else
+		rc=$?
+	fi
+
+	filter_wg_quick_stderr "$target" <"$stderr_file"
+	rm -f "$stderr_file"
+
+	return "$rc"
+}
+
 server_pool_requested() {
 	case "$SERVER_POOL_ENABLED" in
 	1 | true | yes | on)
@@ -413,6 +475,7 @@ resolve_docker_network_cidr() {
 
 load_selected_server
 prepare_wg_config "$WG_CONFIG"
+secure_runtime_wg_config "$WG_CONFIG_TO_USE"
 DNS_SERVERS_CSV="$(config_dns_servers "$WG_CONFIG_TO_USE")"
 resolve_docker_network_cidr
 
@@ -430,7 +493,7 @@ if [[ -x "$KILLSWITCH_SCRIPT" ]]; then
 	"$KILLSWITCH_SCRIPT"
 fi
 
-wg-quick up "$WG_CONFIG_TO_USE"
+run_wg_quick up "$WG_CONFIG_TO_USE"
 
 if uses_nftables_backend && [[ -x "$KILLSWITCH_SCRIPT" ]]; then
 	# The initial pre-up apply prevents leaks during interface bring-up. Re-run

@@ -71,6 +71,12 @@ exit 0
 EOF
   chmod +x "$TEST_TMPDIR/qb-sync.sh"
 
+  cat > "$TEST_TMPDIR/port-forward-once-success.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$TEST_TMPDIR/port-forward-once-success.sh"
+
   cat > "$TMPBIN/sleep" <<'EOF'
 #!/usr/bin/env bash
 exit 42
@@ -156,6 +162,51 @@ EOF
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"Recovery action 'NAT-PMP refresh' failed with exit 7"* ]]
+}
+
+@test "successful NAT-PMP refresh resets the recovery ladder instead of escalating to full restart" {
+  cat > "$TEST_TMPDIR/proton-port.state" <<'EOF'
+CURRENT_PORT=45678
+CURRENT_IP=10.2.0.2
+EOF
+  touch -d '10 minutes ago' "$TEST_TMPDIR/proton-port.state"
+
+  cat > "$TMPBIN/sleep" <<EOF
+#!/usr/bin/env bash
+count_file="$TEST_TMPDIR/sleep-count"
+count=0
+if [[ -f "\$count_file" ]]; then
+  count="\$(cat "\$count_file")"
+fi
+count=\$((count + 1))
+printf '%s' "\$count" > "\$count_file"
+if [[ "\$count" -ge 2 ]]; then
+  exit 42
+fi
+exit 0
+EOF
+  chmod +x "$TMPBIN/sleep"
+
+  run env \
+    QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
+    QBT_COMMON_SCRIPT="$QBT_COMMON_SCRIPT" \
+    STATE_FILE="$TEST_TMPDIR/proton-port.state" \
+    RECOVERY_LOCK_FILE="$TEST_TMPDIR/recovery.lock" \
+    QBITTORRENT_SYNC_SCRIPT="$TEST_TMPDIR/qb-sync.sh" \
+    PORT_FORWARD_SCRIPT="$TEST_TMPDIR/port-forward-once-success.sh" \
+    CHECK_INTERVAL=60 \
+    MIN_COMBINED_SPEED_BPS=65536 \
+    MAX_LOW_SPEED_CHECKS=1 \
+    LOW_SPEED_COUNT=0 \
+    RECOVERY_STAGE=1 \
+    bash ./proton-healthcheck.sh
+
+  [ "$status" -eq 42 ]
+  [[ "$output" == *"forcing a one-shot NAT-PMP refresh"* ]]
+  [[ "$output" == *"Low throughput detected (0 B/s, 1/1, stage 1)"* ]]
+  [[ "$output" == *"Low throughput detected (0 B/s, 1/1, stage 0)"* ]]
+  [[ "$output" == *"refreshing qBittorrent port state"* ]]
+  [[ "$output" != *"restarting Proton services"* ]]
 }
 
 @test "healthcheck logs the shared qB login diagnostic when the Web UI is unreachable" {

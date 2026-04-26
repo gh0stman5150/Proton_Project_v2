@@ -213,6 +213,15 @@ recover() {
     done
 
     if with_recovery_lock "$action_name" "$action_func" "$speed"; then
+        if [[ "$action_func" == "perform_natpmp_refresh" ]]; then
+            # A successful one-shot NAT-PMP refresh already proved that the
+            # tunnel and qBittorrent sync path are still working. Reset the
+            # ladder so weak swarm conditions do not immediately escalate to a
+            # full Proton restart on the next low-speed window.
+            RECOVERY_STAGE=0
+            return 0
+        fi
+
         RECOVERY_STAGE="$next_stage"
         return 0
     else
@@ -237,8 +246,8 @@ reset_recovery_state() {
     RECOVERY_STAGE=0
 }
 
-LOW_SPEED_COUNT=0
-RECOVERY_STAGE=0
+LOW_SPEED_COUNT="${LOW_SPEED_COUNT:-0}"
+RECOVERY_STAGE="${RECOVERY_STAGE:-0}"
 
 log "Starting throughput healthcheck loop..."
 

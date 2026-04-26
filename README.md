@@ -334,6 +334,11 @@ stabilization window after each forwarded-port update so normal NAT-PMP churn
 and qBittorrent port reconfiguration do not immediately trigger another round
 of recovery.
 
+A successful one-shot NAT-PMP refresh now resets the staged ladder back to the
+first step. That keeps healthy-but-slow swarms from escalating into a full
+WireGuard restart just because throughput stayed below the target while the
+forwarded port and qBittorrent sync path were already confirmed working.
+
 Tune those values in `proton-healthcheck.service` if the workload is bursty or often idle between peer activity.
 
 Any healthcheck driven recovery must preserve:
