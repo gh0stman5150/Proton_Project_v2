@@ -140,18 +140,19 @@ sudo ./install-proton-systemd.sh
 
 The installer:
 
-1. Stops active Proton services first during a redeploy so old long-running processes do not survive the file copy
-2. Copies the active Proton scripts to `/usr/local/bin/proton`
-3. Copies the systemd unit files to `/etc/systemd/system`
-4. Copies environment templates to `/etc/proton`
-5. Secures the active WireGuard config as `root:root` with mode `600`
-6. Preserves an existing `/etc/proton/qbittorrent.env`
-7. Writes replacement templates to `*.new` files instead of overwriting secrets
-8. Installs units that have systemd recreate `/run/proton` before applying sandboxed writable paths
-9. Clears stale bad-server cooldowns, port-forward incapable state, runtime selection state, and failed Proton service state before restart
-10. Runs `systemctl daemon-reload`
-11. Enables and restarts the Proton services
-12. Restarts `proton-docker-watch.service` only if it was already enabled
+1. Ensures the required Proton VPN Debian packages are installed, bootstrapping the Proton VPN apt repository and installing `protonvpn` if any are missing
+2. Stops active Proton services first during a redeploy so old long-running processes do not survive the file copy
+3. Copies the active Proton scripts to `/usr/local/bin/proton`
+4. Copies the systemd unit files to `/etc/systemd/system`
+5. Copies environment templates to `/etc/proton`
+6. Secures the active WireGuard config as `root:root` with mode `600`
+7. Preserves an existing `/etc/proton/qbittorrent.env`
+8. Writes replacement templates to `*.new` files instead of overwriting secrets
+9. Installs units that have systemd recreate `/run/proton` before applying sandboxed writable paths
+10. Clears stale bad-server cooldowns, port-forward incapable state, runtime selection state, and failed Proton service state before restart
+11. Runs `systemctl daemon-reload`
+12. Enables and restarts the Proton services
+13. Restarts `proton-docker-watch.service` only if it was already enabled
 
 You can also pass qBittorrent credentials during install:
 

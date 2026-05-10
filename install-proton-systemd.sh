@@ -50,6 +50,18 @@ ENV_FILES=(
     proton-healthcheck.env
 )
 
+PROTON_VPN_RELEASE_URL="https://repo.protonvpn.com/debian/dists/stable/main/binary-all/protonvpn-stable-release_1.0.8_all.deb"
+PROTON_VPN_RELEASE_DEB="protonvpn-stable-release_1.0.8_all.deb"
+PROTON_VPN_REQUIRED_PACKAGES=(
+    proton-vpn-cli
+    proton-vpn-daemon
+    protonvpn-stable-release
+    python3-proton-core
+    python3-proton-keyring-linux
+    python3-proton-vpn-api-core
+    python3-proton-vpn-local-agent
+)
+
 log() {
     printf '%s\n' "$*"
 }
@@ -77,6 +89,55 @@ require_command() {
         echo "ERROR: Required command '$cmd' is not installed." >&2
         exit 1
     fi
+}
+
+package_installed() {
+    local package="$1"
+    local status
+
+    status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
+    [[ "$status" == "install ok installed" ]]
+}
+
+ensure_proton_vpn_packages() {
+    local package release_deb
+    local missing_packages=()
+    local remaining_packages=()
+
+    for package in "${PROTON_VPN_REQUIRED_PACKAGES[@]}"; do
+        if ! package_installed "$package"; then
+            missing_packages+=("$package")
+        fi
+    done
+
+    if [[ "${#missing_packages[@]}" -eq 0 ]]; then
+        log "All required Proton VPN packages are installed"
+        return 0
+    fi
+
+    log "Missing Proton VPN packages: ${missing_packages[*]}"
+    require_command apt-get
+    require_command wget
+
+    release_deb="/tmp/${PROTON_VPN_RELEASE_DEB}"
+    log "Installing Proton VPN apt repository package from ${PROTON_VPN_RELEASE_URL}"
+    wget -O "$release_deb" "$PROTON_VPN_RELEASE_URL"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$release_deb"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y protonvpn
+
+    for package in "${PROTON_VPN_REQUIRED_PACKAGES[@]}"; do
+        if ! package_installed "$package"; then
+            remaining_packages+=("$package")
+        fi
+    done
+
+    if [[ "${#remaining_packages[@]}" -ne 0 ]]; then
+        echo "ERROR: Proton VPN package installation completed but these packages are still missing: ${remaining_packages[*]}" >&2
+        exit 1
+    fi
+
+    log "Installed required Proton VPN packages"
 }
 
 validate_shell_syntax() {
@@ -578,10 +639,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-for cmd in awk cat chmod chown find install mkdir mktemp mv readlink rm systemctl; do
+for cmd in awk cat chmod chown dpkg-query find install mkdir mktemp mv readlink rm systemctl; do
     require_command "$cmd"
 done
 
+ensure_proton_vpn_packages
 validate_bundle
 stop_proton_services_for_redeploy
 
