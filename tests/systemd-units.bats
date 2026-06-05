@@ -7,7 +7,10 @@
     proton-killswitch.service \
     proton-wg.service \
     proton-port-forward.service \
-    proton-healthcheck.service
+    proton-healthcheck.service \
+    proton-wg@.service \
+    proton-port-forward@.service \
+    proton-healthcheck@.service
   do
     if ! grep -Fq 'ReadWritePaths=' "$unit"; then
       echo "missing ReadWritePaths in $unit"
@@ -34,4 +37,17 @@
       return 1
     fi
   done
+}
+
+@test "templated units pass instance names and keep service relationships isolated" {
+  grep -Fq 'ExecStart=/usr/local/bin/proton/proton-wg-up-safe.sh %i' proton-wg@.service
+  grep -Fq 'ExecStop=/usr/local/bin/proton/proton-wg-down-safe.sh %i' proton-wg@.service
+
+  grep -Fq 'Requires=proton-wg@%i.service' proton-port-forward@.service
+  grep -Fq 'ExecStartPre=/usr/local/bin/proton/proton-port-forward-healthcheck.sh %i' proton-port-forward@.service
+  grep -Fq 'ExecStart=/usr/local/bin/proton/proton-port-forward-safe.sh %i' proton-port-forward@.service
+  grep -Fq 'ExecStop=/usr/local/bin/proton/proton-qbt-dnat-cleanup.sh %i' proton-port-forward@.service
+
+  grep -Fq 'Requires=proton-wg@%i.service proton-port-forward@%i.service' proton-healthcheck@.service
+  grep -Fq 'ExecStart=/usr/local/bin/proton/proton-healthcheck.sh %i' proton-healthcheck@.service
 }

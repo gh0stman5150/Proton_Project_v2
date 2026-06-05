@@ -1,0 +1,39 @@
+[Unit]
+Description=Proton Throughput Healthcheck for %i
+After=proton-wg@%i.service proton-port-forward@%i.service
+Requires=proton-wg@%i.service proton-port-forward@%i.service
+PartOf=proton-wg@%i.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/proton/proton-common.env
+EnvironmentFile=-/etc/proton/proton-healthcheck.env
+EnvironmentFile=-/etc/proton/instances/%i/proton.env
+EnvironmentFile=-/etc/proton/instances/%i/qbittorrent.env
+ExecStart=/usr/local/bin/proton/proton-healthcheck.sh %i
+Restart=on-failure
+RestartSec=15
+UMask=0077
+RuntimeDirectory=proton
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/run/proton /etc/proton
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=Proton Docker Network Watcher for %i
+After=network-online.target docker.service proton-wg@%i.service
+Wants=docker.service network-online.target
+Requires=proton-wg@%i.service
+PartOf=proton-wg@%i.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/proton/proton-common.env
+EnvironmentFile=-/etc/proton/instances/%i/proton.env
+EnvironmentFile=-/etc/proton/instances/%i/qbittorrent.env
+ExecStart=/usr/local/bin/proton/proton-docker-network-watcher.sh %i
+Restart=on-failure
+RestartSec=5
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+ProtectSystem=full
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

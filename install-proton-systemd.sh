@@ -17,17 +17,25 @@ QBT_NETWORK_NAME_VALUE=""
 
 SERVICES=(
     proton-killswitch.service
-    proton-wg.service
-    proton-port-forward.service
-    proton-healthcheck.service
+    proton-wg@.service
+    proton-port-forward@.service
+    proton-healthcheck@.service
 )
 
 OPTIONAL_SERVICES=(
-    proton-docker-watch.service
+    proton-docker-watch@.service
+)
+
+INSTANCES=(
+    lidarr
+    radarr
+    sonarr
+    whisparr
 )
 
 SCRIPTS=(
     install-proton-systemd.sh
+    proton-instance-common.sh
     proton-killswitch-dispatch.sh
     proton-killswitch-safe.sh
     proton-killswitch-nft.sh
@@ -467,6 +475,110 @@ install_qbittorrent_port_env() {
     install -o root -g root -m 0600 "${source_file}" "${target_file}"
 }
 
+instance_webui_port() {
+    case "$1" in
+        lidarr)
+            printf '%s\n' 8081
+            ;;
+        radarr)
+            printf '%s\n' 8082
+            ;;
+        sonarr)
+            printf '%s\n' 8083
+            ;;
+        whisparr)
+            printf '%s\n' 8084
+            ;;
+        *)
+            printf '%s\n' 8080
+            ;;
+    esac
+}
+
+instance_vpn_interface() {
+    case "$1" in
+        lidarr)
+            printf '%s\n' pvlidarr
+            ;;
+        radarr)
+            printf '%s\n' pvradarr
+            ;;
+        sonarr)
+            printf '%s\n' pvsonarr
+            ;;
+        whisparr)
+            printf '%s\n' pvwhisp
+            ;;
+        *)
+            printf '%s\n' "pv$1"
+            ;;
+    esac
+}
+
+install_instance_examples() {
+    local instance instance_dir proton_example qb_example webui_port vpn_if
+
+    mkdir -p "${ETC_PROTON_DIR}/instances"
+    chown root:root "${ETC_PROTON_DIR}/instances"
+    chmod 0755 "${ETC_PROTON_DIR}/instances"
+
+    for instance in "${INSTANCES[@]}"; do
+        instance_dir="${ETC_PROTON_DIR}/instances/${instance}"
+        proton_example="${instance_dir}/proton.env.example"
+        qb_example="${instance_dir}/qbittorrent.env.example"
+        webui_port="$(instance_webui_port "$instance")"
+        vpn_if="$(instance_vpn_interface "$instance")"
+
+        mkdir -p "$instance_dir"
+        chown root:root "$instance_dir"
+        chmod 0700 "$instance_dir"
+
+        cat > "$proton_example" <<EOF
+# Example Proton settings for the ${instance} instance.
+# Copy to proton.env, set a unique WireGuard config, then keep mode 0600.
+
+WG_PROFILE=${vpn_if}
+VPN_INTERFACE=${vpn_if}
+WG_CONFIG=${ETC_PROTON_DIR}/instances/${instance}/wireguard.conf
+STATE_DIR=/run/proton/${instance}
+SERVER_SELECTION_FILE=/run/proton/${instance}/current-server.env
+SERVER_RESELECT_FILE=/run/proton/${instance}/reselect-server.flag
+RECOVERY_LOCK_FILE=/run/proton/${instance}/recovery.lock
+DOCKER_NETWORK_CIDR_STATE_FILE=/run/proton/${instance}/docker-network-cidr
+DOCKER_CONFIG_DIR=/run/proton/${instance}/docker-config
+EOF
+
+        cat > "$qb_example" <<EOF
+# Example qBittorrent settings for the ${instance} instance.
+# Copy to qbittorrent.env, set real credentials, then keep mode 0600.
+
+QBT_INSTANCE_NAME=${instance}
+QBITTORRENT_URL=http://192.168.237.78:${webui_port}
+QBITTORRENT_USER=change-me
+QBITTORRENT_PASS=change-me
+
+QBT_CONTAINER_NAME=qbittorrent-${instance}
+QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent-${instance}
+QBT_COMPOSE_SERVICE=qbittorrent
+QBT_PORT_APPLY_MODE=compose-recreate
+QBT_INTERNAL_PORT=6881
+QBT_PORT_ENV_FILE=${ETC_PROTON_DIR}/instances/${instance}/qbittorrent-port.env
+QBT_NETWORK_NAME=starr-${instance}
+EOF
+
+        chown root:root "$proton_example" "$qb_example"
+        chmod 0600 "$proton_example" "$qb_example"
+
+        for real_config in proton.env qbittorrent.env wireguard.conf; do
+            if [[ -f "${instance_dir}/${real_config}" ]]; then
+                chown root:root "${instance_dir}/${real_config}"
+                chmod 0600 "${instance_dir}/${real_config}"
+                log "Preserved ${instance_dir}/${real_config}"
+            fi
+        done
+    done
+}
+
 path_dirname() {
     local path="$1"
 
@@ -546,8 +658,7 @@ install_qbittorrent_service_dropins() {
 }
 
 stop_proton_services_for_redeploy() {
-    log "Stopping active Proton services before reinstall/redeploy"
-    systemctl stop "${OPTIONAL_SERVICES[@]}" "${SERVICES[@]}" >/dev/null 2>&1 || true
+    log "Leaving existing Proton services running; start templated instances manually during migration"
 }
 
 restart_enabled_optional_services() {
@@ -585,14 +696,9 @@ reset_runtime_state_for_redeploy() {
 
 enable_and_start_services() {
     systemctl daemon-reload
-    systemctl enable "${SERVICES[@]}"
+    systemctl enable proton-killswitch.service
     systemctl reset-failed "${OPTIONAL_SERVICES[@]}" "${SERVICES[@]}" >/dev/null 2>&1 || true
-    reset_runtime_state_for_redeploy
     systemctl restart proton-killswitch.service
-    systemctl restart proton-wg.service
-    systemctl restart proton-port-forward.service
-    systemctl restart proton-healthcheck.service
-    restart_enabled_optional_services
 }
 
 ensure_root
@@ -673,17 +779,15 @@ done
 
 install_qbittorrent_env
 install_qbittorrent_port_env
-install_qbittorrent_service_dropins
+install_instance_examples
 load_common_env
 load_port_forward_env
-validate_wireguard_config
-secure_wireguard_config
 
 enable_and_start_services
 
 log "Installed Proton scripts to ${BIN_DIR}"
 log "Installed Proton env files to ${ETC_PROTON_DIR}"
 log "Installed systemd units to ${SYSTEMD_DIR}"
-log "Cleared stale bad/incapable/runtime state before restarting Proton services"
-log "Services enabled and restarted: ${SERVICES[*]}"
+log "Installed instance examples under ${ETC_PROTON_DIR}/instances"
+log "Templated instance units installed; start one instance first, for example: systemctl start proton-wg@sonarr proton-port-forward@sonarr proton-healthcheck@sonarr"
 log "If qBittorrent credentials already existed, review any *.new files under ${ETC_PROTON_DIR}"

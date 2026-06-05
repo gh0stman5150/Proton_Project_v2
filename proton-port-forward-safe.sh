@@ -2,7 +2,22 @@
 
 set -euo pipefail
 
-MODE="${1:-loop}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-instance-common.sh}"
+if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
+    echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+source "$INSTANCE_COMMON_SCRIPT"
+proton_instance_init "${1:-}" "/etc/proton/proton-port-forward.env"
+
+if [[ $# -gt 2 ]]; then
+    echo "ERROR: Usage: ${0##*/} INSTANCE [loop|once]" >&2
+    exit 1
+fi
+
+MODE="${2:-loop}"
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_INTERFACE="${VPN_INTERFACE:-$WG_PROFILE}"
 NATPMP_GATEWAY="${NATPMP_GATEWAY:-10.2.0.1}"
@@ -192,7 +207,7 @@ reconnect() {
         fi
 
         clear_state
-        "$WG_UP_SCRIPT"
+        "$WG_UP_SCRIPT" "$INSTANCE"
         sleep 5
     ) 200>"$RECOVERY_LOCK_FILE"
 }
@@ -245,7 +260,7 @@ if [[ "$MODE" == "once" ]]; then
     log "Got port: $PORT"
     save_state "$PORT" "$IP"
 
-    if ! "$QBITTORRENT_SYNC_SCRIPT"; then
+    if ! "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE"; then
         log "ERROR: qBittorrent port sync failed during one-shot NAT-PMP refresh"
         exit 1
     fi
@@ -288,7 +303,7 @@ while true; do
         if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
             "$SERVER_MANAGER_SCRIPT" mark-capable "$CURRENT_WG_PROFILE" "$PORT" >/dev/null 2>&1 || true
         fi
-        if ! "$QBITTORRENT_SYNC_SCRIPT"; then
+        if ! "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE"; then
             log "WARNING: qBittorrent port sync failed"
         fi
         FAILURES=0

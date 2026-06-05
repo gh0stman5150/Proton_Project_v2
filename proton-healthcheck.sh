@@ -3,6 +3,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-instance-common.sh}"
+if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
+    echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+source "$INSTANCE_COMMON_SCRIPT"
+proton_instance_init "${1:-}" "/etc/proton/proton-healthcheck.env"
+
 LOG_TAG="${LOG_TAG:-proton-healthcheck}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 STATE_FILE="${STATE_FILE:-${STATE_DIR}/proton-port.state}"
@@ -150,7 +159,7 @@ perform_qb_sync_refresh() {
     fi
 
     log "Throughput stayed below threshold at ${speed} B/s; refreshing qBittorrent port state"
-    "$QBITTORRENT_SYNC_SCRIPT"
+    "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE"
 }
 
 perform_natpmp_refresh() {
@@ -162,7 +171,7 @@ perform_natpmp_refresh() {
     fi
 
     log "Throughput stayed below threshold at ${speed} B/s; forcing a one-shot NAT-PMP refresh"
-    "$PORT_FORWARD_SCRIPT" once
+    "$PORT_FORWARD_SCRIPT" "$INSTANCE" once
 }
 
 perform_full_recovery() {
@@ -174,7 +183,7 @@ perform_full_recovery() {
         "$SERVER_MANAGER_SCRIPT" mark-bad "" "low-throughput-${speed}" >/dev/null 2>&1 || true
     fi
 
-    systemctl restart proton-killswitch.service proton-wg.service proton-port-forward.service
+    systemctl restart "proton-wg@${INSTANCE}.service" "proton-port-forward@${INSTANCE}.service"
 }
 
 recover() {

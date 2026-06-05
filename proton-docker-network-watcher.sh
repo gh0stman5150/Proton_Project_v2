@@ -6,6 +6,15 @@ set -euo pipefail
 # Docker -> VPN policy routing and refreshes the qBittorrent DNAT mapping.
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${DIR}/proton-instance-common.sh}"
+if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
+	echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
+	exit 1
+fi
+# shellcheck disable=SC1090
+source "$INSTANCE_COMMON_SCRIPT"
+proton_instance_init "${1:-}"
+
 LOGTAG="proton-docker-watch"
 log() { echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOGTAG"; }
 
@@ -27,18 +36,9 @@ SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}
 DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
 KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-$DIR/proton-killswitch-dispatch.sh}"
 
-mkdir -p /run/proton
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR" 2>/dev/null || true
 touch "$LAST_FILE" 2>/dev/null || true
-
-# Optional environment files (installer places qB vars here)
-if [[ -f "$QBITTORRENT_ENV_FILE" ]]; then
-	# shellcheck disable=SC1090
-	source "$QBITTORRENT_ENV_FILE"
-fi
-if [[ -f /etc/proton/proton-common.env ]]; then
-	# shellcheck disable=SC1090
-	source /etc/proton/proton-common.env
-fi
 
 load_selected_server() {
 	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
@@ -180,7 +180,7 @@ reapply_killswitch() {
 refresh_qb_state() {
 	if [[ -x "$QBT_SYNC_SCRIPT" ]]; then
 		log "Refreshing qBittorrent state via $QBT_SYNC_SCRIPT"
-		"$QBT_SYNC_SCRIPT" || log "Warning: qB sync script exited with non-zero status"
+		"$QBT_SYNC_SCRIPT" "$INSTANCE" || log "Warning: qB sync script exited with non-zero status"
 	else
 		log "qB sync script not found at $QBT_SYNC_SCRIPT; skipping qBittorrent reconciliation"
 	fi

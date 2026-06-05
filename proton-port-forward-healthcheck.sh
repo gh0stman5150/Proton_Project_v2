@@ -2,7 +2,17 @@
 
 set -euo pipefail
 
-QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-instance-common.sh}"
+if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
+    echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+source "$INSTANCE_COMMON_SCRIPT"
+proton_instance_init "${1:-}" "/etc/proton/proton-port-forward.env"
+
+QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-${INSTANCE_DIR}/qbittorrent.env}"
 
 require_command() {
     local cmd="$1"

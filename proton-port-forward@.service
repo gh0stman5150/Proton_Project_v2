@@ -1,0 +1,46 @@
+[Unit]
+Description=Proton Port Forwarding for %i
+After=proton-wg@%i.service docker.service
+Requires=proton-wg@%i.service
+PartOf=proton-wg@%i.service
+Wants=proton-healthcheck@%i.service docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/proton/proton-common.env
+EnvironmentFile=-/etc/proton/proton-port-forward.env
+EnvironmentFile=-/etc/proton/instances/%i/proton.env
+EnvironmentFile=-/etc/proton/instances/%i/qbittorrent.env
+ExecStartPre=/usr/local/bin/proton/proton-port-forward-healthcheck.sh %i
+ExecStart=/usr/local/bin/proton/proton-port-forward-safe.sh %i
+ExecStop=/usr/local/bin/proton/proton-qbt-dnat-cleanup.sh %i
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=90
+TimeoutStopSec=30
+UMask=0077
+RuntimeDirectory=proton
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=no
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/run/proton /etc/wireguard/proton-runtime /etc/proton
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
+
+[Install]
+WantedBy=multi-user.target

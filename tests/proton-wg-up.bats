@@ -4,6 +4,7 @@ setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
   export PATH="$TMPBIN:$PATH"
+  export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
   export STATE_DIR="$TEST_TMPDIR/state"
   export WG_RUNTIME_DIR="$TEST_TMPDIR/runtime"
   export WG_PROFILE="wg-test"
@@ -16,7 +17,16 @@ setup() {
   export MANAGE_RESOLVED_DNS="off"
   export KILLSWITCH_SCRIPT="$TEST_TMPDIR/missing-killswitch.sh"
 
-  mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_RUNTIME_DIR"
+  mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_RUNTIME_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
+STATE_DIR=$STATE_DIR
+WG_RUNTIME_DIR=$WG_RUNTIME_DIR
+EOF
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
+QBITTORRENT_URL=http://127.0.0.1:8083
+EOF
 
   cat > "$WG_CONFIG" <<'EOF'
 [Interface]
@@ -83,7 +93,7 @@ EOF
     SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
     MANAGE_RESOLVED_DNS="$MANAGE_RESOLVED_DNS" \
     KILLSWITCH_SCRIPT="$KILLSWITCH_SCRIPT" \
-    bash ./proton-wg-up-safe.sh
+    bash ./proton-wg-up-safe.sh sonarr
 
   [ "$status" -eq 0 ]
   [[ "$output" != *"cannot read table of mounted file systems"* ]]

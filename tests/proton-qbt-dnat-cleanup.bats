@@ -5,6 +5,16 @@ setup() {
   TMPBIN="$TEST_TMPDIR/bin"
   mkdir -p "$TMPBIN"
   export PATH="$TMPBIN:$PATH"
+  export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
+  mkdir -p "$PROTON_INSTANCE_ROOT/sonarr"
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<'EOF'
+STATE_DIR=/run/proton/sonarr
+EOF
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
+QBITTORRENT_URL=http://127.0.0.1:8083
+EOF
 }
 
 @test "exits non-zero when required command missing" {
@@ -13,7 +23,7 @@ setup() {
   # Intentionally override PATH to simulate missing commands
   # shellcheck disable=SC2123
   PATH="/nonexistent"
-  run "$BASH_BIN" ./proton-qbt-dnat-cleanup.sh
+  run "$BASH_BIN" ./proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -ne 0 ]
   PATH="$OLD_PATH"
 }
@@ -35,7 +45,7 @@ exit 0
 EOF
   chmod +x "$TMPBIN/nft"
 
-  run bash ./proton-qbt-dnat-cleanup.sh
+  run bash ./proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -eq 0 ]
   [[ "$output" =~ "No DNAT chain" ]]
 }

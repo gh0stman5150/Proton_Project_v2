@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-instance-common.sh}"
+if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
+	echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
+	exit 1
+fi
+# shellcheck disable=SC1090
+source "$INSTANCE_COMMON_SCRIPT"
+proton_instance_init "${1:-}"
+
 LOG_TAG="${LOG_TAG:-proton-wg}"
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_INTERFACE="${VPN_INTERFACE:-$WG_PROFILE}"

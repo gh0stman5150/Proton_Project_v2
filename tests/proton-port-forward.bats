@@ -4,6 +4,7 @@ setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
   export STATE_DIR="$TEST_TMPDIR/state"
+  export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
   export STATE_FILE="$STATE_DIR/proton-port.state"
   export SERVER_SELECTION_FILE="$STATE_DIR/current-server.env"
   export RECOVERY_LOCK_FILE="$STATE_DIR/recovery.lock"
@@ -19,7 +20,21 @@ setup() {
   export WG_UP_SCRIPT="$TEST_TMPDIR/wg-up.sh"
   export SERVER_MANAGER_SCRIPT="$TEST_TMPDIR/server-manager.sh"
 
-  mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_POOL_DIR"
+  mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_POOL_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
+STATE_DIR=$STATE_DIR
+STATE_FILE=$STATE_FILE
+SERVER_SELECTION_FILE=$SERVER_SELECTION_FILE
+RECOVERY_LOCK_FILE=$RECOVERY_LOCK_FILE
+WG_POOL_DIR=$WG_POOL_DIR
+EOF
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
+QBITTORRENT_URL=http://127.0.0.1:8083
+QBITTORRENT_USER=test
+QBITTORRENT_PASS=test
+EOF
 
   cat > "$SERVER_SELECTION_FILE" <<EOF
 SELECTED_WG_PROFILE=wg-good
@@ -108,7 +123,7 @@ EOF
     WG_UP_SCRIPT="$WG_UP_SCRIPT" \
     SERVER_MANAGER_SCRIPT="$SERVER_MANAGER_SCRIPT" \
     SERVER_MANAGER_LOG="$SERVER_MANAGER_LOG" \
-    bash ./proton-port-forward-safe.sh
+    bash ./proton-port-forward-safe.sh sonarr
 
   [ "$status" -eq 42 ]
   grep -F 'mark-bad wg-good port-forward-failures' "$SERVER_MANAGER_LOG"
@@ -132,7 +147,7 @@ EOF
     WG_UP_SCRIPT="$WG_UP_SCRIPT" \
     SERVER_MANAGER_SCRIPT="$SERVER_MANAGER_SCRIPT" \
     SERVER_MANAGER_LOG="$SERVER_MANAGER_LOG" \
-    bash ./proton-port-forward-safe.sh
+    bash ./proton-port-forward-safe.sh sonarr
 
   [ "$status" -eq 42 ]
   grep -F 'mark-incapable wg-good natpmp-timeout' "$SERVER_MANAGER_LOG"
@@ -160,7 +175,7 @@ EOF
     SELECTION_REWRITE_FILE="$SERVER_SELECTION_FILE" \
     SELECTION_REWRITE_PROFILE=wg-stale \
     SELECTION_REWRITE_DONE_FILE="$TEST_TMPDIR/selection-rewrite.done" \
-    bash ./proton-port-forward-safe.sh
+    bash ./proton-port-forward-safe.sh sonarr
 
   [ "$status" -eq 42 ]
   grep -F 'mark-bad wg-good port-forward-failures' "$SERVER_MANAGER_LOG"
@@ -231,7 +246,7 @@ EOF
     SERVER_MANAGER_LOG="$SERVER_MANAGER_LOG" \
     RECONNECTED_MARKER="$TEST_TMPDIR/reconnected" \
     TEST_TMPDIR="$TEST_TMPDIR" \
-    bash ./proton-port-forward-safe.sh
+    bash ./proton-port-forward-safe.sh sonarr
 
   [ "$status" -eq 143 ]
   grep -F 'mark-bad wg-old port-forward-failures' "$SERVER_MANAGER_LOG"

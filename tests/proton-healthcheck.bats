@@ -4,10 +4,19 @@ setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
   export PATH="$TMPBIN:$PATH"
+  export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
   export QBITTORRENT_ENV_FILE="$TEST_TMPDIR/qb.env"
   export QBT_COMMON_SCRIPT="$TEST_TMPDIR/proton-qbittorrent-common.sh"
 
-  mkdir -p "$TMPBIN"
+  mkdir -p "$TMPBIN" "$PROTON_INSTANCE_ROOT/sonarr"
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
+QBITTORRENT_ENV_FILE=$QBITTORRENT_ENV_FILE
+EOF
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
+QBITTORRENT_URL=http://qb.test:8080
+EOF
 
   cat > "$QBITTORRENT_ENV_FILE" <<'EOF'
 QBITTORRENT_URL=http://qb.test:8080
@@ -99,7 +108,7 @@ EOF
     CHECK_INTERVAL=60 \
     MIN_COMBINED_SPEED_BPS=65536 \
     MAX_LOW_SPEED_CHECKS=1 \
-    bash ./proton-healthcheck.sh
+    bash ./proton-healthcheck.sh sonarr
 
   [ "$status" -eq 42 ]
   [[ "$output" != *"Low throughput detected"* ]]
@@ -123,7 +132,7 @@ EOF
     CHECK_INTERVAL=60 \
     MIN_COMBINED_SPEED_BPS=65536 \
     MAX_LOW_SPEED_CHECKS=1 \
-    bash ./proton-healthcheck.sh
+    bash ./proton-healthcheck.sh sonarr
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"Low throughput detected"* ]]
@@ -137,7 +146,7 @@ EOF
     CHECK_INTERVAL=60 \
     MIN_COMBINED_SPEED_BPS=65536 \
     MAX_LOW_SPEED_CHECKS=3 \
-    bash ./proton-healthcheck.sh
+    bash ./proton-healthcheck.sh sonarr
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"Low throughput detected"* ]]
@@ -158,7 +167,7 @@ EOF
     CHECK_INTERVAL=60 \
     MIN_COMBINED_SPEED_BPS=65536 \
     MAX_LOW_SPEED_CHECKS=1 \
-    bash ./proton-healthcheck.sh
+    bash ./proton-healthcheck.sh sonarr
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"Recovery action 'NAT-PMP refresh' failed with exit 7"* ]]
@@ -199,7 +208,7 @@ EOF
     MAX_LOW_SPEED_CHECKS=1 \
     LOW_SPEED_COUNT=0 \
     RECOVERY_STAGE=1 \
-    bash ./proton-healthcheck.sh
+    bash ./proton-healthcheck.sh sonarr
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"forcing a one-shot NAT-PMP refresh"* ]]
@@ -215,7 +224,7 @@ EOF
     QBT_COMMON_SCRIPT="$QBT_COMMON_SCRIPT" \
     QBT_TEST_LOGIN_ERROR="qBittorrent Web UI unreachable at http://qb.test:8080" \
     CHECK_INTERVAL=60 \
-    bash ./proton-healthcheck.sh
+    bash ./proton-healthcheck.sh sonarr
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"qBittorrent Web UI unreachable at http://qb.test:8080; retrying later"* ]]

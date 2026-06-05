@@ -2,9 +2,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
-STATE_FILE="${STATE_FILE:-/run/proton/proton-port.state}"
-CACHE_FILE="${CACHE_FILE:-/run/proton/qbt-port.cache}"
+INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-instance-common.sh}"
+if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
+    echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+source "$INSTANCE_COMMON_SCRIPT"
+proton_instance_init "${1:-}"
+
+ENV_FILE="${QBITTORRENT_ENV_FILE}"
+STATE_FILE="${STATE_FILE:-${STATE_DIR}/proton-port.state}"
+CACHE_FILE="${CACHE_FILE:-${STATE_DIR}/qbt-port.cache}"
 DNAT_CLEANUP_SCRIPT="${DNAT_CLEANUP_SCRIPT:-${SCRIPT_DIR}/proton-qbt-dnat-cleanup.sh}"
 QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-qbittorrent-common.sh}"
 LOG_TAG="${LOG_TAG:-proton-qbt}"
@@ -450,7 +459,7 @@ refresh_qbt_dnat_legacy() {
     network_mode="$(container_network_mode)"
     if [[ "$network_mode" == "host" ]]; then
         if [[ -x "$DNAT_CLEANUP_SCRIPT" ]]; then
-            "$DNAT_CLEANUP_SCRIPT" || true
+            "$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || true
         fi
         log "qBittorrent container $QBT_CONTAINER_NAME uses host networking; DNAT refresh skipped"
         return 0
@@ -467,12 +476,12 @@ refresh_qbt_dnat_legacy() {
     fi
 
     if [[ -x "$DNAT_CLEANUP_SCRIPT" ]]; then
-        "$DNAT_CLEANUP_SCRIPT" || true
+        "$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || true
     fi
 
     ensure_qbt_dnat_chain
-    nft add rule ip proton_nat prerouting tcp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat"
-    nft add rule ip proton_nat prerouting udp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat"
+    nft add rule ip proton_nat prerouting tcp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat-${INSTANCE}"
+    nft add rule ip proton_nat prerouting udp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat-${INSTANCE}"
     DNAT_CHANGED=1
     log "Updated qBittorrent DNAT: public port $PORT -> ${CONTAINER_IP}:${QBT_INTERNAL_PORT}"
 }

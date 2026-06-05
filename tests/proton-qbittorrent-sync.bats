@@ -8,8 +8,9 @@ setup() {
   export PATH="$TMPBIN:$PATH"
   export STATE_FILE="$TEST_TMPDIR/proton-port.state"
   export CACHE_FILE="$TEST_TMPDIR/qbt-port.cache"
-  export ENV_FILE="$TEST_TMPDIR/qbittorrent.env"
-  export PORT_ENV_FILE="$TEST_TMPDIR/qbittorrent-port.env"
+  export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
+  export ENV_FILE="$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env"
+  export PORT_ENV_FILE="$PROTON_INSTANCE_ROOT/sonarr/qbittorrent-port.env"
   export CURL_STATE="$TEST_TMPDIR/current-qbt-port"
   export DOCKER_LOG="$TEST_TMPDIR/docker.log"
   export DOCKER_PORT_FILE="$TEST_TMPDIR/docker-published-port"
@@ -17,7 +18,13 @@ setup() {
   export CURL_LOG="$TEST_TMPDIR/curl.log"
   export PROJECT_DIR="$TEST_TMPDIR/project"
   export DOCKER_CONFIG_DIR="$TEST_TMPDIR/docker-config"
-  mkdir -p "$PROJECT_DIR"
+  mkdir -p "$PROJECT_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
+
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
+STATE_FILE=$STATE_FILE
+CACHE_FILE=$CACHE_FILE
+DOCKER_CONFIG_DIR=$DOCKER_CONFIG_DIR
+EOF
 
   cat > "$TMPBIN/systemd-cat" <<'EOF'
 #!/usr/bin/env bash
@@ -212,7 +219,7 @@ EOF
   echo 'QBT_PUBLISHED_PORT=40000' > "$PORT_ENV_FILE"
   printf '40000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
   ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
   grep -F 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
@@ -225,7 +232,7 @@ EOF
   printf '40001' > "$CURL_STATE"
   printf '30000' > "$DOCKER_PORT_FILE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
   grep -F 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
@@ -238,7 +245,7 @@ EOF
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
   grep -F 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
   grep -F "PWD=$PROJECT_DIR" "$DOCKER_LOG"
@@ -253,7 +260,7 @@ EOF
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=once QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=once QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
   [[ "$(grep -c 'QBT_PUBLISHED_PORT=40001' "$DOCKER_LOG")" -eq 2 ]]
   grep -F 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
@@ -265,7 +272,7 @@ EOF
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=always QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=always QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
   grep -F 'QBT_PUBLISHED_PORT=30000' "$DOCKER_LOG"
@@ -278,7 +285,7 @@ EOF
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_FLOCK_FAIL=1 bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_FLOCK_FAIL=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
   [ ! -s "$DOCKER_LOG" ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
@@ -289,9 +296,9 @@ EOF
   echo 'CURRENT_PORT=45000' > "$STATE_FILE"
   printf '45000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
-  grep -F 'add rule ip proton_nat prerouting tcp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat' "$NFT_LOG"
-  grep -F 'add rule ip proton_nat prerouting udp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat' "$NFT_LOG"
+  grep -F 'add rule ip proton_nat prerouting tcp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat-sonarr' "$NFT_LOG"
+  grep -F 'add rule ip proton_nat prerouting udp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat-sonarr' "$NFT_LOG"
   ! grep -F 'CMD=compose ' "$DOCKER_LOG"
 }
