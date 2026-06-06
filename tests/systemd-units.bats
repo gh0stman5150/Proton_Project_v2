@@ -5,9 +5,6 @@
 
   for unit in \
     proton-killswitch.service \
-    proton-wg.service \
-    proton-port-forward.service \
-    proton-healthcheck.service \
     proton-wg@.service \
     proton-port-forward@.service \
     proton-healthcheck@.service

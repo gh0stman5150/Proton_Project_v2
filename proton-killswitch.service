@@ -2,7 +2,6 @@
 Description=Proton Kill Switch
 After=network-online.target
 Wants=network-online.target
-Before=proton-wg.service
 
 [Service]
 Type=oneshot
