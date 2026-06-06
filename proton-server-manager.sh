@@ -29,6 +29,11 @@ PF_INCAPABLE_PROFILES_FILE="${PF_INCAPABLE_PROFILES_FILE:-/etc/proton/pf-incapab
 PF_CLAIMS_FILE="${PF_CLAIMS_FILE:-/run/proton/pf-claims.tsv}"
 # Default claim TTL (seconds) - increase to reduce race windows between concurrent selects
 CLAIM_TTL="${CLAIM_TTL:-3600}"
+# Global lock serializing server selection across instances. Two instances must
+# never select the same pool config concurrently: Proton keeps a single session
+# per WireGuard key per endpoint, so a duplicate selection silently breaks
+# NAT-PMP for the older tunnel. The lock makes snapshot+choose+claim atomic.
+SERVER_SELECT_LOCK_FILE="${SERVER_SELECT_LOCK_FILE:-/run/proton/server-select.lock}"
 
 log() {
     echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
@@ -774,12 +779,28 @@ reset_bad_servers() {
 
 case "${1:-select}" in
     select)
+        # Serialize selection across all instances so two instances never pick
+        # the same pool config (same WireGuard key) concurrently. Best-effort:
+        # if the global lock cannot be opened (e.g. unprivileged test runs), log
+        # and continue rather than failing the selection.
+        if mkdir -p "$(dirname "$SERVER_SELECT_LOCK_FILE")" 2>/dev/null \
+            && exec 209>"$SERVER_SELECT_LOCK_FILE" 2>/dev/null; then
+            flock 209 || true
+        else
+            log "WARNING: could not acquire server-select lock $SERVER_SELECT_LOCK_FILE; proceeding without cross-instance serialization"
+        fi
         select_best_server "${2:-0}"
         ;;
     current)
         if [[ -f "$SERVER_SELECTION_FILE" ]]; then
             cat "$SERVER_SELECTION_FILE"
         else
+            if mkdir -p "$(dirname "$SERVER_SELECT_LOCK_FILE")" 2>/dev/null \
+                && exec 209>"$SERVER_SELECT_LOCK_FILE" 2>/dev/null; then
+                flock 209 || true
+            else
+                log "WARNING: could not acquire server-select lock $SERVER_SELECT_LOCK_FILE; proceeding without cross-instance serialization"
+            fi
             select_best_server 0
         fi
         ;;

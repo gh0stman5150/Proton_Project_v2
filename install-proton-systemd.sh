@@ -522,6 +522,32 @@ instance_vpn_interface() {
     esac
 }
 
+# Each instance gets a distinct WireGuard client address subnet so Proton's
+# NAT-PMP hands out an independent forwarded port per instance. Address =
+# 10.<n>.0.2/32, gateway/DNS = 10.<n>.0.1.
+instance_address_subnet() {
+    case "$1" in
+        lidarr)
+            printf '%s\n' 2
+            ;;
+        radarr)
+            printf '%s\n' 3
+            ;;
+        sonarr)
+            printf '%s\n' 4
+            ;;
+        whisparr)
+            printf '%s\n' 5
+            ;;
+        prowlarr)
+            printf '%s\n' 6
+            ;;
+        *)
+            printf '%s\n' 2
+            ;;
+    esac
+}
+
 install_instance_examples() {
     local instance instance_dir proton_example qb_example port_env webui_port vpn_if
 
@@ -536,6 +562,7 @@ install_instance_examples() {
         port_env="${instance_dir}/qbittorrent-port.env"
         webui_port="$(instance_webui_port "$instance")"
         vpn_if="$(instance_vpn_interface "$instance")"
+        address_subnet="$(instance_address_subnet "$instance")"
 
         mkdir -p "$instance_dir"
         chown root:root "$instance_dir"
@@ -549,6 +576,10 @@ INSTANCE_NAME=${instance}
 WG_PROFILE=${vpn_if}
 VPN_INTERFACE=${vpn_if}
 WG_CONFIG=${ETC_PROTON_DIR}/instances/${instance}/wireguard.conf
+# Distinct Proton tunnel address subnet for this instance. Drives the runtime
+# WireGuard Address (10.${address_subnet}.0.2/32), DNS and NAT-PMP gateway
+# (10.${address_subnet}.0.1) so each instance receives its own forwarded port.
+WG_ADDRESS_SUBNET=${address_subnet}
 STATE_DIR=/run/proton/${instance}
 SERVER_SELECTION_FILE=/run/proton/${instance}/current-server.env
 SERVER_RESELECT_FILE=/run/proton/${instance}/reselect-server.flag

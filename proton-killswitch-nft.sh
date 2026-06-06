@@ -126,32 +126,37 @@ ensure_nat_postrouting_chain() {
 }
 
 ensure_masquerade_rule() {
-    local handles=""
+    local handles="" iface added=0
 
-    if ! ip link show "$VPN_IF" >/dev/null 2>&1; then
-        log "INFO: VPN interface $VPN_IF not up yet, skipping NAT setup"
-        return 0
-    fi
+    for iface in $(vpn_interfaces); do
+        [[ -n "$iface" ]] || continue
+        ip link show "$iface" >/dev/null 2>&1 || continue
 
-    handles="$(
-        nft -a list chain ip proton_nat postrouting 2>/dev/null | \
-        awk -v vpn_if="$VPN_IF" '
-            $0 ~ ("oifname \"" vpn_if "\"") && /masquerade/ {
-                for (i = 1; i <= NF; i++) {
-                    if ($i == "handle") print $(i + 1)
+        handles="$(
+            nft -a list chain ip proton_nat postrouting 2>/dev/null | \
+            awk -v vpn_if="$iface" '
+                $0 ~ ("oifname \"" vpn_if "\"") && /masquerade/ {
+                    for (i = 1; i <= NF; i++) {
+                        if ($i == "handle") print $(i + 1)
+                    }
                 }
-            }
-        '
-    )"
+            '
+        )"
 
-    if [[ -n "$handles" ]]; then
-        while read -r handle; do
-            [[ -n "$handle" ]] || continue
-            nft delete rule ip proton_nat postrouting handle "$handle" 2>/dev/null || true
-        done <<< "$handles"
+        if [[ -n "$handles" ]]; then
+            while read -r handle; do
+                [[ -n "$handle" ]] || continue
+                nft delete rule ip proton_nat postrouting handle "$handle" 2>/dev/null || true
+            done <<< "$handles"
+        fi
+
+        nft add rule ip proton_nat postrouting oifname "$iface" masquerade comment "proton-wg-snat"
+        added=1
+    done
+
+    if (( ! added )); then
+        log "INFO: no VPN interface up yet, skipping NAT setup"
     fi
-
-    nft add rule ip proton_nat postrouting oifname "$VPN_IF" masquerade comment "proton-wg-snat"
 }
 
 render_docker_local_rules() {
@@ -179,13 +184,36 @@ render_lan_to_docker_rules() {
     done
 }
 
-render_vpn_to_docker_rules() {
-    local cidr
+# List every active Proton WireGuard interface. All WireGuard interfaces on
+# this host are Proton tunnels, so Docker application egress is permitted via
+# any of them. With per-instance tunnels (pvlidarr, pvradarr, ...) sharing one
+# routing table, the interface that carries Docker egress can be any active
+# tunnel, so the kill switch must accept egress through all of them rather than
+# a single VPN_IF. Falls back to VPN_IF when no WireGuard interface is up yet.
+vpn_interfaces() {
+    local ifaces=""
 
-    for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-        cidr="$(trim_field "$cidr")"
-        [[ -n "$cidr" ]] || continue
-        printf '        iifname "%s" ip daddr %s accept\n' "$VPN_IF" "$cidr"
+    if command -v wg >/dev/null 2>&1; then
+        ifaces="$(wg show interfaces 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$ifaces" ]]; then
+        ifaces="$VPN_IF"
+    fi
+
+    printf '%s\n' $ifaces
+}
+
+render_vpn_to_docker_rules() {
+    local cidr iface
+
+    for iface in $(vpn_interfaces); do
+        [[ -n "$iface" ]] || continue
+        for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
+            cidr="$(trim_field "$cidr")"
+            [[ -n "$cidr" ]] || continue
+            printf '        iifname "%s" ip daddr %s accept\n' "$iface" "$cidr"
+        done
     done
 }
 
@@ -202,12 +230,15 @@ render_docker_to_lan_rules() {
 }
 
 render_docker_to_vpn_rules() {
-    local cidr
+    local cidr iface
 
-    for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-        cidr="$(trim_field "$cidr")"
-        [[ -n "$cidr" ]] || continue
-        printf '        oifname "%s" ip saddr %s accept\n' "$VPN_IF" "$cidr"
+    for iface in $(vpn_interfaces); do
+        [[ -n "$iface" ]] || continue
+        for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
+            cidr="$(trim_field "$cidr")"
+            [[ -n "$cidr" ]] || continue
+            printf '        oifname "%s" ip saddr %s accept\n' "$iface" "$cidr"
+        done
     done
 }
 

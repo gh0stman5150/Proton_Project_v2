@@ -143,6 +143,28 @@ proton_rebase_legacy_runtime_paths() {
 	export DOCKER_CONFIG_DIR LAST_FILE QBT_SYNC_LOCK_FILE
 }
 
+# Derive per-instance WireGuard tunnel addressing and the NAT-PMP gateway from
+# WG_ADDRESS_SUBNET. Proton supports multiple simultaneous tunnels on one
+# account by giving each tunnel a distinct client address subnet
+# (10.2.0.2, 10.3.0.2, ...), each with its own gateway/DNS (10.2.0.1, 10.3.0.1,
+# ...). Each distinct address receives an independent NAT-PMP forwarded port,
+# so concurrent instances no longer collide on a single shared port.
+proton_apply_tunnel_subnet() {
+	[[ -n "${WG_ADDRESS_SUBNET:-}" ]] || return 0
+
+	if [[ ! "$WG_ADDRESS_SUBNET" =~ ^[0-9]+$ ]] || (( WG_ADDRESS_SUBNET < 1 || WG_ADDRESS_SUBNET > 254 )); then
+		proton_instance_error "Invalid WG_ADDRESS_SUBNET '$WG_ADDRESS_SUBNET' (expected an integer 1-254)."
+	fi
+
+	# WG_ADDRESS_SUBNET is the single source of truth. Derive everything from it
+	# so the tunnel address, DNS, and NAT-PMP gateway can never drift apart.
+	WG_TUNNEL_ADDRESS="10.${WG_ADDRESS_SUBNET}.0.2/32"
+	WG_TUNNEL_DNS="10.${WG_ADDRESS_SUBNET}.0.1"
+	NATPMP_GATEWAY="10.${WG_ADDRESS_SUBNET}.0.1"
+
+	export WG_ADDRESS_SUBNET WG_TUNNEL_ADDRESS WG_TUNNEL_DNS NATPMP_GATEWAY
+}
+
 proton_instance_init() {
 	local instance_arg="${1:-}"
 	local role_env="${2:-}"
@@ -175,4 +197,5 @@ proton_instance_init() {
 	source "$QBITTORRENT_ENV_FILE"
 
 	proton_rebase_legacy_runtime_paths
+	proton_apply_tunnel_subnet
 }

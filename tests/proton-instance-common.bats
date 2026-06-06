@@ -22,6 +22,7 @@ EOF
 WG_PROFILE=pvsonarr
 VPN_INTERFACE=pvsonarr
 WG_CONFIG=/etc/proton/instances/sonarr/wireguard.conf
+WG_ADDRESS_SUBNET=4
 EOF
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
@@ -34,6 +35,7 @@ EOF
 WG_PROFILE=pvprowl
 VPN_INTERFACE=pvprowl
 WG_CONFIG=/etc/proton/instances/prowlarr/wireguard.conf
+WG_ADDRESS_SUBNET=6
 EOF
 
   cat > "$PROTON_INSTANCE_ROOT/prowlarr/qbittorrent.env" <<'EOF'
@@ -83,4 +85,32 @@ EOF
   [[ "$output" == *"pvprowl"* ]]
   [[ "$output" == *"/run/proton/prowlarr"* ]]
   [[ "$output" == *"http://127.0.0.1:8085"* ]]
+}
+
+@test "instance loader derives a distinct tunnel subnet, DNS, and NAT-PMP gateway" {
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY"'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"10.4.0.2/32"* ]]
+  [[ "$output" == *"10.4.0.1"* ]]
+
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init prowlarr; printf "%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY"'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"10.6.0.2/32"* ]]
+  [[ "$output" == *"10.6.0.1"* ]]
+}
+
+@test "instance loader rejects an out-of-range tunnel subnet" {
+  cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<'EOF'
+WG_PROFILE=pvsonarr
+VPN_INTERFACE=pvsonarr
+WG_CONFIG=/etc/proton/instances/sonarr/wireguard.conf
+WG_ADDRESS_SUBNET=999
+EOF
+
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr 2>&1'
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Invalid WG_ADDRESS_SUBNET"* ]]
 }

@@ -129,17 +129,29 @@ The installer creates example files under `/etc/proton/instances/<instance>/`:
 
 Copy those to `proton.env` and `qbittorrent.env`, then keep real config files root owned with mode `600`. The generated defaults use:
 
-| Instance | qBittorrent | Web UI | Interface |
-| --- | --- | --- | --- |
-| `lidarr` | `qbittorrent-lidarr` | `8081` | `pvlidarr` |
-| `radarr` | `qbittorrent-radarr` | `8082` | `pvradarr` |
-| `sonarr` | `qbittorrent-sonarr` | `8083` | `pvsonarr` |
-| `whisparr` | `qbittorrent-whisparr` | `8084` | `pvwhisp` |
-| `prowlarr` | `qbittorrent-prowlarr` | `8085` | `pvprowl` |
+| Instance   | qBittorrent            | Web UI | Interface  | Tunnel subnet |
+| ---        | ---                    | ---    | ---        | ---           |
+| `lidarr`   | `qbittorrent-lidarr`   | `8081` | `pvlidarr` | `10.2.0.2/32` |
+| `radarr`   | `qbittorrent-radarr`   | `8082` | `pvradarr` | `10.3.0.2/32` |
+| `sonarr`   | `qbittorrent-sonarr`   | `8083` | `pvsonarr` | `10.4.0.2/32` |
+| `whisparr` | `qbittorrent-whisparr` | `8084` | `pvwhisp`  | `10.5.0.2/32` |
+| `prowlarr` | `qbittorrent-prowlarr` | `8085` | `pvprowl`  | `10.6.0.2/32` |
 
 ### Same Server and Multi Tunnel Isolation
 
 The implementation must support five independent Proton connections even when multiple instances use the same Proton VPN server. Sharing a Proton server endpoint is allowed; sharing a tunnel identity, interface, qBittorrent target, runtime state, or forwarded-port artifact is not.
+
+Proton's NAT-PMP forwards exactly one port per client tunnel address, not per server. Connecting five tunnels with the same client address (`10.2.0.2`) therefore returns the same forwarded port to every instance and the published host ports collide. Proton supports multiple simultaneous tunnels on a single account by giving each tunnel config a distinct client address subnet (`10.2.0.x`, `10.3.0.x`, ...), each with its own gateway/DNS (`10.2.0.1`, `10.3.0.1`, ...). Each distinct client address receives an independent forwarded port.
+
+Each instance therefore sets `WG_ADDRESS_SUBNET=<n>` in its `proton.env`. The instance loader derives everything from it so the address, DNS, and NAT-PMP gateway can never drift apart:
+
+1. `WG_TUNNEL_ADDRESS=10.<n>.0.2/32`
+2. `WG_TUNNEL_DNS=10.<n>.0.1`
+3. `NATPMP_GATEWAY=10.<n>.0.1`
+
+The shared pool configs under `WG_POOL_DIR` keep their original `10.2.0.2/32` address for linting; only the per-instance runtime copy in `WG_RUNTIME_DIR` is rewritten to the instance subnet by `proton-wg-up-safe.sh`.
+
+The local WireGuard interface name and runtime config path are keyed on the instance (`pv<inst>`), never on the selected server. Two instances may select the same Proton server, but they keep independent local interfaces and independent NAT-PMP requests. Server selection is serialized by a global lock so two instances never adopt the same pool config (same WireGuard key) concurrently, which Proton would otherwise collapse into a single session.
 
 Each instance must define its own values:
 
@@ -148,11 +160,12 @@ INSTANCE_NAME=prowlarr
 WG_PROFILE=pvprowl
 VPN_INTERFACE=pvprowl
 WG_CONFIG=/etc/proton/instances/prowlarr/wireguard.conf
+WG_ADDRESS_SUBNET=6
 STATE_DIR=/run/proton/prowlarr
 QBT_PORT_ENV_FILE=/etc/proton/instances/prowlarr/qbittorrent-port.env
 ```
 
-Each instance must use its own WireGuard identity, preferably generated as a separate Proton WireGuard config. Two configs may point at the same Proton server endpoint, but they still must be separate files with separate interface names and separate runtime/service state.
+Each instance must use its own WireGuard identity, preferably generated as a separate Proton WireGuard config. Two configs may point at the same Proton server endpoint, but they still must be separate files with separate interface names, separate tunnel subnets, and separate runtime/service state.
 
 The migration is not complete until tests explicitly prove:
 
@@ -161,6 +174,7 @@ The migration is not complete until tests explicitly prove:
 3. `lidarr` and `radarr` still write different forwarded-port state files
 4. stopping `radarr` does not stop `lidarr`
 5. restarting `prowlarr` does not change Sonarr's qBittorrent port
+6. each instance derives a distinct tunnel subnet and NAT-PMP gateway from `WG_ADDRESS_SUBNET`
 
 This is a core migration requirement, not a small config tweak. The final design needs multiple simultaneous Proton connections, multiple VPN interfaces, multiple qBittorrent env files, multiple port state files, templated service instances, and same-server isolation tests.
 
@@ -335,6 +349,8 @@ The units currently default to values such as:
 6. `RESOLVED_DNS_ROUTE_DOMAIN=~.`
 
 Set real values in environment files, not in committed documentation.
+
+For the templated per-instance services, `NATPMP_GATEWAY` is not taken from this shared default. When an instance sets `WG_ADDRESS_SUBNET=<n>`, the instance loader derives `NATPMP_GATEWAY=10.<n>.0.1` (and the matching tunnel address and DNS) so each instance requests its forwarded port from its own gateway. See "Same Server and Multi Tunnel Isolation".
 
 If your WireGuard profile or interface uses different names, update the environment files consumed by:
 

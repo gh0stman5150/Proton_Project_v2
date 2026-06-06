@@ -175,13 +175,15 @@ resolved_dns_enabled() {
 }
 
 load_selected_server() {
-	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
-		# shellcheck disable=SC1090
-		source "$SERVER_SELECTION_FILE"
-		PREVIOUS_WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
-		PREVIOUS_WG_CONFIG="${SELECTED_CONFIG:-}"
-		PREVIOUS_VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$PREVIOUS_VPN_INTERFACE}"
-	fi
+	# The local WireGuard interface name and runtime config path are keyed on
+	# the INSTANCE (e.g. pv<inst>), never on the selected server. This keeps
+	# each instance's tunnel independent even when two instances happen to pick
+	# the same Proton server. Server selection only chooses which pool config
+	# supplies the [Peer] endpoint/keys; the per-instance Address subnet (and
+	# therefore the NAT-PMP forwarded port) stays unique.
+	PREVIOUS_WG_PROFILE="$WG_PROFILE"
+	PREVIOUS_VPN_INTERFACE="$VPN_INTERFACE"
+	PREVIOUS_WG_CONFIG="$FILTERED_CONFIG_PATH"
 
 	if ! server_pool_requested; then
 		return 0
@@ -202,8 +204,10 @@ load_selected_server() {
 	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
 		# shellcheck disable=SC1090
 		source "$SERVER_SELECTION_FILE"
-		WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
-		VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
+		# Adopt only the source server config (peer/keys). Keep WG_PROFILE and
+		# VPN_INTERFACE as the per-instance values from proton.env so the local
+		# interface name and runtime config path never collide across instances.
+		SELECTED_SERVER_PROFILE="${SELECTED_WG_PROFILE:-}"
 		WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
 		FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 	fi
@@ -454,6 +458,41 @@ prepare_wg_config() {
 	WG_CONFIG_TO_USE="$FILTERED_CONFIG_PATH"
 }
 
+# Rewrite the [Interface] Address and DNS in the runtime config to this
+# instance's assigned subnet. Proton ties each NAT-PMP forwarded port to the
+# client tunnel address, so giving every instance a distinct address
+# (10.2.0.2, 10.3.0.2, ...) yields a distinct forwarded port per instance. The
+# shared pool configs are left untouched (they keep 10.2.0.2 for linting); only
+# the per-instance runtime copy is rewritten.
+apply_tunnel_addressing() {
+	[[ -n "${WG_TUNNEL_ADDRESS:-}" ]] || return 0
+
+	local tmp_config
+	tmp_config="$(mktemp "${WG_RUNTIME_DIR}/${WG_PROFILE}.XXXXXX.conf")"
+
+	awk -v addr="$WG_TUNNEL_ADDRESS" -v dns="${WG_TUNNEL_DNS:-}" '
+        /^[[:space:]]*\[/ { section = $0 }
+
+        section ~ /\[Interface\]/ && /^[[:space:]]*Address[[:space:]]*=/ {
+            print "Address = " addr
+            next
+        }
+
+        section ~ /\[Interface\]/ && /^[[:space:]]*DNS[[:space:]]*=/ {
+            if (dns != "") {
+                print "DNS = " dns
+            }
+            next
+        }
+
+        { print }
+    ' "$WG_CONFIG_TO_USE" >"$tmp_config"
+
+	chmod 600 "$tmp_config"
+	mv -f "$tmp_config" "$WG_CONFIG_TO_USE"
+	log "Applied per-instance tunnel addressing: Address=${WG_TUNNEL_ADDRESS} DNS=${WG_TUNNEL_DNS:-unset} (NAT-PMP gateway ${NATPMP_GATEWAY})"
+}
+
 persist_docker_network_cidr() {
 	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 		umask 077
@@ -488,6 +527,7 @@ resolve_docker_network_cidr() {
 
 load_selected_server
 prepare_wg_config "$WG_CONFIG"
+apply_tunnel_addressing
 secure_runtime_wg_config "$WG_CONFIG_TO_USE"
 DNS_SERVERS_CSV="$(config_dns_servers "$WG_CONFIG_TO_USE")"
 resolve_docker_network_cidr

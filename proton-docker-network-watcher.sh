@@ -178,11 +178,25 @@ reapply_killswitch() {
 }
 
 refresh_qb_state() {
-	if [[ -x "$QBT_SYNC_SCRIPT" ]]; then
-		log "Refreshing qBittorrent state via $QBT_SYNC_SCRIPT"
-		"$QBT_SYNC_SCRIPT" "$INSTANCE" || log "Warning: qB sync script exited with non-zero status"
+	# Prefer triggering the systemd allocator which serializes port allocation
+	if command -v systemctl >/dev/null 2>&1; then
+		log "Triggering systemd allocator: proton-qbt-allocate@${INSTANCE}"
+		if ! systemctl start "proton-qbt-allocate@${INSTANCE}"; then
+			log "Warning: systemd allocator failed for ${INSTANCE}; falling back to direct sync"
+			if [[ -x "$QBT_SYNC_SCRIPT" ]]; then
+				log "Refreshing qBittorrent state via $QBT_SYNC_SCRIPT"
+				"$QBT_SYNC_SCRIPT" "$INSTANCE" || log "Warning: qB sync script exited with non-zero status"
+			else
+				log "qB sync script not found at $QBT_SYNC_SCRIPT; skipping qBittorrent reconciliation"
+			fi
+		fi
 	else
-		log "qB sync script not found at $QBT_SYNC_SCRIPT; skipping qBittorrent reconciliation"
+		if [[ -x "$QBT_SYNC_SCRIPT" ]]; then
+			log "Refreshing qBittorrent state via $QBT_SYNC_SCRIPT"
+			"$QBT_SYNC_SCRIPT" "$INSTANCE" || log "Warning: qB sync script exited with non-zero status"
+		else
+			log "qB sync script not found at $QBT_SYNC_SCRIPT; skipping qBittorrent reconciliation"
+		fi
 	fi
 }
 

@@ -105,8 +105,12 @@ load_selected_server() {
     if [[ -f "$SERVER_SELECTION_FILE" ]]; then
         # shellcheck disable=SC1090
         source "$SERVER_SELECTION_FILE"
+        # CURRENT_WG_PROFILE tracks the selected SERVER for pool health
+        # reporting (mark-bad/mark-capable). VPN_INTERFACE stays the
+        # per-instance interface name from proton.env so get_ip and the
+        # per-instance NAT-PMP gateway route resolve to this instance's tunnel
+        # even when two instances pick the same Proton server.
         CURRENT_WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
-        VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
     else
         CURRENT_WG_PROFILE="$WG_PROFILE"
     fi
