@@ -15,6 +15,15 @@ cat - >/dev/null
 EOF
   chmod +x "$TMPBIN/systemd-cat"
 
+  cat > "$TMPBIN/wg" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "show" && "$2" == "interfaces" ]]; then
+  echo proton
+fi
+exit 0
+EOF
+  chmod +x "$TMPBIN/wg"
+
   cat > "$TMPBIN/ip" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
