@@ -157,6 +157,7 @@ write_published_port_value() {
     {
         echo "# Managed by proton-qbittorrent-sync-safe.sh"
         echo "QBT_PUBLISHED_PORT=$value"
+        echo "QBT_FORWARDED_PORT=$value"
     } > "$QBT_PORT_ENV_FILE"
     chmod 600 "$QBT_PORT_ENV_FILE"
 }

@@ -9,6 +9,7 @@ setup() {
   export STATE_FILE="$TEST_TMPDIR/proton-port.state"
   export CACHE_FILE="$TEST_TMPDIR/qbt-port.cache"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
+  export PROTON_COMMON_ENV="$TEST_TMPDIR/proton-common.env"
   export ENV_FILE="$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env"
   export PORT_ENV_FILE="$PROTON_INSTANCE_ROOT/sonarr/qbittorrent-port.env"
   export CURL_STATE="$TEST_TMPDIR/current-qbt-port"
@@ -19,6 +20,7 @@ setup() {
   export PROJECT_DIR="$TEST_TMPDIR/project"
   export DOCKER_CONFIG_DIR="$TEST_TMPDIR/docker-config"
   mkdir -p "$PROJECT_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
+  : > "$PROTON_COMMON_ENV"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
 STATE_FILE=$STATE_FILE

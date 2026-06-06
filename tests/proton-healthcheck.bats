@@ -5,10 +5,14 @@ setup() {
   TMPBIN="$TEST_TMPDIR/bin"
   export PATH="$TMPBIN:$PATH"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
+  export PROTON_COMMON_ENV="$TEST_TMPDIR/proton-common.env"
+  export PROTON_HEALTHCHECK_ENV="$TEST_TMPDIR/proton-healthcheck.env"
   export QBITTORRENT_ENV_FILE="$TEST_TMPDIR/qb.env"
   export QBT_COMMON_SCRIPT="$TEST_TMPDIR/proton-qbittorrent-common.sh"
 
   mkdir -p "$TMPBIN" "$PROTON_INSTANCE_ROOT/sonarr"
+  : > "$PROTON_COMMON_ENV"
+  : > "$PROTON_HEALTHCHECK_ENV"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
 QBITTORRENT_ENV_FILE=$QBITTORRENT_ENV_FILE

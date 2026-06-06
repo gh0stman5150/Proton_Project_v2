@@ -10,7 +10,8 @@ if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
 fi
 # shellcheck disable=SC1090
 source "$INSTANCE_COMMON_SCRIPT"
-proton_instance_init "${1:-}" "/etc/proton/proton-healthcheck.env"
+PROTON_HEALTHCHECK_ENV="${PROTON_HEALTHCHECK_ENV:-/etc/proton/proton-healthcheck.env}"
+proton_instance_init "${1:-}" "$PROTON_HEALTHCHECK_ENV"
 
 LOG_TAG="${LOG_TAG:-proton-healthcheck}"
 STATE_DIR="${STATE_DIR:-/run/proton}"

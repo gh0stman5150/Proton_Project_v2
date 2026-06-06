@@ -110,6 +110,68 @@ The hardened path expects:
 2. Owner: `root`
 3. Mode: `600`
 
+## Named qBittorrent Instances
+
+The templated service path supports one Proton/qBittorrent failure domain per workload. Supported instance names are:
+
+1. `lidarr`
+2. `radarr`
+3. `sonarr`
+4. `whisparr`
+5. `prowlarr`
+
+Use `prowlarr` for manual downloads. Prowlarr itself can still manage indexers normally; this instance is the dedicated qBittorrent target for one-off/manual releases.
+
+The installer creates example files under `/etc/proton/instances/<instance>/`:
+
+1. `proton.env.example`
+2. `qbittorrent.env.example`
+
+Copy those to `proton.env` and `qbittorrent.env`, then keep real config files root owned with mode `600`. The generated defaults use:
+
+| Instance | qBittorrent | Web UI | Interface |
+| --- | --- | --- | --- |
+| `lidarr` | `qbittorrent-lidarr` | `8081` | `pvlidarr` |
+| `radarr` | `qbittorrent-radarr` | `8082` | `pvradarr` |
+| `sonarr` | `qbittorrent-sonarr` | `8083` | `pvsonarr` |
+| `whisparr` | `qbittorrent-whisparr` | `8084` | `pvwhisp` |
+| `prowlarr` | `qbittorrent-prowlarr` | `8085` | `pvprowl` |
+
+### Same Server and Multi Tunnel Isolation
+
+The implementation must support five independent Proton connections even when multiple instances use the same Proton VPN server. Sharing a Proton server endpoint is allowed; sharing a tunnel identity, interface, qBittorrent target, runtime state, or forwarded-port artifact is not.
+
+Each instance must define its own values:
+
+```bash
+INSTANCE_NAME=prowlarr
+WG_PROFILE=pvprowl
+VPN_INTERFACE=pvprowl
+WG_CONFIG=/etc/proton/instances/prowlarr/wireguard.conf
+STATE_DIR=/run/proton/prowlarr
+QBT_PORT_ENV_FILE=/etc/proton/instances/prowlarr/qbittorrent-port.env
+```
+
+Each instance must use its own WireGuard identity, preferably generated as a separate Proton WireGuard config. Two configs may point at the same Proton server endpoint, but they still must be separate files with separate interface names and separate runtime/service state.
+
+The migration is not complete until tests explicitly prove:
+
+1. `lidarr` and `radarr` may point to the same Proton server
+2. `lidarr` and `radarr` still use different WireGuard interfaces
+3. `lidarr` and `radarr` still write different forwarded-port state files
+4. stopping `radarr` does not stop `lidarr`
+5. restarting `prowlarr` does not change Sonarr's qBittorrent port
+
+This is a core migration requirement, not a small config tweak. The final design needs multiple simultaneous Proton connections, multiple VPN interfaces, multiple qBittorrent env files, multiple port state files, templated service instances, and same-server isolation tests.
+
+Start one instance first during migration:
+
+```bash
+sudo systemctl start proton-wg@prowlarr proton-port-forward@prowlarr proton-healthcheck@prowlarr
+```
+
+After Prowlarr manual downloads work and its qBittorrent listen port follows the Proton forwarded port, repeat the same pattern for Sonarr, Radarr, Lidarr, and Whisparr.
+
 ## qBittorrent Port Update Behavior
 
 When Proton assigns a new forwarded port, the default compose-recreate path must:

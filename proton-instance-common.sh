@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 proton_allowed_instances() {
-	printf '%s\n' lidarr radarr sonarr whisparr
+	printf '%s\n' lidarr radarr sonarr whisparr prowlarr
 }
 
 proton_allowed_instances_csv() {
-	printf '%s\n' "lidarr,radarr,sonarr,whisparr"
+	printf '%s\n' "lidarr,radarr,sonarr,whisparr,prowlarr"
 }
 
 proton_instance_error() {
@@ -25,7 +25,7 @@ proton_validate_instance_name() {
 	fi
 
 	case "$instance" in
-	lidarr | radarr | sonarr | whisparr)
+	lidarr | radarr | sonarr | whisparr | prowlarr)
 		return 0
 		;;
 	*)
@@ -82,8 +82,19 @@ proton_require_secure_real_env_file() {
 
 proton_rebase_legacy_runtime_paths() {
 	local default_state_dir="/run/proton/${INSTANCE}"
+	local inferred_state_dir=""
 
 	if [[ -z "${STATE_DIR:-}" || "${STATE_DIR}" == "/run/proton" ]]; then
+		if [[ -n "${STATE_FILE:-}" && "${STATE_FILE}" != "/run/proton/proton-port.state" && "$STATE_FILE" == */* ]]; then
+			inferred_state_dir="${STATE_FILE%/*}"
+		elif [[ -n "${CACHE_FILE:-}" && "${CACHE_FILE}" != "/run/proton/qbt-port.cache" && "$CACHE_FILE" == */* ]]; then
+			inferred_state_dir="${CACHE_FILE%/*}"
+		fi
+	fi
+
+	if [[ -n "$inferred_state_dir" ]]; then
+		STATE_DIR="$inferred_state_dir"
+	elif [[ -z "${STATE_DIR:-}" || "${STATE_DIR}" == "/run/proton" ]]; then
 		STATE_DIR="$default_state_dir"
 	fi
 

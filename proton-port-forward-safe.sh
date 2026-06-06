@@ -10,7 +10,8 @@ if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
 fi
 # shellcheck disable=SC1090
 source "$INSTANCE_COMMON_SCRIPT"
-proton_instance_init "${1:-}" "/etc/proton/proton-port-forward.env"
+PROTON_PORT_FORWARD_ENV="${PROTON_PORT_FORWARD_ENV:-/etc/proton/proton-port-forward.env}"
+proton_instance_init "${1:-}" "$PROTON_PORT_FORWARD_ENV"
 
 if [[ $# -gt 2 ]]; then
     echo "ERROR: Usage: ${0##*/} INSTANCE [loop|once]" >&2

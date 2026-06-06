@@ -6,7 +6,9 @@ setup() {
   mkdir -p "$TMPBIN"
   export PATH="$TMPBIN:$PATH"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
+  export PROTON_COMMON_ENV="$TEST_TMPDIR/proton-common.env"
   mkdir -p "$PROTON_INSTANCE_ROOT/sonarr"
+  : > "$PROTON_COMMON_ENV"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<'EOF'
 STATE_DIR=/run/proton/sonarr

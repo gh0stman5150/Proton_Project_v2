@@ -5,6 +5,8 @@ setup() {
   TMPBIN="$TEST_TMPDIR/bin"
   export STATE_DIR="$TEST_TMPDIR/state"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
+  export PROTON_COMMON_ENV="$TEST_TMPDIR/proton-common.env"
+  export PROTON_PORT_FORWARD_ENV="$TEST_TMPDIR/proton-port-forward.env"
   export STATE_FILE="$STATE_DIR/proton-port.state"
   export SERVER_SELECTION_FILE="$STATE_DIR/current-server.env"
   export RECOVERY_LOCK_FILE="$STATE_DIR/recovery.lock"
@@ -21,6 +23,8 @@ setup() {
   export SERVER_MANAGER_SCRIPT="$TEST_TMPDIR/server-manager.sh"
 
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_POOL_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
+  : > "$PROTON_COMMON_ENV"
+  : > "$PROTON_PORT_FORWARD_ENV"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
 STATE_DIR=$STATE_DIR

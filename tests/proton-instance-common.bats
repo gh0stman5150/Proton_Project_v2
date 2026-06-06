@@ -4,7 +4,7 @@ setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
   export PROTON_COMMON_ENV="$TEST_TMPDIR/proton-common.env"
-  mkdir -p "$PROTON_INSTANCE_ROOT/sonarr"
+  mkdir -p "$PROTON_INSTANCE_ROOT/sonarr" "$PROTON_INSTANCE_ROOT/prowlarr"
 
   cat > "$PROTON_COMMON_ENV" <<'EOF'
 STATE_DIR=/run/proton
@@ -28,6 +28,18 @@ EOF
 QBT_INSTANCE_NAME=sonarr
 QBITTORRENT_URL=http://127.0.0.1:8083
 QBT_PORT_ENV_FILE=/etc/proton/instances/sonarr/qbittorrent-port.env
+EOF
+
+  cat > "$PROTON_INSTANCE_ROOT/prowlarr/proton.env" <<'EOF'
+WG_PROFILE=pvprowl
+VPN_INTERFACE=pvprowl
+WG_CONFIG=/etc/proton/instances/prowlarr/wireguard.conf
+EOF
+
+  cat > "$PROTON_INSTANCE_ROOT/prowlarr/qbittorrent.env" <<'EOF'
+QBT_INSTANCE_NAME=prowlarr
+QBITTORRENT_URL=http://127.0.0.1:8085
+QBT_PORT_ENV_FILE=/etc/proton/instances/prowlarr/qbittorrent-port.env
 EOF
 }
 
@@ -61,4 +73,14 @@ EOF
   [[ "$output" == *"/run/proton/sonarr/current-server.env"* ]]
   [[ "$output" == *"/run/proton/sonarr/docker-config"* ]]
   [[ "$output" == *"http://127.0.0.1:8083"* ]]
+}
+
+@test "instance loader accepts prowlarr manual-download instance" {
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init prowlarr; printf "%s\n%s\n%s\n%s\n" "$INSTANCE" "$VPN_INTERFACE" "$STATE_DIR" "$QBITTORRENT_URL"'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"prowlarr"* ]]
+  [[ "$output" == *"pvprowl"* ]]
+  [[ "$output" == *"/run/proton/prowlarr"* ]]
+  [[ "$output" == *"http://127.0.0.1:8085"* ]]
 }

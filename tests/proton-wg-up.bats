@@ -5,6 +5,7 @@ setup() {
   TMPBIN="$TEST_TMPDIR/bin"
   export PATH="$TMPBIN:$PATH"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
+  export PROTON_COMMON_ENV="$TEST_TMPDIR/proton-common.env"
   export STATE_DIR="$TEST_TMPDIR/state"
   export WG_RUNTIME_DIR="$TEST_TMPDIR/runtime"
   export WG_PROFILE="wg-test"
@@ -18,6 +19,7 @@ setup() {
   export KILLSWITCH_SCRIPT="$TEST_TMPDIR/missing-killswitch.sh"
 
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_RUNTIME_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
+  : > "$PROTON_COMMON_ENV"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
 STATE_DIR=$STATE_DIR

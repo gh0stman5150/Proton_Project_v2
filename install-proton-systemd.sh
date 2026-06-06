@@ -31,6 +31,7 @@ INSTANCES=(
     radarr
     sonarr
     whisparr
+    prowlarr
 )
 
 SCRIPTS=(
@@ -489,6 +490,9 @@ instance_webui_port() {
         whisparr)
             printf '%s\n' 8084
             ;;
+        prowlarr)
+            printf '%s\n' 8085
+            ;;
         *)
             printf '%s\n' 8080
             ;;
@@ -509,6 +513,9 @@ instance_vpn_interface() {
         whisparr)
             printf '%s\n' pvwhisp
             ;;
+        prowlarr)
+            printf '%s\n' pvprowl
+            ;;
         *)
             printf '%s\n' "pv$1"
             ;;
@@ -516,7 +523,7 @@ instance_vpn_interface() {
 }
 
 install_instance_examples() {
-    local instance instance_dir proton_example qb_example webui_port vpn_if
+    local instance instance_dir proton_example qb_example port_env webui_port vpn_if
 
     mkdir -p "${ETC_PROTON_DIR}/instances"
     chown root:root "${ETC_PROTON_DIR}/instances"
@@ -526,6 +533,7 @@ install_instance_examples() {
         instance_dir="${ETC_PROTON_DIR}/instances/${instance}"
         proton_example="${instance_dir}/proton.env.example"
         qb_example="${instance_dir}/qbittorrent.env.example"
+        port_env="${instance_dir}/qbittorrent-port.env"
         webui_port="$(instance_webui_port "$instance")"
         vpn_if="$(instance_vpn_interface "$instance")"
 
@@ -537,6 +545,7 @@ install_instance_examples() {
 # Example Proton settings for the ${instance} instance.
 # Copy to proton.env, set a unique WireGuard config, then keep mode 0600.
 
+INSTANCE_NAME=${instance}
 WG_PROFILE=${vpn_if}
 VPN_INTERFACE=${vpn_if}
 WG_CONFIG=${ETC_PROTON_DIR}/instances/${instance}/wireguard.conf
@@ -568,6 +577,14 @@ EOF
 
         chown root:root "$proton_example" "$qb_example"
         chmod 0600 "$proton_example" "$qb_example"
+
+        if [[ -f "$port_env" ]]; then
+            chown root:root "$port_env"
+            chmod 0600 "$port_env"
+            log "Preserved ${port_env}"
+        else
+            install_normalized_file "${SCRIPT_DIR}/proton-qbittorrent-port.env" "$port_env" 0600
+        fi
 
         for real_config in proton.env qbittorrent.env wireguard.conf; do
             if [[ -f "${instance_dir}/${real_config}" ]]; then
