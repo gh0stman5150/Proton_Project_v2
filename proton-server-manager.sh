@@ -26,6 +26,9 @@ WG_LINT_ALLOW_MISSING_DNS="${WG_LINT_ALLOW_MISSING_DNS:-off}"
 PORT_FORWARD_REQUIRED="${PORT_FORWARD_REQUIRED:-on}"
 PF_CAPABLE_PROFILES_FILE="${PF_CAPABLE_PROFILES_FILE:-/etc/proton/pf-capable-profiles.tsv}"
 PF_INCAPABLE_PROFILES_FILE="${PF_INCAPABLE_PROFILES_FILE:-/etc/proton/pf-incapable-profiles.tsv}"
+PF_CLAIMS_FILE="${PF_CLAIMS_FILE:-/run/proton/pf-claims.tsv}"
+# Default claim TTL (seconds) - increase to reduce race windows between concurrent selects
+CLAIM_TTL="${CLAIM_TTL:-3600}"
 
 log() {
     echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
@@ -219,6 +222,60 @@ profile_passes_port_forward_filter() {
     esac
 
     return 0
+}
+
+# Claim management: avoid selecting profiles that would forward the same
+# external port already claimed by another instance. Claims are ephemeral
+# and expire after $CLAIM_TTL seconds.
+cleanup_claims() {
+    local now tmp_file
+    now="$(date +%s)"
+    tmp_file="$(profile_state_tmp_file "$PF_CLAIMS_FILE")"
+
+    if [[ -f "$PF_CLAIMS_FILE" ]]; then
+        awk -F '\t' -v now="$now" -v ttl="$CLAIM_TTL" 'NF>=3 && ($2 + ttl) > now { print $0 }' "$PF_CLAIMS_FILE" >"$tmp_file" || true
+        mv -f "$tmp_file" "$PF_CLAIMS_FILE"
+        chmod 600 "$PF_CLAIMS_FILE"
+    fi
+}
+
+get_profile_forward_port() {
+    local profile="$1"
+    if [[ -f "$PF_CAPABLE_PROFILES_FILE" ]]; then
+        awk -F '\t' -v p="$profile" '$1 == p { print $3; exit }' "$PF_CAPABLE_PROFILES_FILE"
+    fi
+}
+
+port_claimed_by() {
+    local port="$1"
+    if [[ -f "$PF_CLAIMS_FILE" && -n "$port" ]]; then
+        awk -F '\t' -v port="$port" '$3 == port { print $4; exit }' "$PF_CLAIMS_FILE"
+    fi
+}
+
+profile_claimed_by() {
+    local profile="$1"
+    if [[ -f "$PF_CLAIMS_FILE" && -n "$profile" ]]; then
+        awk -F '\t' -v p="$profile" '$1 == p { print $4; exit }' "$PF_CLAIMS_FILE"
+    fi
+}
+
+endpoint_claimed_by() {
+    local endpoint="$1"
+    if [[ -f "$PF_CLAIMS_FILE" && -n "$endpoint" ]]; then
+        awk -F '\t' -v ep="$endpoint" '$3 == ep { print $4; exit }' "$PF_CLAIMS_FILE"
+    fi
+}
+
+claim_profile_port() {
+    local profile="$1" port="$2"
+    write_profile_record "$PF_CLAIMS_FILE" "$profile" "$port" "$instance_name"
+    log "Claimed port $port for $instance_name via $profile"
+}
+
+remove_claim_for_profile() {
+    local profile="$1"
+    remove_profile_record "$PF_CLAIMS_FILE" "$profile"
 }
 
 require_common_tools
@@ -484,6 +541,31 @@ select_best_server() {
 
     require_selection_tools
     cleanup_bad_servers
+    # Remove expired port claims before choosing a server.
+    cleanup_claims || true
+    instance_name="$(basename "$STATE_DIR" || true)"
+    if [[ -z "$instance_name" ]]; then
+        instance_name="global"
+    fi
+
+    # Build a short-lived snapshot of active selections from other instances so
+    # the selector will avoid choosing a profile or endpoint already in use.
+    active_snapshot_temp="$(profile_state_tmp_file /run/proton/active-selections)"
+    : > "$active_snapshot_temp"
+    for sel in /run/proton/*/current-server.env; do
+        [[ -f "$sel" ]] || continue
+        sel_inst="$(basename "$(dirname "$sel")")"
+        # skip our own instance selection file
+        [[ "$sel_inst" == "$instance_name" ]] && continue
+        sel_profile="$(awk -F '=' '/^SELECTED_WG_PROFILE=/ {print $2; exit}' "$sel" 2>/dev/null || true)"
+        sel_epip="$(awk -F '=' '/^SELECTED_ENDPOINT_IP=/ {print $2; exit}' "$sel" 2>/dev/null || true)"
+        if [[ -n "$sel_profile" ]]; then
+            printf 'P\t%s\t%s\n' "$sel_profile" "$sel_inst" >> "$active_snapshot_temp"
+        fi
+        if [[ -n "$sel_epip" ]]; then
+            printf 'E\t%s\t%s\n' "$sel_epip" "$sel_inst" >> "$active_snapshot_temp"
+        fi
+    done
     current_profile_name="$(current_profile)"
 
     while IFS= read -r config; do
@@ -505,6 +587,21 @@ select_best_server() {
             continue
         fi
 
+        # If another instance already has this profile selected, skip it.
+        if [[ -f "$active_snapshot_temp" ]]; then
+            if awk -v p="$profile" '$1=="P" && $2==p { exit 0 } END { exit 1 }' "$active_snapshot_temp"; then
+                log "Skipping $profile because it is currently selected by another instance (active snapshot)"
+                continue
+            fi
+        fi
+
+        # If the profile is explicitly claimed by another instance, skip it.
+        claimer_profile="$(profile_claimed_by "$profile" || true)"
+        if [[ -n "$claimer_profile" && "$claimer_profile" != "$instance_name" ]]; then
+            log "Skipping $profile because it is claimed by $claimer_profile"
+            continue
+        fi
+
         endpoint_host="$(config_endpoint_host "$config")"
         endpoint_port="$(config_endpoint_port "$config")"
         endpoint_ip="$(resolve_endpoint_ip "$endpoint_host" || true)"
@@ -512,6 +609,33 @@ select_best_server() {
         if [[ -z "$endpoint_host" || -z "$endpoint_port" || -z "$endpoint_ip" ]]; then
             log "Skipping $profile because its endpoint could not be resolved"
             continue
+        fi
+
+        # If another instance currently uses the same endpoint IP, skip this profile.
+        if [[ -f "$active_snapshot_temp" ]]; then
+            if awk -v ip="$endpoint_ip" '$1=="E" && $2==ip { exit 0 } END { exit 1 }' "$active_snapshot_temp"; then
+                log "Skipping $profile because its endpoint $endpoint_ip is currently in use by another instance (active snapshot)"
+                continue
+            fi
+        fi
+
+        # If this profile is associated with a known forwarded port, ensure
+        # that port is not already claimed by another instance. If no port
+        # is known, fall back to guarding the endpoint IP so multiple
+        # instances don't pick the same backend server.
+        candidate_port="$(get_profile_forward_port "$profile" || true)"
+        if [[ -n "$candidate_port" ]]; then
+            claimer="$(port_claimed_by "$candidate_port" || true)"
+            if [[ -n "$claimer" && "$claimer" != "$instance_name" ]]; then
+                log "Skipping $profile because forwarded port $candidate_port is claimed by $claimer"
+                continue
+            fi
+        else
+            claimer_ip="$(endpoint_claimed_by "$endpoint_ip" || true)"
+            if [[ -n "$claimer_ip" && "$claimer_ip" != "$instance_name" ]]; then
+                log "Skipping $profile because its endpoint $endpoint_ip is claimed by $claimer_ip"
+                continue
+            fi
         fi
 
         latency_ms="$(measure_latency_ms "$endpoint_ip" || true)"
@@ -580,9 +704,27 @@ select_best_server() {
         "$best_endpoint_port" \
         "$best_latency_ms"
 
+    # Remove any previous claim held by this instance for a different profile
+    if [[ -n "$current_profile_name" && "$current_profile_name" != "$best_profile" ]]; then
+        remove_claim_for_profile "$current_profile_name" || true
+    fi
+
+    # Claim the forwarded port (if known) so other instances avoid selecting
+    # profiles that would forward the same external port.
+    candidate_port="$(get_profile_forward_port "$best_profile" || true)"
+    if [[ -n "$candidate_port" ]]; then
+        claim_profile_port "$best_profile" "$candidate_port" || true
+    else
+        # No forwarded port known; claim the endpoint IP instead to prevent
+        # other instances from selecting the same backend server.
+        claim_profile_port "$best_profile" "$best_endpoint_ip" || true
+    fi
+
     rm -f "$SERVER_RESELECT_FILE"
     log "Selected server $best_profile (${best_endpoint_host}/${best_endpoint_ip}) with latency ${best_latency_ms}ms"
     cat "$SERVER_SELECTION_FILE"
+        # Cleanup active snapshot
+        rm -f "$active_snapshot_temp" 2>/dev/null || true
 }
 
 current_profile() {

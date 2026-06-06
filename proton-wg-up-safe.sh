@@ -193,7 +193,10 @@ load_selected_server() {
 	fi
 
 	if [[ ! -f "$SERVER_SELECTION_FILE" || -f "$SERVER_RESELECT_FILE" ]]; then
-		"$SERVER_MANAGER_SCRIPT" select >/dev/null
+		# Run the server manager with the instance STATE_DIR so selection is per-instance.
+		# Prevent the server manager from sourcing the global common env which would
+		# override STATE_DIR by setting PROTON_COMMON_ENV_FILE=/dev/null.
+		PROTON_COMMON_ENV_FILE=/dev/null STATE_DIR="$STATE_DIR" "$SERVER_MANAGER_SCRIPT" select >/dev/null
 	fi
 
 	if [[ -f "$SERVER_SELECTION_FILE" ]]; then

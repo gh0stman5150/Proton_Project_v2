@@ -77,14 +77,21 @@ qbt_login() {
     rm -f "$error_file"
     QBT_LOGIN_HTTP_STATUS="${http_status:-000}"
 
-    if [[ "$login_body" != "Ok." ]]; then
-        if [[ -n "$login_body" ]]; then
-            QBT_LOGIN_ERROR="qBittorrent rejected login at $QBITTORRENT_URL (HTTP ${QBT_LOGIN_HTTP_STATUS}: ${login_body})"
-        else
-            QBT_LOGIN_ERROR="qBittorrent rejected login at $QBITTORRENT_URL (HTTP ${QBT_LOGIN_HTTP_STATUS})"
-        fi
-        return 1
+    # qBittorrent Web UI variants may return an empty body with HTTP 204 on
+    # successful login while still setting the session cookie (QBT_SID_*).
+    # Accept either the legacy "Ok." body or HTTP 200/204 or presence of the
+    # session cookie as a successful login.
+    if [[ "$login_body" == "Ok." ]] || [[ "$QBT_LOGIN_HTTP_STATUS" == "200" ]] || [[ "$QBT_LOGIN_HTTP_STATUS" == "204" ]] || grep -q 'QBT_SID' "$cookie_jar" 2>/dev/null; then
+        return 0
     fi
+
+    if [[ -n "$login_body" ]]; then
+        QBT_LOGIN_ERROR="qBittorrent rejected login at $QBITTORRENT_URL (HTTP ${QBT_LOGIN_HTTP_STATUS}: ${login_body})"
+    else
+        QBT_LOGIN_ERROR="qBittorrent rejected login at $QBITTORRENT_URL (HTTP ${QBT_LOGIN_HTTP_STATUS})"
+    fi
+
+    return 1
 
     return 0
 }
