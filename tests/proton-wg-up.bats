@@ -12,6 +12,7 @@ setup() {
   export VPN_INTERFACE="$WG_PROFILE"
   export WG_CONFIG="$TEST_TMPDIR/$WG_PROFILE.conf"
   export DOCKER_NETWORK_CIDR="192.168.96.0/20"
+  export IP_LOG="$TEST_TMPDIR/ip.log"
   export LAN_IF="enp86s0"
   export LAN_CIDR="192.168.1.0/24"
   export SERVER_POOL_ENABLED="off"
@@ -24,10 +25,13 @@ setup() {
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
 STATE_DIR=$STATE_DIR
 WG_RUNTIME_DIR=$WG_RUNTIME_DIR
+WG_ADDRESS_SUBNET=4
 EOF
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
 QBITTORRENT_URL=http://127.0.0.1:8083
+QBT_CONTAINER_NAME=qbittorrent-sonarr
+QBT_NETWORK_NAME=starr_network
 EOF
 
   cat > "$WG_CONFIG" <<'EOF'
@@ -61,12 +65,23 @@ EOF
 #!/usr/bin/env bash
 if [[ "$1" == "-4" && "$2" == "addr" && "$3" == "show" ]]; then
   printf '3: %s: <POINTOPOINT,UP,LOWER_UP> mtu 1420\n' "$4"
-  printf '    inet 10.2.0.2/32 scope global %s\n' "$4"
+  printf '    inet 10.4.0.2/32 scope global %s\n' "$4"
+  exit 0
+fi
+printf '%s\n' "$*" >> "$IP_LOG"
+exit 0
+EOF
+  chmod +x "$TMPBIN/ip"
+
+  cat > "$TMPBIN/docker" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "inspect" ]]; then
+  printf 'starr_network=192.168.96.44\n'
   exit 0
 fi
 exit 0
 EOF
-  chmod +x "$TMPBIN/ip"
+  chmod +x "$TMPBIN/docker"
 
   cat > "$TMPBIN/iptables" <<'EOF'
 #!/usr/bin/env bash
@@ -102,5 +117,9 @@ EOF
   [[ "$output" != *"world accessible"* ]]
   [[ "$output" != *"syntax error: operand expected"* ]]
   [[ "$output" == *"[#] ip link add wg-test type wireguard"* ]]
-  [[ "$output" == *"WireGuard up on wg-test with IP: 10.2.0.2"* ]]
+  [[ "$output" == *"qBittorrent policy routing: source 192.168.96.44/32 -> table 51804 via wg-test"* ]]
+  [[ "$output" == *"WireGuard up on wg-test with IP: 10.4.0.2"* ]]
+  grep -F 'route replace default dev wg-test table 51804' "$IP_LOG"
+  grep -F 'rule add from 192.168.96.44/32 lookup 51804 priority 114' "$IP_LOG"
+  grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
 }

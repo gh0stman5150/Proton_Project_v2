@@ -54,7 +54,7 @@ Older scripts remain in the repository for reference only and must not be treate
 
 The kill switch dispatcher defaults to `KILLSWITCH_BACKEND=auto`. It prefers `nftables` when `nft` is available and falls back to `iptables` otherwise.
 
-`proton-docker-watch.service` is optional. See the Optional Docker Network Watcher section for when to enable it.
+`proton-docker-watch@INSTANCE.service` is optional. See the Optional Docker Network Watcher section for when to enable it.
 
 Do not rename, consolidate, or remove any script listed here without explicit instruction.
 
@@ -228,7 +228,7 @@ The installer:
 10. Clears stale bad-server cooldowns, port-forward incapable state, runtime selection state, and failed Proton service state before restart
 11. Runs `systemctl daemon-reload`
 12. Enables and restarts the Proton services
-13. Restarts `proton-docker-watch.service` only if it was already enabled
+13. Restarts Docker watcher services only if they were already enabled
 
 You can also pass qBittorrent credentials during install:
 
@@ -250,7 +250,7 @@ sudo ./install-proton-systemd.sh \
   --qb-network starr
 ```
 
-After the base install, you may optionally enable `proton-docker-watch.service` if your Docker network CIDR or qBittorrent container IP can change over time.
+After the base install, you may optionally enable `proton-docker-watch@INSTANCE.service` if your Docker network CIDR or qBittorrent container IP can change over time.
 
 ## Upgrade and Redeploy
 
@@ -261,12 +261,12 @@ On a redeploy, the installer also stops active Proton services before replacing 
 If you deploy files manually instead of using the installer, run the equivalent reset sequence yourself before restarting services:
 
 ```bash
-sudo systemctl stop proton-docker-watch.service proton-healthcheck.service proton-port-forward.service proton-wg.service proton-killswitch.service || true
+sudo systemctl stop proton-docker-watch@prowlarr.service proton-healthcheck@prowlarr.service proton-port-forward@prowlarr.service proton-wg@prowlarr.service proton-killswitch.service || true
 sudo /usr/local/bin/proton/proton-server-manager.sh reset-incapable
 sudo /usr/local/bin/proton/proton-server-manager.sh reset-bad
 sudo rm -f /run/proton/current-server.env /run/proton/proton-port.state /run/proton/recovery.lock
-sudo systemctl reset-failed proton-docker-watch.service proton-healthcheck.service proton-port-forward.service proton-wg.service proton-killswitch.service
-sudo systemctl restart proton-wg.service proton-port-forward.service proton-healthcheck.service
+sudo systemctl reset-failed proton-docker-watch@prowlarr.service proton-healthcheck@prowlarr.service proton-port-forward@prowlarr.service proton-wg@prowlarr.service proton-killswitch.service
+sudo systemctl restart proton-wg@prowlarr.service proton-port-forward@prowlarr.service proton-healthcheck@prowlarr.service
 ```
 
 The manual sequence intentionally preserves `PF_CAPABLE_PROFILES_FILE` so the selector can keep its proven-good port-forward allowlist while relearning only the transient failure state.
@@ -438,7 +438,11 @@ If you customized the defaults, source the relevant files under `/etc/proton` fi
 ```bash
 wg show
 ip rule show
-ip route show table 51820
+ip route show table 51802
+ip route show table 51803
+ip route show table 51804
+ip route show table 51805
+ip route show table 51806
 ip route show
 ```
 
@@ -458,17 +462,17 @@ If the active backend is `iptables`, inspect the dedicated Proton chains and any
 If the active mode is `compose-recreate`:
 
 ```bash
-cat /run/proton/proton-port.state
-cat /run/proton/qbt-port.cache
-cat /etc/proton/qbittorrent-port.env
+cat /run/proton/prowlarr/proton-port.state
+cat /run/proton/prowlarr/qbt-port.cache
+cat /etc/proton/instances/prowlarr/qbittorrent-port.env
 ```
 
 If the active mode is `legacy-dnat`:
 
 ```bash
-cat /run/proton/proton-port.state
-cat /run/proton/qbt-port.cache
-docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' qbittorrent
+cat /run/proton/prowlarr/proton-port.state
+cat /run/proton/prowlarr/qbt-port.cache
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' qbittorrent-prowlarr
 sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
 ```
 
@@ -493,10 +497,10 @@ Confirm all of the following:
 ### Safe failure test
 
 ```bash
-sudo ip link set dev proton down
+sudo ip link set dev pvprowlarr down
 # verify Docker hosted application traffic is blocked from leaking
 # verify SSH and RDP remain reachable as intended
-sudo ip link set dev proton up
+sudo systemctl restart proton-wg@prowlarr.service proton-port-forward@prowlarr.service proton-healthcheck@prowlarr.service
 ```
 
 After recovery, recheck:
@@ -504,12 +508,12 @@ After recovery, recheck:
 ```bash
 wg show
 ip rule show
-ip route show table 51820
+ip route show table 51806
 ```
 
 ## Optional Docker Network Watcher
 
-If qBittorrent or other Docker hosted application services run on a bridged Docker network and routing depends on Docker network CIDR or container IP discovery, enable the watcher service to keep routing and DNAT in sync with Docker events.
+If qBittorrent or other Docker hosted application services run on a bridged Docker network and routing depends on Docker network CIDR or container IP discovery, enable the per-instance watcher service to keep routing and DNAT in sync with Docker events.
 
 The watcher listens for Docker network and container events and can:
 
@@ -523,22 +527,22 @@ Install and start the watcher:
 cd /path/to/project-bundle
 sudo ./install-proton-systemd.sh
 sudo systemctl daemon-reload
-sudo systemctl enable --now proton-docker-watch.service
-sudo journalctl -fu proton-docker-watch.service
+sudo systemctl enable --now proton-docker-watch@prowlarr.service
+sudo journalctl -fu proton-docker-watch@prowlarr.service
 ```
 
 Verify watcher behavior:
 
 ```bash
-ip rule show | grep 51820
-ip route show table 51820
+ip rule show | grep 51806
+ip route show table 51806
 sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
 ```
 
 Disable the watcher if not needed:
 
 ```bash
-sudo systemctl disable --now proton-docker-watch.service
+sudo systemctl disable --now proton-docker-watch@prowlarr.service
 ```
 
 ## Archive Analysis Requirement

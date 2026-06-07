@@ -25,9 +25,15 @@ VPN_TABLE="${VPN_TABLE:-51820}"
 RULE_PRIORITY="${RULE_PRIORITY:-110}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
+QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
+QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
+QBT_CONTAINER_IP_STATE_FILE="${QBT_CONTAINER_IP_STATE_FILE:-${STATE_DIR}/qbt-container-ip}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
 DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
 DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-$RULE_PRIORITY}"
+QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
+DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
+DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
 LAST_FILE="${LAST_FILE:-/run/proton/docker-network-watcher.last}"
 QBT_SYNC_SCRIPT="${QBT_SYNC_SCRIPT:-$DIR/proton-qbittorrent-sync-safe.sh}"
 QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
@@ -44,7 +50,6 @@ load_selected_server() {
 	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
 		# shellcheck disable=SC1090
 		source "$SERVER_SELECTION_FILE"
-		VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
 	fi
 }
 
@@ -109,54 +114,134 @@ find_network_cidr() {
 	echo ""
 }
 
+normalize_ipv4_rule_source() {
+	local value="$1"
+
+	[[ -n "$value" ]] || return 1
+	if [[ "$value" == */* ]]; then
+		printf '%s\n' "$value"
+	else
+		printf '%s/32\n' "$value"
+	fi
+}
+
+docker_fallback_vpn_routing_enabled() {
+	case "$DOCKER_FALLBACK_VPN_ROUTING" in
+	1 | true | yes | on)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+resolve_qbt_container_ip() {
+	local networks=""
+	local ip=""
+
+	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
+	command -v docker >/dev/null 2>&1 || return 1
+
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	[[ -n "$networks" ]] || return 1
+
+	if [[ -n "$QBT_NETWORK_NAME" ]]; then
+		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+
+	if [[ -z "$ip" ]]; then
+		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+
+	[[ -n "$ip" ]] || return 1
+	printf '%s\n' "$ip"
+}
+
+read_cached_qbt_container_ip() {
+	[[ -f "$QBT_CONTAINER_IP_STATE_FILE" ]] || return 1
+	cat "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
+}
+
+persist_qbt_container_ip() {
+	local value="${1:-}"
+
+	if [[ -n "$value" ]]; then
+		umask 077
+		printf '%s' "$value" >"$QBT_CONTAINER_IP_STATE_FILE" || true
+	else
+		rm -f "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
+	fi
+}
+
 reapply_routes() {
 	local new_cidr="$1"
 	local old_cidr=""
+	local new_qbt_ip=""
+	local old_qbt_ip=""
+	local new_qbt_rule_source=""
+	local old_qbt_rule_source=""
 
 	load_selected_server
 	if [[ -f "$LAST_FILE" ]]; then
 		old_cidr="$(cat "$LAST_FILE" 2>/dev/null || true)"
 	fi
+	old_qbt_ip="$(read_cached_qbt_container_ip || true)"
+	new_qbt_ip="$(resolve_qbt_container_ip || true)"
+	new_qbt_rule_source="$(normalize_ipv4_rule_source "$new_qbt_ip" || true)"
+	old_qbt_rule_source="$(normalize_ipv4_rule_source "$old_qbt_ip" || true)"
 
 	if [[ -n "$old_cidr" || -n "$new_cidr" ]]; then
 		detect_lan_cidr
 	fi
 
-	# Even when the CIDR is unchanged, refresh the Docker raw-table return rule so
-	# Docker restarts cannot leave container return traffic behind a stale drop.
-	if [[ "$new_cidr" == "$old_cidr" ]]; then
-		if [[ -n "$new_cidr" && -n "$VPN_INTERFACE" ]] && command -v iptables >/dev/null 2>&1; then
-			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
-			iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
-		fi
-		return 0
-	fi
-
-	if [[ -n "$old_cidr" ]]; then
+	if [[ -n "$old_cidr" && "$old_cidr" != "$new_cidr" ]]; then
 		log "Removing old Docker policy rules for $old_cidr"
 		ip rule del from "$old_cidr" to "$old_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
 		if [[ -n "$LAN_CIDR" ]]; then
 			ip rule del from "$old_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
 		fi
 		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
 		if command -v iptables >/dev/null 2>&1; then
 			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$old_cidr" -j ACCEPT 2>/dev/null || true
 		fi
 	fi
 
 	if [[ -n "$new_cidr" ]]; then
-		log "Applying Docker policy routing: $new_cidr -> table $VPN_TABLE via $VPN_INTERFACE while keeping local Docker/LAN traffic on main"
+		log "Applying Docker policy routing for $INSTANCE on $new_cidr via table $VPN_TABLE and $VPN_INTERFACE"
 		ip rule add from "$new_cidr" to "$new_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
 		if [[ -n "$LAN_CIDR" ]]; then
 			ip rule add from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
 		fi
-		ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+		ip rule del from "$new_cidr" lookup 51820 priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+		ip rule del from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+		ip rule del from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+		if docker_fallback_vpn_routing_enabled; then
+			ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+		fi
 		if command -v iptables >/dev/null 2>&1; then
 			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
 			iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
 		fi
 	else
 		log "No docker network detected; docker->VPN source rule removed"
+	fi
+
+	if [[ -n "$old_qbt_rule_source" ]]; then
+		ip rule del from "$old_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+	fi
+
+	if [[ -n "$new_qbt_rule_source" ]]; then
+		ip rule del from "$new_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+		ip rule add from "$new_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+		persist_qbt_container_ip "$new_qbt_ip"
+		log "qBittorrent policy routing refreshed: source $new_qbt_rule_source -> table $VPN_TABLE via $VPN_INTERFACE"
+	else
+		persist_qbt_container_ip ""
+		if [[ -n "$QBT_CONTAINER_NAME" ]]; then
+			log "WARNING: Could not resolve an IPv4 address for $QBT_CONTAINER_NAME; qBittorrent remains on Docker fallback routing"
+		fi
 	fi
 
 	printf "%s" "$new_cidr" >"$LAST_FILE" || true
@@ -252,4 +337,3 @@ else
 		refresh_qb_state
 	done
 fi
-

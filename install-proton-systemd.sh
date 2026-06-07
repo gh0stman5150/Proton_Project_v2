@@ -563,6 +563,8 @@ install_instance_examples() {
         webui_port="$(instance_webui_port "$instance")"
         vpn_if="$(instance_vpn_interface "$instance")"
         address_subnet="$(instance_address_subnet "$instance")"
+        vpn_table="$((51800 + address_subnet))"
+        qbt_rule_priority="$((110 + address_subnet))"
 
         mkdir -p "$instance_dir"
         chown root:root "$instance_dir"
@@ -580,6 +582,9 @@ WG_CONFIG=${ETC_PROTON_DIR}/instances/${instance}/wireguard.conf
 # WireGuard Address (10.${address_subnet}.0.2/32), DNS and NAT-PMP gateway
 # (10.${address_subnet}.0.1) so each instance receives its own forwarded port.
 WG_ADDRESS_SUBNET=${address_subnet}
+VPN_TABLE=${vpn_table}
+QBT_VPN_RULE_PRIORITY=${qbt_rule_priority}
+DOCKER_FALLBACK_VPN_RULE_PRIORITY=130
 STATE_DIR=/run/proton/${instance}
 SERVER_SELECTION_FILE=/run/proton/${instance}/current-server.env
 SERVER_RESELECT_FILE=/run/proton/${instance}/reselect-server.flag

@@ -29,12 +29,18 @@ KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-/usr/local/bin/proton/proton-killswitch-
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
+QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
+QBT_CONTAINER_IP_STATE_FILE="${QBT_CONTAINER_IP_STATE_FILE:-${STATE_DIR}/qbt-container-ip}"
 KILLSWITCH_BACKEND="${KILLSWITCH_BACKEND:-auto}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
 DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
 DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
+QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
+DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
+DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
 DOCKER_DEST_MAIN_RULE_PRIORITY="${DOCKER_DEST_MAIN_RULE_PRIORITY:-98}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
@@ -229,6 +235,66 @@ trim_field() {
 	value="${value#"${value%%[![:space:]]*}"}"
 	value="${value%"${value##*[![:space:]]}"}"
 	printf '%s\n' "$value"
+}
+
+normalize_ipv4_rule_source() {
+	local value="$1"
+
+	[[ -n "$value" ]] || return 1
+	if [[ "$value" == */* ]]; then
+		printf '%s\n' "$value"
+	else
+		printf '%s/32\n' "$value"
+	fi
+}
+
+docker_fallback_vpn_routing_enabled() {
+	case "$DOCKER_FALLBACK_VPN_ROUTING" in
+	1 | true | yes | on)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+resolve_qbt_container_ip() {
+	local networks=""
+	local ip=""
+
+	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
+	command -v docker >/dev/null 2>&1 || return 1
+
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	[[ -n "$networks" ]] || return 1
+
+	if [[ -n "$QBT_NETWORK_NAME" ]]; then
+		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+
+	if [[ -z "$ip" ]]; then
+		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+
+	[[ -n "$ip" ]] || return 1
+	printf '%s\n' "$ip"
+}
+
+read_cached_qbt_container_ip() {
+	[[ -f "$QBT_CONTAINER_IP_STATE_FILE" ]] || return 1
+	cat "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
+}
+
+persist_qbt_container_ip() {
+	local value="${1:-}"
+
+	if [[ -n "$value" ]]; then
+		umask 077
+		printf '%s' "$value" >"$QBT_CONTAINER_IP_STATE_FILE"
+	else
+		rm -f "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
+	fi
 }
 
 detect_lan_cidr() {
@@ -575,8 +641,32 @@ inject_routes() {
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" 2>/dev/null || true
 
 	# Keep Docker<->Docker and Docker<->LAN traffic on the main table, while
-	# other container-sourced traffic is forced into the VPN table.
+	# qBittorrent container traffic is forced into this instance's VPN table.
+	# A lower-priority Docker subnet fallback keeps non-qBittorrent apps on a
+	# Proton tunnel without stealing qBittorrent replies from their owner tunnel.
 	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
+		local qbt_container_ip=""
+		local qbt_rule_source=""
+		local cached_qbt_container_ip=""
+		local cached_qbt_rule_source=""
+
+		qbt_container_ip="$(resolve_qbt_container_ip || true)"
+		cached_qbt_container_ip="$(read_cached_qbt_container_ip || true)"
+
+		if [[ -n "$cached_qbt_container_ip" ]]; then
+			cached_qbt_rule_source="$(normalize_ipv4_rule_source "$cached_qbt_container_ip" || true)"
+			if [[ -n "$cached_qbt_rule_source" ]]; then
+				ip rule del from "$cached_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+			fi
+		fi
+
+		if [[ -n "$qbt_container_ip" ]]; then
+			qbt_rule_source="$(normalize_ipv4_rule_source "$qbt_container_ip" || true)"
+			if [[ -n "$qbt_rule_source" ]]; then
+				ip rule del from "$qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+			fi
+		fi
+
 		detect_lan_cidr
 		for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 			cidr="$(trim_field "$cidr")"
@@ -589,11 +679,35 @@ inject_routes() {
 				ip rule add from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
 			fi
 
+			# Remove the legacy singleton Docker->VPN rule. With multiple
+			# instance tables it has a lower priority number than the qBittorrent
+			# /32 rules, so leaving it in place would still collapse every
+			# container onto table 51820.
+			ip rule del from "$cidr" lookup 51820 priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 			ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-			ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
+			ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+			if docker_fallback_vpn_routing_enabled; then
+				ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+			fi
 		done
+
+		if [[ -n "$qbt_rule_source" ]]; then
+			ip rule add from "$qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
+			persist_qbt_container_ip "$qbt_container_ip"
+			log "qBittorrent policy routing: source $qbt_rule_source -> table $VPN_TABLE via $VPN_INTERFACE"
+		else
+			persist_qbt_container_ip ""
+			if [[ -n "$QBT_CONTAINER_NAME" ]]; then
+				log "WARNING: Could not resolve an IPv4 address for $QBT_CONTAINER_NAME; qBittorrent will use Docker fallback routing until the watcher reconciles it"
+			fi
+		fi
+
 		ensure_docker_raw_return_rule
-		log "Docker policy routing: source $DOCKER_NETWORK_CIDR -> table $VPN_TABLE via $VPN_INTERFACE while LAN traffic stays on main"
+		if docker_fallback_vpn_routing_enabled; then
+			log "Docker fallback policy routing: source $DOCKER_NETWORK_CIDR -> table $VPN_TABLE via $VPN_INTERFACE at priority $DOCKER_FALLBACK_VPN_RULE_PRIORITY while LAN traffic stays on main"
+		else
+			log "Docker fallback policy routing disabled; qBittorrent-specific rules remain active"
+		fi
 	else
 		log "VPN table $VPN_TABLE prepared on $VPN_INTERFACE without Docker source rules"
 	fi

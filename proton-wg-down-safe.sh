@@ -23,12 +23,17 @@ FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
+QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
+QBT_CONTAINER_IP_STATE_FILE="${QBT_CONTAINER_IP_STATE_FILE:-${STATE_DIR}/qbt-container-ip}"
 KILLSWITCH_BACKEND="${KILLSWITCH_BACKEND:-auto}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
 DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
 DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
+QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
+DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 DOCKER_DEST_MAIN_RULE_PRIORITY="${DOCKER_DEST_MAIN_RULE_PRIORITY:-98}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
@@ -58,6 +63,44 @@ trim_field() {
 	value="${value#"${value%%[![:space:]]*}"}"
 	value="${value%"${value##*[![:space:]]}"}"
 	printf '%s\n' "$value"
+}
+
+normalize_ipv4_rule_source() {
+	local value="$1"
+
+	[[ -n "$value" ]] || return 1
+	if [[ "$value" == */* ]]; then
+		printf '%s\n' "$value"
+	else
+		printf '%s/32\n' "$value"
+	fi
+}
+
+resolve_qbt_container_ip() {
+	local networks=""
+	local ip=""
+
+	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
+	command -v docker >/dev/null 2>&1 || return 1
+
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	[[ -n "$networks" ]] || return 1
+
+	if [[ -n "$QBT_NETWORK_NAME" ]]; then
+		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+
+	if [[ -z "$ip" ]]; then
+		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+
+	[[ -n "$ip" ]] || return 1
+	printf '%s\n' "$ip"
+}
+
+read_cached_qbt_container_ip() {
+	[[ -f "$QBT_CONTAINER_IP_STATE_FILE" ]] || return 1
+	cat "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
 }
 
 resolved_dns_enabled() {
@@ -171,14 +214,24 @@ fi
 if [[ -f "$SERVER_SELECTION_FILE" ]]; then
 	# shellcheck disable=SC1090
 	source "$SERVER_SELECTION_FILE"
-	WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
-	VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
+	WG_PROFILE="${WG_PROFILE:-${SELECTED_WG_PROFILE:-$WG_PROFILE}}"
+	VPN_INTERFACE="${VPN_INTERFACE:-${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}}"
 	WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
 	FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 fi
 
 # Remove Docker policy routing before tearing down the interface so
-# forwarded container traffic cannot fall back to stale routes.
+# forwarded container traffic cannot fall back to stale routes. Shared
+# Docker<->Docker and Docker<->LAN main-table rules are intentionally left in
+# place because other Proton instances may still be active on the same bridge.
+QBT_CONTAINER_IP="$(resolve_qbt_container_ip || true)"
+CACHED_QBT_CONTAINER_IP="$(read_cached_qbt_container_ip || true)"
+for source_ip in "$QBT_CONTAINER_IP" "$CACHED_QBT_CONTAINER_IP"; do
+	source_rule="$(normalize_ipv4_rule_source "$source_ip" || true)"
+	[[ -n "$source_rule" ]] || continue
+	ip rule del from "$source_rule" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+done
+
 for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 	cidr="$(trim_field "$cidr")"
 	[[ -n "$cidr" ]] || continue
@@ -193,11 +246,9 @@ if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
-		ip rule del from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
-		if [[ -n "$LAN_CIDR" ]]; then
-			ip rule del from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
-		fi
+		ip rule del from "$cidr" lookup 51820 priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 		ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+		ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
 
 		if command -v iptables >/dev/null 2>&1; then
 			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT 2>/dev/null || true
@@ -221,3 +272,4 @@ else
 fi
 
 rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
+rm -f "$QBT_CONTAINER_IP_STATE_FILE"

@@ -16,6 +16,7 @@ SERVER_RESELECT_FILE=/run/proton/reselect-server.flag
 DOCKER_NETWORK_CIDR_STATE_FILE=/run/proton/docker-network-cidr
 DOCKER_CONFIG_DIR=/run/proton/docker-config
 QBITTORRENT_ENV_FILE=/etc/proton/qbittorrent.env
+VPN_TABLE=51820
 EOF
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<'EOF'
@@ -88,17 +89,21 @@ EOF
 }
 
 @test "instance loader derives a distinct tunnel subnet, DNS, and NAT-PMP gateway" {
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY"'
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n%s\n%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY" "$VPN_TABLE" "$QBT_VPN_RULE_PRIORITY"'
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"10.4.0.2/32"* ]]
   [[ "$output" == *"10.4.0.1"* ]]
+  [[ "$output" == *"51804"* ]]
+  [[ "$output" == *"114"* ]]
 
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init prowlarr; printf "%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY"'
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init prowlarr; printf "%s\n%s\n%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY" "$VPN_TABLE" "$QBT_VPN_RULE_PRIORITY"'
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"10.6.0.2/32"* ]]
   [[ "$output" == *"10.6.0.1"* ]]
+  [[ "$output" == *"51806"* ]]
+  [[ "$output" == *"116"* ]]
 }
 
 @test "instance loader rejects an out-of-range tunnel subnet" {
