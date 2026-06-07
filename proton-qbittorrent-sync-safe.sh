@@ -70,6 +70,7 @@ QBT_PORT_APPLY_MODE="${QBT_PORT_APPLY_MODE:-compose-recreate}"
 QBT_PORT_ENV_FILE="${QBT_PORT_ENV_FILE:-/etc/proton/qbittorrent-port.env}"
 QBT_COMPOSE_PROJECT_DIR="${QBT_COMPOSE_PROJECT_DIR:-}"
 QBT_COMPOSE_SERVICE="${QBT_COMPOSE_SERVICE:-qbittorrent}"
+QBT_CONFIG_DIR="${QBT_CONFIG_DIR:-${QBT_COMPOSE_PROJECT_DIR:+${QBT_COMPOSE_PROJECT_DIR%/}/config}}"
 QBT_SYNC_LOCK_FILE="${QBT_SYNC_LOCK_FILE:-${CACHE_DIR}/qbt-sync.lock}"
 QBT_COMPOSE_RECREATE_RETRIES="${QBT_COMPOSE_RECREATE_RETRIES:-3}"
 QBT_COMPOSE_RECREATE_RETRY_DELAY="${QBT_COMPOSE_RECREATE_RETRY_DELAY:-5}"
@@ -308,6 +309,26 @@ compose_service_publishes_port() {
     ' <<< "$ports"
 }
 
+clean_stale_qbt_lock() {
+    # qBittorrent uses a single-instance lock (lockfile + ipc-socket) under its
+    # config dir. When a recreate hits stop_grace_period and Docker SIGKILLs the
+    # container, these artifacts are left behind and the next qBittorrent refuses
+    # to bind its Web UI, which makes every port sync fail and the container loop
+    # unhealthy. Remove them while the service is being recreated (it is stopped
+    # at this point) so the fresh container can start cleanly.
+    local config_dir="$QBT_CONFIG_DIR"
+    local artifact
+
+    [[ -n "$config_dir" ]] || return 0
+
+    for artifact in "${config_dir%/}/qBittorrent/lockfile" "${config_dir%/}/qBittorrent/ipc-socket"; do
+        if [[ -e "$artifact" ]]; then
+            log "Removing stale qBittorrent artifact before recreate: $artifact"
+            rm -f "$artifact"
+        fi
+    done
+}
+
 run_compose_recreate() {
     local target_port="$1"
     local attempt=1
@@ -316,6 +337,11 @@ run_compose_recreate() {
 
     output_file="$(mktemp)"
     while (( attempt <= QBT_COMPOSE_RECREATE_RETRIES )); do
+        (
+            cd "$QBT_COMPOSE_PROJECT_DIR"
+            DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose stop "$QBT_COMPOSE_SERVICE"
+        ) >/dev/null 2>&1 || true
+        clean_stale_qbt_lock
         if (
             cd "$QBT_COMPOSE_PROJECT_DIR"
             DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
@@ -488,6 +514,19 @@ refresh_qbt_dnat_legacy() {
 }
 
 if ! qbt_login "$COOKIE_JAR"; then
+    # A container that is wedged on a stale single-instance lock never binds its
+    # Web UI, so the very first login fails and the normal recreate path below is
+    # never reached. In compose-recreate mode, attempt one lock-clearing recreate
+    # so the loop can self-heal instead of looping on "Web UI unreachable".
+    if [[ "$QBT_PORT_APPLY_MODE" == "compose-recreate" ]] && require_compose_mode_ready; then
+        log "qBittorrent Web UI unreachable on startup; attempting self-heal recreate on port $PORT"
+        write_published_port
+        if recreate_qbt_service_compose "$PORT"; then
+            write_cache
+            log "qBittorrent recovered via self-heal recreate on port $PORT"
+            exit 0
+        fi
+    fi
     log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"
     exit 1
 fi
