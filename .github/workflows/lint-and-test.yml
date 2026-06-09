@@ -40,7 +40,7 @@ jobs:
             echo "No shell scripts found."
             exit 0
           fi
-          shellcheck -x $files
+          echo "$files" | xargs shellcheck -x
 
       - name: Run BATS tests
         run: |
