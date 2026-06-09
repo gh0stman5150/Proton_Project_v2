@@ -481,16 +481,16 @@ instance_webui_port() {
         lidarr)
             printf '%s\n' 8081
             ;;
-        radarr)
+        prowlarr)
             printf '%s\n' 8082
             ;;
-        sonarr)
+        radarr)
             printf '%s\n' 8083
             ;;
-        whisparr)
+        sonarr)
             printf '%s\n' 8084
             ;;
-        prowlarr)
+        whisparr)
             printf '%s\n' 8085
             ;;
         *)

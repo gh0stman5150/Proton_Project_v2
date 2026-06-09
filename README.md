@@ -132,10 +132,10 @@ Copy those to `proton.env` and `qbittorrent.env`, then keep real config files ro
 | Instance   | qBittorrent            | Web UI | Interface  | Tunnel subnet |
 | ---        | ---                    | ---    | ---        | ---           |
 | `lidarr`   | `qbittorrent-lidarr`   | `8081` | `pvlidarr` | `10.2.0.2/32` |
-| `radarr`   | `qbittorrent-radarr`   | `8082` | `pvradarr` | `10.3.0.2/32` |
-| `sonarr`   | `qbittorrent-sonarr`   | `8083` | `pvsonarr` | `10.4.0.2/32` |
-| `whisparr` | `qbittorrent-whisparr` | `8084` | `pvwhisp`  | `10.5.0.2/32` |
-| `prowlarr` | `qbittorrent-prowlarr` | `8085` | `pvprowl`  | `10.6.0.2/32` |
+| `prowlarr` | `qbittorrent-prowlarr` | `8082` | `pvprowl`  | `10.6.0.2/32` |
+| `radarr`   | `qbittorrent-radarr`   | `8083` | `pvradarr` | `10.3.0.2/32` |
+| `sonarr`   | `qbittorrent-sonarr`   | `8084` | `pvsonarr` | `10.4.0.2/32` |
+| `whisparr` | `qbittorrent-whisparr` | `8085` | `pvwhisp`  | `10.5.0.2/32` |
 
 ### Same Server and Multi Tunnel Isolation
 

@@ -39,8 +39,12 @@ RestrictSUIDSGID=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ReadWritePaths=/run/proton /etc/wireguard/proton-runtime /etc/proton
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
+# CAP_DAC_OVERRIDE lets the (root) service delete qBittorrent's stale single-instance
+# lock artifacts (lockfile/ipc-socket) which are owned by the container PUID (1000) in
+# a 0755 config dir. Without it, the self-heal lock cleanup fails with EACCES and the
+# qBittorrent container stays wedged after an ungraceful (SIGKILL) recreate.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP CAP_DAC_OVERRIDE
 
 [Install]
 WantedBy=multi-user.target
