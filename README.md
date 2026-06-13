@@ -95,6 +95,8 @@ Optional qB orchestration variables:
 
 ```bash
 QBT_PORT_APPLY_MODE=compose-recreate
+QBT_RESPECT_MANUAL_STOP=1
+QBT_MANUAL_STOP_EVENT_GRACE_SECONDS=180
 QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent
 QBT_COMPOSE_SERVICE=qbittorrent
 QBT_PORT_ENV_FILE=/etc/proton/qbittorrent-port.env
@@ -200,6 +202,8 @@ When Proton assigns a new forwarded port, the default compose-recreate path must
 8. Confirm that qBittorrent remains bound only to the intended VPN path
 
 The recommended artifact path is `/etc/proton/qbittorrent-port.env`. In compose-recreate mode the sync script injects `QBT_PUBLISHED_PORT` into `docker compose`, so the service does not need write access to the Compose project tree just to update the published port.
+
+With `QBT_RESPECT_MANUAL_STOP=1`, the sync script treats an existing qBittorrent container in `created`, `exited`, `dead`, or `removing` state as intentionally stopped and skips compose recreation. It also treats recent Docker stop or network-disconnect events as a stop in progress for `QBT_MANUAL_STOP_EVENT_GRACE_SECONDS`, so a graceful qBittorrent shutdown is not mistaken for a wedged Web UI. Set `QBT_RESPECT_MANUAL_STOP=0` only if Proton should bring stopped qBittorrent containers back up automatically.
 
 `QBITTORRENT_URL` should point to the host published qBittorrent Web UI endpoint. Host systemd services cannot assume direct reachability to Docker network names unless that path is explicitly published or proxied.
 

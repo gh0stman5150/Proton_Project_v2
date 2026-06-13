@@ -74,6 +74,8 @@ QBT_CONFIG_DIR="${QBT_CONFIG_DIR:-${QBT_COMPOSE_PROJECT_DIR:+${QBT_COMPOSE_PROJE
 QBT_SYNC_LOCK_FILE="${QBT_SYNC_LOCK_FILE:-${CACHE_DIR}/qbt-sync.lock}"
 QBT_COMPOSE_RECREATE_RETRIES="${QBT_COMPOSE_RECREATE_RETRIES:-3}"
 QBT_COMPOSE_RECREATE_RETRY_DELAY="${QBT_COMPOSE_RECREATE_RETRY_DELAY:-5}"
+QBT_RESPECT_MANUAL_STOP="${QBT_RESPECT_MANUAL_STOP:-1}"
+QBT_MANUAL_STOP_EVENT_GRACE_SECONDS="${QBT_MANUAL_STOP_EVENT_GRACE_SECONDS:-180}"
 
 case "$QBT_PORT_APPLY_MODE" in
 compose-recreate | legacy-dnat)
@@ -227,6 +229,108 @@ require_compose_mode_ready() {
         log "ERROR: QBT_COMPOSE_SERVICE is required in compose-recreate mode"
         return 1
     fi
+}
+
+respect_manual_stop_enabled() {
+    case "${QBT_RESPECT_MANUAL_STOP,,}" in
+    1 | true | yes | on)
+        return 0
+        ;;
+    *)
+        return 1
+        ;;
+    esac
+}
+
+compose_container_ref_all() {
+    local container_id
+
+    if [[ -n "${QBT_CONTAINER_NAME:-}" ]] && docker inspect "$QBT_CONTAINER_NAME" >/dev/null 2>&1; then
+        printf '%s\n' "$QBT_CONTAINER_NAME"
+        return 0
+    fi
+
+    container_id="$(
+        cd "$QBT_COMPOSE_PROJECT_DIR"
+        DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps --all -q "$QBT_COMPOSE_SERVICE" 2>/dev/null \
+            | awk 'NF { last = $0 } END { print last }'
+    )"
+
+    [[ -n "$container_id" ]] || return 1
+    printf '%s\n' "$container_id"
+}
+
+compose_container_status() {
+    local container_ref
+
+    container_ref="$(compose_container_ref_all)" || return 1
+    docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true
+}
+
+recent_manual_stop_event() {
+    local container_ref
+    local container_id
+    local container_id_short
+    local since
+    local until
+
+    [[ "$QBT_MANUAL_STOP_EVENT_GRACE_SECONDS" =~ ^[0-9]+$ ]] || return 1
+    (( QBT_MANUAL_STOP_EVENT_GRACE_SECONDS > 0 )) || return 1
+
+    container_ref="$(compose_container_ref_all)" || return 1
+    container_id="$(docker inspect -f '{{.Id}}' "$container_ref" 2>/dev/null || true)"
+    [[ -n "$container_id" ]] || return 1
+    container_id_short="${container_id:0:12}"
+    until="$(date +%s)"
+    since=$((until - QBT_MANUAL_STOP_EVENT_GRACE_SECONDS))
+
+    if docker events \
+        --since "$since" \
+        --until "$until" \
+        --filter container="$container_ref" \
+        --format '{{.Action}}' 2>/dev/null \
+        | awk '$1 == "stop" || $1 == "die" || $1 == "destroy" || $1 == "kill" { found = 1 } END { exit found ? 0 : 1 }'; then
+        return 0
+    fi
+
+    docker events \
+        --since "$since" \
+        --until "$until" \
+        --filter type=network \
+        --filter event=disconnect \
+        --format '{{.Actor.Attributes.container}}' 2>/dev/null \
+        | awk -v id="$container_id" -v short_id="$container_id_short" '
+            $1 == id || $1 == short_id { found = 1 }
+            END { exit found ? 0 : 1 }
+        '
+}
+
+skip_sync_for_manual_stop() {
+    local status
+    local container_label="${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}"
+
+    respect_manual_stop_enabled || return 1
+    [[ "$QBT_PORT_APPLY_MODE" == "compose-recreate" ]] || return 1
+    require_compose_mode_ready || return 1
+
+    status="$(compose_container_status || true)"
+    case "$status" in
+    created | exited | dead | removing)
+        log "qBittorrent container $container_label is $status; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
+        return 0
+        ;;
+    "")
+        log "qBittorrent container $container_label is absent; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
+        return 0
+        ;;
+    *)
+        if recent_manual_stop_event; then
+            log "qBittorrent container $container_label has a recent stop/disconnect event; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
+            return 0
+        fi
+        return 1
+        ;;
+    esac
 }
 
 compose_container_ref() {
@@ -514,6 +618,10 @@ refresh_qbt_dnat_legacy() {
 }
 
 if ! qbt_login "$COOKIE_JAR"; then
+    if skip_sync_for_manual_stop; then
+        exit 0
+    fi
+
     # A container that is wedged on a stale single-instance lock never binds its
     # Web UI, so the very first login fails and the normal recreate path below is
     # never reached. In compose-recreate mode, attempt one lock-clearing recreate

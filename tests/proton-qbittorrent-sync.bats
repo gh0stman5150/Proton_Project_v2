@@ -69,6 +69,10 @@ write_body() {
 printf '%s\n' "$*" >> "$CURL_LOG"
 case "$*" in
   *'/api/v2/auth/login'*)
+    if [[ "${QBT_TEST_LOGIN_FAIL:-}" == "1" ]]; then
+      printf 'connection refused\n' >&2
+      exit 7
+    fi
     write_body 'Ok.'
     if [[ "$*" == *'%{http_code}'* ]]; then
       printf '200'
@@ -162,6 +166,14 @@ if [[ "$1" == 'restart' ]]; then
   exit 0
 fi
 if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
+  if [[ "$3" == '{{.State.Status}}' ]]; then
+    echo "${QBT_TEST_CONTAINER_STATUS:-running}"
+    exit 0
+  fi
+  if [[ "$3" == '{{.Id}}' ]]; then
+    echo "${QBT_TEST_CONTAINER_ID:-123456789abc0000000000000000000000000000000000000000000000000000}"
+    exit 0
+  fi
   if [[ "$3" == '{{.HostConfig.NetworkMode}}' ]]; then
     echo 'bridge'
     exit 0
@@ -178,6 +190,15 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
     exit 0
   fi
   echo 'starr=172.18.0.10'
+  exit 0
+fi
+if [[ "$1" == 'events' ]]; then
+  if [[ "${QBT_TEST_RECENT_MANUAL_STOP_EVENT:-}" == "container" && "$*" == *"--filter container="* ]]; then
+    echo 'stop'
+  fi
+  if [[ "${QBT_TEST_RECENT_MANUAL_STOP_EVENT:-}" == "network" && "$*" == *"--filter type=network"* ]]; then
+    echo "${QBT_TEST_CONTAINER_ID:-123456789abc0000000000000000000000000000000000000000000000000000}"
+  fi
   exit 0
 fi
 exit 0
@@ -253,6 +274,41 @@ EOF
   grep -F "PWD=$PROJECT_DIR" "$DOCKER_LOG"
   grep -F "DOCKER_CONFIG=$DOCKER_CONFIG_DIR" "$DOCKER_LOG"
   grep -F 'QBT_PUBLISHED_PORT=40001' "$DOCKER_LOG"
+  grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+}
+
+@test "compose-recreate mode skips self-heal when qBittorrent is manually stopped" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=exited bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+}
+
+@test "compose-recreate mode skips self-heal when qBittorrent stop is still in progress" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running QBT_TEST_RECENT_MANUAL_STOP_EVENT=network bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+}
+
+@test "compose-recreate mode still self-heals a running container with unreachable Web UI" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 1 ]
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
 }
 
