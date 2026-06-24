@@ -237,13 +237,37 @@ trim_field() {
 	printf '%s\n' "$value"
 }
 
+is_ipv4_address() {
+	local value="$1"
+	local octet
+	local -a octets=()
+
+	[[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+	IFS='.' read -r -a octets <<<"$value"
+	[[ "${#octets[@]}" -eq 4 ]] || return 1
+
+	for octet in "${octets[@]}"; do
+		[[ "$octet" =~ ^[0-9]+$ ]] || return 1
+		((10#$octet <= 255)) || return 1
+	done
+}
+
 normalize_ipv4_rule_source() {
 	local value="$1"
+	local addr=""
+	local prefix=""
 
+	value="$(trim_field "$value")"
 	[[ -n "$value" ]] || return 1
 	if [[ "$value" == */* ]]; then
-		printf '%s\n' "$value"
+		addr="${value%%/*}"
+		prefix="${value#*/}"
+		is_ipv4_address "$addr" || return 1
+		[[ "$prefix" =~ ^[0-9]+$ ]] || return 1
+		((prefix >= 0 && prefix <= 32)) || return 1
+		printf '%s/%s\n' "$addr" "$prefix"
 	else
+		is_ipv4_address "$value" || return 1
 		printf '%s/32\n' "$value"
 	fi
 }
