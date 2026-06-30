@@ -2,13 +2,17 @@
 Description=Proton Kill Switch
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/proton/proton-common.env
 ExecStart=/usr/local/bin/proton/proton-killswitch-dispatch.sh
 RemainAfterExit=yes
-TimeoutStartSec=60
+TimeoutStartSec=90
+Restart=on-failure
+RestartSec=5
 UMask=0077
 RuntimeDirectory=proton
 RuntimeDirectoryMode=0700

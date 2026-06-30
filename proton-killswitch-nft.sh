@@ -16,18 +16,24 @@ log() {
     echo "$(date '+%F %T') | $*" | systemd-cat -t proton-killswitch
 }
 
-if [[ -z "${LAN_IF:-}" ]]; then
-    for _i in 1 2 3 4 5 6; do
-        LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
-        [[ -n "$LAN_IF" ]] && break
-        log "Waiting for default route (attempt $_i/6)..."
-        sleep 5
-    done
-fi
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
-if [[ -n "$LAN_IF" && -z "$LAN_CIDR" ]]; then
-    LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
+# Wait for BOTH the default-route interface and its connected subnet route.
+# network-online.target can fire before DHCP has reinstalled the connected
+# route (e.g. after a WAN IP change or reconnect), which previously left
+# LAN_CIDR empty and failed the kill switch permanently. Retry both here.
+if [[ -z "$LAN_IF" || -z "$LAN_CIDR" ]]; then
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+        if [[ -z "$LAN_IF" ]]; then
+            LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
+        fi
+        if [[ -n "$LAN_IF" && -z "$LAN_CIDR" ]]; then
+            LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
+        fi
+        [[ -n "$LAN_IF" && -n "$LAN_CIDR" ]] && break
+        log "Waiting for LAN interface/subnet route (attempt $_i/10)..."
+        sleep 3
+    done
 fi
 
 require_command() {
