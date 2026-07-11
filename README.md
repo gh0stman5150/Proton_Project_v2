@@ -63,19 +63,23 @@ Do not rename, consolidate, or remove any script listed here without explicit in
 The following services are in scope for this routing and operational design:
 
 1. qBittorrent
-2. SABnzbd
+2. NZBget
 3. Lidarr
 4. Radarr
 5. Sonarr
 6. Whisparr
 7. Bazarr
 8. Prowlarr
-9. Huntarr
+9. Cross-seed
 10. Reaparr
 11. Flaresolverr
 12. Autobrr
 13. Plex
-14. Overseerr or Seer
+14. Seer
+15. Mousehole
+16. Profilarr
+17. Soularr
+18. Upbrr
 
 Prometheus is no longer used and is not in scope for this repository.
 

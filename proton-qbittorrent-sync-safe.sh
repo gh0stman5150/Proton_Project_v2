@@ -465,7 +465,7 @@ run_compose_recreate() {
             cat "$output_file"
         fi
 
-        if (( attempt < QBT_COMPOSE_RECREATE_RETRIES )) && grep -F "address already in use" "$output_file" >/dev/null 2>&1; then
+        if (( attempt < QBT_COMPOSE_RECREATE_RETRIES )) && grep -Eq "address already in use|port is already allocated" "$output_file"; then
             log "Compose recreate hit a busy host port for $target_port (attempt $attempt/$QBT_COMPOSE_RECREATE_RETRIES); retrying in ${QBT_COMPOSE_RECREATE_RETRY_DELAY}s"
             sleep "$QBT_COMPOSE_RECREATE_RETRY_DELAY"
             attempt=$((attempt + 1))

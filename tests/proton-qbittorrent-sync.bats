@@ -146,12 +146,12 @@ if [[ "$1" == 'compose' ]]; then
     case "${QBT_TEST_COMPOSE_FAIL_MODE:-always}" in
       once)
         if [[ "$attempt" -eq 1 ]]; then
-          printf '%s\n' "Error response from daemon: failed to bind host port 0.0.0.0:${QBT_PUBLISHED_PORT}/tcp: address already in use" >&2
+          printf '%s\n' "Error response from daemon: driver failed programming external connectivity on endpoint qbittorrent: Bind for 0.0.0.0:${QBT_PUBLISHED_PORT} failed: port is already allocated" >&2
           exit 1
         fi
         ;;
       always)
-        printf '%s\n' "Error response from daemon: failed to bind host port 0.0.0.0:${QBT_PUBLISHED_PORT}/tcp: address already in use" >&2
+        printf '%s\n' "Error response from daemon: driver failed programming external connectivity on endpoint qbittorrent: Bind for 0.0.0.0:${QBT_PUBLISHED_PORT} failed: port is already allocated" >&2
         exit 1
         ;;
     esac
