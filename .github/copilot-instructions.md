@@ -32,7 +32,7 @@ Implement and maintain a stable routing design with these rules:
 
 ## Services in Scope
 
-qBittorrent, SABnzbd, Lidarr, Radarr, Sonarr, Whisparr, Bazarr, Prowlarr, Huntarr, Reaparr, Flaresolverr, Autobrr, Plex, Overseerr or Seer
+qBittorrent, NZBget, Lidarr, Radarr, Sonarr, Whisparr, Bazarr, Prowlarr, Reaparr, Flaresolverr, Autobrr, Cross-Seed, Profilarr, Qui, Quickstart, Upbrr, Plex, Seer
 
 ## Inspect First
 

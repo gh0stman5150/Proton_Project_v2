@@ -29,6 +29,12 @@ PF_INCAPABLE_PROFILES_FILE="${PF_INCAPABLE_PROFILES_FILE:-/etc/proton/pf-incapab
 PF_CLAIMS_FILE="${PF_CLAIMS_FILE:-/run/proton/pf-claims.tsv}"
 # Default claim TTL (seconds) - increase to reduce race windows between concurrent selects
 CLAIM_TTL="${CLAIM_TTL:-3600}"
+# Consecutive port-forward incapability strikes tolerated before a server is
+# evicted from the pool (added to the incapable list and its pool config
+# deleted). Strikes are tracked globally and reset the instant a server proves
+# it can forward a port, so only genuinely PF-incapable servers are removed.
+PF_INCAPABLE_STRIKES_FILE="${PF_INCAPABLE_STRIKES_FILE:-/run/proton/pf-incapable-strikes.tsv}"
+PF_INCAPABLE_STRIKE_THRESHOLD="${PF_INCAPABLE_STRIKE_THRESHOLD:-3}"
 # Global lock serializing server selection across instances. Two instances must
 # never select the same pool config concurrently: Proton keeps a single session
 # per WireGuard key per endpoint, so a duplicate selection silently breaks
@@ -414,6 +420,7 @@ mark_profile_capable() {
 
     remove_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile"
     write_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile" "${port:-unknown}"
+    reset_incapable_strikes "$profile"
     log "Marked server $profile port-forward capable${port:+ on port $port}"
 }
 
@@ -435,6 +442,93 @@ mark_profile_incapable() {
     : > "$SERVER_RESELECT_FILE"
     chmod 600 "$SERVER_RESELECT_FILE"
     log "Marked server $profile port-forward incapable ($reason)"
+}
+
+incapable_strike_count() {
+    local profile="$1"
+
+    [[ -f "$PF_INCAPABLE_STRIKES_FILE" ]] || {
+        echo 0
+        return 0
+    }
+
+    awk -F '\t' -v profile="$profile" '$1 == profile { count = $2 } END { print count + 0 }' "$PF_INCAPABLE_STRIKES_FILE"
+}
+
+set_incapable_strike_count() {
+    local profile="$1"
+    local count="$2"
+    local tmp_file
+
+    ensure_parent_directory "$PF_INCAPABLE_STRIKES_FILE"
+    tmp_file="$(profile_state_tmp_file "$PF_INCAPABLE_STRIKES_FILE")"
+
+    awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$PF_INCAPABLE_STRIKES_FILE" 2>/dev/null > "$tmp_file" || true
+    printf '%s\t%s\t%s\n' "$profile" "$count" "$(date +%s)" >> "$tmp_file"
+    mv "$tmp_file" "$PF_INCAPABLE_STRIKES_FILE"
+    chmod 600 "$PF_INCAPABLE_STRIKES_FILE"
+}
+
+reset_incapable_strikes() {
+    local profile="$1"
+
+    [[ -f "$PF_INCAPABLE_STRIKES_FILE" ]] || return 0
+    remove_profile_record "$PF_INCAPABLE_STRIKES_FILE" "$profile"
+}
+
+delete_pool_config() {
+    local profile="$1"
+    local config="$WG_POOL_DIR/$profile.conf"
+
+    if [[ -f "$config" ]]; then
+        rm -f "$config"
+        log "Removed port-forward incapable pool config $config"
+    fi
+}
+
+# Record one port-forward incapability strike for a profile. After
+# PF_INCAPABLE_STRIKE_THRESHOLD consecutive strikes the profile is evicted from
+# the pool: written to the incapable list and its pool config deleted. A profile
+# that has already proven it can forward ports is never evicted this way -- its
+# streak is cleared and it is only cooled down.
+mark_incapable_attempt() {
+    local profile="${1:-}"
+    local reason="${2:-natpmp-timeout}"
+    local strikes
+
+    if [[ -z "$profile" ]]; then
+        profile="$(current_profile)"
+    fi
+
+    if [[ -z "$profile" ]]; then
+        log "ERROR: Cannot record a port-forward incapability strike for a blank profile"
+        exit 1
+    fi
+
+    if profile_is_capable "$profile"; then
+        reset_incapable_strikes "$profile"
+        mark_server_bad "$profile" "$reason"
+        log "Ignoring port-forward incapability strike for proven-good server $profile ($reason); cooled it down instead"
+        return 0
+    fi
+
+    strikes="$(incapable_strike_count "$profile")"
+    strikes=$((strikes + 1))
+
+    if (( strikes >= PF_INCAPABLE_STRIKE_THRESHOLD )); then
+        reset_incapable_strikes "$profile"
+        remove_claim_for_profile "$profile" || true
+        remove_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile"
+        write_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile" "$reason" "strikes=${PF_INCAPABLE_STRIKE_THRESHOLD}"
+        delete_pool_config "$profile"
+        : > "$SERVER_RESELECT_FILE"
+        chmod 600 "$SERVER_RESELECT_FILE"
+        log "Evicted server $profile after ${PF_INCAPABLE_STRIKE_THRESHOLD} consecutive port-forward failures ($reason); added to the incapable list and deleted its pool config"
+    else
+        set_incapable_strike_count "$profile" "$strikes"
+        mark_server_bad "$profile" "$reason"
+        log "Recorded port-forward incapability strike ${strikes}/${PF_INCAPABLE_STRIKE_THRESHOLD} for $profile ($reason)"
+    fi
 }
 
 show_profile_state_file() {
@@ -819,6 +913,15 @@ case "${1:-select}" in
     mark-incapable)
         mark_profile_incapable "${2:-}" "${3:-manual}"
         ;;
+    mark-incapable-attempt)
+        mark_incapable_attempt "${2:-}" "${3:-natpmp-timeout}"
+        ;;
+    show-incapable-strikes)
+        show_profile_state_file "$PF_INCAPABLE_STRIKES_FILE"
+        ;;
+    reset-incapable-strikes)
+        reset_profile_state_file "$PF_INCAPABLE_STRIKES_FILE" "port-forward incapability strike"
+        ;;
     show-capable)
         show_profile_state_file "$PF_CAPABLE_PROFILES_FILE"
         ;;
@@ -832,7 +935,7 @@ case "${1:-select}" in
         reset_profile_state_file "$PF_INCAPABLE_PROFILES_FILE" "port-forward incapable"
         ;;
     *)
-        echo "Usage: $0 {select|current|mark-bad|show-bad|reset-bad|mark-capable|mark-incapable|show-capable|show-incapable|reset-capable|reset-incapable}" >&2
+        echo "Usage: $0 {select|current|mark-bad|show-bad|reset-bad|mark-capable|mark-incapable|mark-incapable-attempt|show-capable|show-incapable|show-incapable-strikes|reset-capable|reset-incapable|reset-incapable-strikes}" >&2
         exit 1
         ;;
 esac

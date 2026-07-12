@@ -658,7 +658,7 @@ restart_enabled_optional_services() {
 
 reset_runtime_state_for_redeploy() {
     local runtime_state_dir bad_server_file server_selection_file server_reselect_file
-    local recovery_lock_file port_state_file pf_incapable_file
+    local recovery_lock_file port_state_file pf_incapable_file pf_incapable_strikes_file
 
     runtime_state_dir="${STATE_DIR:-/run/proton}"
     bad_server_file="${BAD_SERVER_FILE:-${runtime_state_dir}/bad-servers.tsv}"
@@ -667,6 +667,7 @@ reset_runtime_state_for_redeploy() {
     recovery_lock_file="${RECOVERY_LOCK_FILE:-${runtime_state_dir}/recovery.lock}"
     port_state_file="${STATE_FILE:-${runtime_state_dir}/proton-port.state}"
     pf_incapable_file="${PF_INCAPABLE_PROFILES_FILE:-${ETC_PROTON_DIR}/pf-incapable-profiles.tsv}"
+    pf_incapable_strikes_file="${PF_INCAPABLE_STRIKES_FILE:-/run/proton/pf-incapable-strikes.tsv}"
 
     log "Resetting stale Proton runtime and failure state before service restart"
 
@@ -676,7 +677,8 @@ reset_runtime_state_for_redeploy() {
         "$server_reselect_file" \
         "$recovery_lock_file" \
         "$port_state_file" \
-        "$pf_incapable_file"
+        "$pf_incapable_file" \
+        "$pf_incapable_strikes_file"
 }
 
 enable_and_start_services() {

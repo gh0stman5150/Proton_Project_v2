@@ -233,7 +233,7 @@ The installer:
 7. Preserves an existing `/etc/proton/qbittorrent.env`
 8. Writes replacement templates to `*.new` files instead of overwriting secrets
 9. Installs units that have systemd recreate `/run/proton` before applying sandboxed writable paths
-10. Clears stale bad-server cooldowns, port-forward incapable state, runtime selection state, and failed Proton service state before restart
+10. Clears stale bad-server cooldowns, port-forward incapable state, port-forward incapability strikes, runtime selection state, and failed Proton service state before restart
 11. Runs `systemctl daemon-reload`
 12. Enables and restarts the Proton services
 13. Restarts Docker watcher services only if they were already enabled
@@ -271,6 +271,7 @@ If you deploy files manually instead of using the installer, run the equivalent 
 ```bash
 sudo systemctl stop proton-docker-watch@prowlarr.service proton-healthcheck@prowlarr.service proton-port-forward@prowlarr.service proton-wg@prowlarr.service proton-killswitch.service || true
 sudo /usr/local/bin/proton/proton-server-manager.sh reset-incapable
+sudo /usr/local/bin/proton/proton-server-manager.sh reset-incapable-strikes
 sudo /usr/local/bin/proton/proton-server-manager.sh reset-bad
 sudo rm -f /run/proton/current-server.env /run/proton/proton-port.state /run/proton/recovery.lock
 sudo systemctl reset-failed proton-docker-watch@prowlarr.service proton-healthcheck@prowlarr.service proton-port-forward@prowlarr.service proton-wg@prowlarr.service proton-killswitch.service
@@ -290,6 +291,7 @@ Live state is stored under `/run/proton`:
 5. `/run/proton/bad-servers.tsv`
 6. `/run/proton/reselect-server.flag`
 7. `/run/proton/recovery.lock`
+8. `/run/proton/pf-incapable-strikes.tsv`
 
 Do not store live state files in the repository.
 
@@ -308,6 +310,16 @@ When `PORT_FORWARD_REQUIRED=on`, the pool also learns which profiles have actual
 3. `port-forward incapable` which are in `PF_INCAPABLE_PROFILES_FILE`
 
 `port-forward incapable` remains a hard exclusion until the profile is proven again or the incapable state is reset. When the proven-good set is non-empty, the selector prefers those proven-good nodes first. If every proven-good node is temporarily cooling down or otherwise unavailable, the selector can temporarily widen to healthy unproven nodes instead of immediately recycling a cooling-down proven-good node.
+
+### Transient failures versus eviction
+
+The port-forward loop distinguishes a temporary NAT-PMP hiccup from a genuinely port-forward incapable server:
+
+1. When a **proven-good** server (one already in `PF_CAPABLE_PROFILES_FILE`) hits `MAX_FAILURES`, the failure is treated as transient. The tunnel is kept and retried in place so the forwarded port stays stable and qBittorrent's published port -- and therefore its container -- is not recreated. Only after `PROVEN_TRANSIENT_MAX_KEEPS` consecutive transient windows without a successful port does it fall back to a full reconnect.
+2. When an **unproven** server hits `MAX_FAILURES`, the port-forward loop records a consecutive incapability strike via `proton-server-manager.sh mark-incapable-attempt` and reconnects to a different server. Strikes accumulate in `/run/proton/pf-incapable-strikes.tsv` and reset the instant the server proves it can forward a port (`mark-capable`).
+3. Once an unproven server accumulates `PF_INCAPABLE_STRIKE_THRESHOLD` consecutive strikes (default 3), the server manager evicts it: it is written to `PF_INCAPABLE_PROFILES_FILE` and its pool config is deleted from `WG_POOL_DIR`. A proven-good server is never evicted this way; it is only cooled down.
+
+This keeps a working server (and its forwarded port) stable across brief Proton hiccups while still permanently removing servers that genuinely cannot forward a port.
 
 The port-forward service must be able to write both `/etc/proton` for the learned PF-capable/incapable lists and the directory containing `QBT_PORT_ENV_FILE` for Compose port-artifact updates.
 
@@ -328,6 +340,9 @@ Useful knobs:
 11. `PORT_FORWARD_REQUIRED=on`
 12. `PF_CAPABLE_PROFILES_FILE=/etc/proton/pf-capable-profiles.tsv`
 13. `PF_INCAPABLE_PROFILES_FILE=/etc/proton/pf-incapable-profiles.tsv`
+14. `PF_INCAPABLE_STRIKES_FILE=/run/proton/pf-incapable-strikes.tsv`
+15. `PF_INCAPABLE_STRIKE_THRESHOLD=3`
+16. `PROVEN_TRANSIENT_MAX_KEEPS=5` (set in `proton-port-forward.env`)
 
 Manual helpers:
 
@@ -338,10 +353,13 @@ Manual helpers:
 5. `proton-server-manager.sh reset-bad`
 6. `proton-server-manager.sh mark-capable <profile> <port>`
 7. `proton-server-manager.sh mark-incapable <profile> <reason>`
-8. `proton-server-manager.sh show-capable`
-9. `proton-server-manager.sh show-incapable`
-10. `proton-server-manager.sh reset-capable`
-11. `proton-server-manager.sh reset-incapable`
+8. `proton-server-manager.sh mark-incapable-attempt <profile> <reason>`
+9. `proton-server-manager.sh show-capable`
+10. `proton-server-manager.sh show-incapable`
+11. `proton-server-manager.sh show-incapable-strikes`
+12. `proton-server-manager.sh reset-capable`
+13. `proton-server-manager.sh reset-incapable`
+14. `proton-server-manager.sh reset-incapable-strikes`
 
 Any server rotation logic must preserve the repository routing rules, kill switch behavior, qBittorrent port synchronization, and DNS policy after reconnect.
 
@@ -355,8 +373,11 @@ The units currently default to values such as:
 4. `MANAGEMENT_ALLOWED_CIDRS=<LAN_CIDR>,<YOUR_WAN_IP>/32`
 5. `MANAGE_RESOLVED_DNS=auto`
 6. `RESOLVED_DNS_ROUTE_DOMAIN=~.`
+7. `WG_PERSISTENT_KEEPALIVE=25`
 
 Set real values in environment files, not in committed documentation.
+
+The up script filters each pool config into a runtime config and injects `PersistentKeepalive = <WG_PERSISTENT_KEEPALIVE>` into the `[Peer]` section when the source config omits it (an existing value is preserved, never duplicated). The keepalive stops Proton from dropping an idle tunnel's session and NAT-PMP mapping between port-forward polls, which is the main source of intermittent `natpmpc` timeouts. Set `WG_PERSISTENT_KEEPALIVE=0` to disable injection.
 
 For the templated per-instance services, `NATPMP_GATEWAY` is not taken from this shared default. When an instance sets `WG_ADDRESS_SUBNET=<n>`, the instance loader derives `NATPMP_GATEWAY=10.<n>.0.1` (and the matching tunnel address and DNS) so each instance requests its forwarded port from its own gateway. See "Same Server and Multi Tunnel Isolation".
 

@@ -27,6 +27,12 @@ STATE_FILE="${STATE_FILE:-${STATE_DIR}/proton-port.state}"
 LOG_TAG="${LOG_TAG:-proton-port}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-45}"
 MAX_FAILURES="${MAX_FAILURES:-5}"
+# When a server that has already proven it can forward ports hits MAX_FAILURES,
+# the failure is treated as a transient NAT-PMP hiccup and the tunnel is kept in
+# place (so the forwarded port -- and the qBittorrent container -- stay stable).
+# After this many consecutive transient windows without a successful port, fall
+# back to a full reconnect so a genuinely dead proven server still recovers.
+PROVEN_TRANSIENT_MAX_KEEPS="${PROVEN_TRANSIENT_MAX_KEEPS:-5}"
 PORT_LEASE_SECONDS="${PORT_LEASE_SECONDS:-60}"
 NATPMP_TIMEOUT_SECONDS="${NATPMP_TIMEOUT_SECONDS:-15}"
 WG_UP_SCRIPT="${WG_UP_SCRIPT:-/usr/local/bin/proton/proton-wg-up-safe.sh}"
@@ -226,6 +232,7 @@ fi
 LAST_IP="$(load_state_ip)"
 CURRENT_PORT="$(load_state_port)"
 FAILURES=0
+TRANSIENT_KEEPS=0
 
 load_selected_server
 
@@ -289,6 +296,7 @@ while true; do
         LAST_IP="$IP"
         CURRENT_PORT=""
         FAILURES=0
+        TRANSIENT_KEEPS=0
     fi
 
     if [[ -n "$CURRENT_PORT" ]]; then
@@ -312,6 +320,7 @@ while true; do
             log "WARNING: qBittorrent port sync failed"
         fi
         FAILURES=0
+        TRANSIENT_KEEPS=0
     else
         FAILURES=$((FAILURES + 1))
         log "Port request failed ($FAILURES/$MAX_FAILURES)"
@@ -321,17 +330,37 @@ while true; do
         CURRENT_PORT=""
 
         if (( FAILURES >= MAX_FAILURES )); then
-            if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
-                if profile_is_known_capable "$CURRENT_WG_PROFILE"; then
-                    log "Profile $CURRENT_WG_PROFILE previously forwarded successfully; treating repeated NAT-PMP failures as transient"
-                else
-                    "$SERVER_MANAGER_SCRIPT" mark-incapable "$CURRENT_WG_PROFILE" "natpmp-timeout" >/dev/null 2>&1 || true
+            if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]] \
+                && profile_is_known_capable "$CURRENT_WG_PROFILE" \
+                && (( TRANSIENT_KEEPS < PROVEN_TRANSIENT_MAX_KEEPS )); then
+                # Fix A: this server has already proven it can forward a port.
+                # Intermittent NAT-PMP timeouts here are almost always a
+                # transient Proton hiccup rather than a dead tunnel (the
+                # WireGuard interface stays up). Reselecting a different server
+                # would change the forwarded port and force qBittorrent's
+                # published port -- and therefore its container -- to be
+                # recreated. Keep the tunnel and retry in place so the port
+                # stays stable.
+                TRANSIENT_KEEPS=$((TRANSIENT_KEEPS + 1))
+                log "Profile $CURRENT_WG_PROFILE previously forwarded successfully; keeping tunnel and retrying in place (transient NAT-PMP failure ${TRANSIENT_KEEPS}/${PROVEN_TRANSIENT_MAX_KEEPS})"
+                CURRENT_PORT="$(load_state_port)"
+                FAILURES=0
+            else
+                if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
+                    # Record a consecutive port-forward incapability strike.
+                    # The server manager evicts a profile from the pool once it
+                    # accumulates PF_INCAPABLE_STRIKE_THRESHOLD consecutive
+                    # strikes (adds it to the incapable list and deletes its
+                    # pool config). Proven-good servers are never evicted this
+                    # way; the server manager cools them down instead.
+                    "$SERVER_MANAGER_SCRIPT" mark-incapable-attempt "$CURRENT_WG_PROFILE" "natpmp-timeout" >/dev/null 2>&1 || true
                 fi
+                log "Too many failures on ${CURRENT_WG_PROFILE:-$WG_PROFILE} -> reconnecting tunnel"
+                reconnect "$CURRENT_WG_PROFILE"
+                FAILURES=0
+                LAST_IP=""
+                TRANSIENT_KEEPS=0
             fi
-            log "Too many failures on ${CURRENT_WG_PROFILE:-$WG_PROFILE} -> reconnecting tunnel"
-            reconnect "$CURRENT_WG_PROFILE"
-            FAILURES=0
-            LAST_IP=""
         fi
     fi
 
