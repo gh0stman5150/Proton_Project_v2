@@ -10,6 +10,7 @@ setup() {
   export SERVER_RESELECT_FILE="$STATE_DIR/reselect-server.flag"
   export PF_CAPABLE_PROFILES_FILE="$TEST_TMPDIR/pf-capable.tsv"
   export PF_INCAPABLE_PROFILES_FILE="$TEST_TMPDIR/pf-incapable.tsv"
+  export PF_INCAPABLE_STRIKES_FILE="$STATE_DIR/pf-incapable-strikes.tsv"
   export PROTON_COMMON_ENV_FILE="$TEST_TMPDIR/proton-common.env"
   export WG_EXPECTED_DNS=10.2.0.1
   export SERVER_POOL_ENABLED=on
@@ -243,5 +244,97 @@ EOF
   grep -F 'natpmp-timeout' "$PF_INCAPABLE_PROFILES_FILE"
   [ -f "$SERVER_RESELECT_FILE" ]
   run grep -F 'wg-b' "$PF_CAPABLE_PROFILES_FILE"
+  [ "$status" -ne 0 ]
+}
+
+@test "mark-incapable-attempt records a strike and cools down without evicting below threshold" {
+  printf '[Interface]\n' > "$WG_POOL_DIR/wg-c.conf"
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    SERVER_RESELECT_FILE="$SERVER_RESELECT_FILE" \
+    BAD_SERVER_FILE="$BAD_SERVER_FILE" \
+    WG_POOL_DIR="$WG_POOL_DIR" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_STRIKES_FILE="$PF_INCAPABLE_STRIKES_FILE" \
+    PF_INCAPABLE_STRIKE_THRESHOLD=3 \
+    bash ./proton-server-manager.sh mark-incapable-attempt wg-c natpmp-timeout
+
+  [ "$status" -eq 0 ]
+  grep -F $'wg-c\t1\t' "$PF_INCAPABLE_STRIKES_FILE"
+  [ -f "$WG_POOL_DIR/wg-c.conf" ]
+  grep -F 'wg-c' "$BAD_SERVER_FILE"
+  run grep -F 'wg-c' "$PF_INCAPABLE_PROFILES_FILE"
+  [ "$status" -ne 0 ]
+}
+
+@test "mark-incapable-attempt evicts a profile and deletes its pool config after threshold strikes" {
+  printf '[Interface]\n' > "$WG_POOL_DIR/wg-c.conf"
+
+  for _ in 1 2 3; do
+    run env \
+      STATE_DIR="$STATE_DIR" \
+      SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+      SERVER_RESELECT_FILE="$SERVER_RESELECT_FILE" \
+      BAD_SERVER_FILE="$BAD_SERVER_FILE" \
+      WG_POOL_DIR="$WG_POOL_DIR" \
+      PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+      PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+      PF_INCAPABLE_STRIKES_FILE="$PF_INCAPABLE_STRIKES_FILE" \
+      PF_INCAPABLE_STRIKE_THRESHOLD=3 \
+      bash ./proton-server-manager.sh mark-incapable-attempt wg-c natpmp-timeout
+    [ "$status" -eq 0 ]
+  done
+
+  grep -F $'wg-c\t' "$PF_INCAPABLE_PROFILES_FILE"
+  [ ! -f "$WG_POOL_DIR/wg-c.conf" ]
+  [ -f "$SERVER_RESELECT_FILE" ]
+  run grep -F 'wg-c' "$PF_INCAPABLE_STRIKES_FILE"
+  [ "$status" -ne 0 ]
+}
+
+@test "mark-incapable-attempt never evicts a proven-good server; it clears strikes and cools it down" {
+  printf 'wg-d\t1\t45678\n' > "$PF_CAPABLE_PROFILES_FILE"
+  printf 'wg-d\t2\t1\n' > "$PF_INCAPABLE_STRIKES_FILE"
+  printf '[Interface]\n' > "$WG_POOL_DIR/wg-d.conf"
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    SERVER_RESELECT_FILE="$SERVER_RESELECT_FILE" \
+    BAD_SERVER_FILE="$BAD_SERVER_FILE" \
+    WG_POOL_DIR="$WG_POOL_DIR" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_STRIKES_FILE="$PF_INCAPABLE_STRIKES_FILE" \
+    PF_INCAPABLE_STRIKE_THRESHOLD=3 \
+    bash ./proton-server-manager.sh mark-incapable-attempt wg-d natpmp-timeout
+
+  [ "$status" -eq 0 ]
+  grep -F $'wg-d\t' "$PF_CAPABLE_PROFILES_FILE"
+  [ -f "$WG_POOL_DIR/wg-d.conf" ]
+  grep -F 'wg-d' "$BAD_SERVER_FILE"
+  run grep -F 'wg-d' "$PF_INCAPABLE_PROFILES_FILE"
+  [ "$status" -ne 0 ]
+  run grep -F 'wg-d' "$PF_INCAPABLE_STRIKES_FILE"
+  [ "$status" -ne 0 ]
+}
+
+@test "mark-capable clears any recorded incapability strikes" {
+  printf 'wg-e\t2\t1\n' > "$PF_INCAPABLE_STRIKES_FILE"
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_STRIKES_FILE="$PF_INCAPABLE_STRIKES_FILE" \
+    bash ./proton-server-manager.sh mark-capable wg-e 45678
+
+  [ "$status" -eq 0 ]
+  grep -F $'wg-e\t' "$PF_CAPABLE_PROFILES_FILE"
+  run grep -F 'wg-e' "$PF_INCAPABLE_STRIKES_FILE"
   [ "$status" -ne 0 ]
 }

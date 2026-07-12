@@ -109,8 +109,35 @@ EOF
   chmod +x "$QBITTORRENT_SYNC_SCRIPT"
 }
 
-@test "proven port-forward profiles are cooled down instead of marked incapable after repeated failures" {
+@test "proven port-forward profiles are retried in place without reselect after transient failures" {
   printf 'wg-good\t1\t45678\n' > "$PF_CAPABLE_PROFILES_FILE"
+
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+count_file="${NATPMP_COUNT_FILE:?}"
+n=0
+[[ -f "$count_file" ]] && n="$(cat "$count_file")"
+n=$((n + 1))
+echo "$n" > "$count_file"
+# Fail the first NAT-PMP window (udp+tcp), then forward successfully.
+if (( n <= 2 )); then
+  exit 1
+fi
+if [[ "${4:-}" == "udp" ]]; then
+  exit 0
+fi
+printf 'Mapped public port 45678 protocol tcp\n'
+exit 0
+EOF
+  chmod +x "$TMPBIN/natpmpc"
+
+  cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+kill -TERM "$PPID"
+sleep 1
+exit 0
+EOF
+  chmod +x "$QBITTORRENT_SYNC_SCRIPT"
 
   run env \
     STATE_DIR="$STATE_DIR" \
@@ -121,17 +148,21 @@ EOF
     PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
     WG_POOL_DIR="$WG_POOL_DIR" \
     SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
-    CHECK_INTERVAL="$CHECK_INTERVAL" \
+    CHECK_INTERVAL=0 \
     MAX_FAILURES="$MAX_FAILURES" \
     NATPMP_TIMEOUT_SECONDS="$NATPMP_TIMEOUT_SECONDS" \
     WG_UP_SCRIPT="$WG_UP_SCRIPT" \
+    QBITTORRENT_SYNC_SCRIPT="$QBITTORRENT_SYNC_SCRIPT" \
     SERVER_MANAGER_SCRIPT="$SERVER_MANAGER_SCRIPT" \
     SERVER_MANAGER_LOG="$SERVER_MANAGER_LOG" \
+    NATPMP_COUNT_FILE="$TEST_TMPDIR/natpmp.count" \
     bash ./proton-port-forward-safe.sh sonarr
 
-  [ "$status" -eq 42 ]
-  grep -F 'mark-bad wg-good port-forward-failures' "$SERVER_MANAGER_LOG"
-  run grep -F 'mark-incapable wg-good natpmp-timeout' "$SERVER_MANAGER_LOG"
+  [ "$status" -eq 143 ]
+  grep -F 'mark-capable wg-good 45678' "$SERVER_MANAGER_LOG"
+  run grep -F 'mark-bad wg-good' "$SERVER_MANAGER_LOG"
+  [ "$status" -ne 0 ]
+  run grep -F 'mark-incapable-attempt wg-good' "$SERVER_MANAGER_LOG"
   [ "$status" -ne 0 ]
 }
 
@@ -154,13 +185,11 @@ EOF
     bash ./proton-port-forward-safe.sh sonarr
 
   [ "$status" -eq 42 ]
-  grep -F 'mark-incapable wg-good natpmp-timeout' "$SERVER_MANAGER_LOG"
+  grep -F 'mark-incapable-attempt wg-good natpmp-timeout' "$SERVER_MANAGER_LOG"
   grep -F 'mark-bad wg-good port-forward-failures' "$SERVER_MANAGER_LOG"
 }
 
 @test "reconnect cools down the profile that failed even if selection state changes mid-loop" {
-  printf 'wg-good\t1\t45678\n' > "$PF_CAPABLE_PROFILES_FILE"
-
   run env \
     STATE_DIR="$STATE_DIR" \
     STATE_FILE="$STATE_FILE" \

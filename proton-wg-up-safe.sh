@@ -17,6 +17,10 @@ VPN_INTERFACE="${VPN_INTERFACE:-$WG_PROFILE}"
 NATPMP_GATEWAY="${NATPMP_GATEWAY:-10.2.0.1}"
 WG_CONFIG="${WG_CONFIG:-/etc/wireguard/${WG_PROFILE}.conf}"
 WG_IPV6_ENABLED="${WG_IPV6_ENABLED:-off}"
+# Proton drops the NAT-PMP mapping (and eventually the session) when a tunnel
+# goes idle between port-forward polls. A PersistentKeepalive keeps the session
+# warm so natpmpc stops timing out intermittently. Set to 0/empty to disable.
+WG_PERSISTENT_KEEPALIVE="${WG_PERSISTENT_KEEPALIVE:-25}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 WG_RUNTIME_DIR="${WG_RUNTIME_DIR:-/etc/wireguard/proton-runtime}"
 DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
@@ -467,7 +471,7 @@ prepare_wg_config() {
 
 	tmp_config="$(mktemp "${WG_RUNTIME_DIR}/${WG_PROFILE}.XXXXXX.conf")"
 
-	awk -v keep_ipv6="$keep_ipv6" '
+	awk -v keep_ipv6="$keep_ipv6" -v keepalive="$WG_PERSISTENT_KEEPALIVE" '
         function trim(s) {
             sub(/^[[:space:]]+/, "", s)
             sub(/[[:space:]]+$/, "", s)
@@ -495,10 +499,27 @@ prepare_wg_config() {
             }
         }
 
+        function flush_peer_defaults() {
+            if (in_peer && !keepalive_written && keepalive != "" && keepalive != "0") {
+                print "PersistentKeepalive = " keepalive
+            }
+        }
+
         /^[[:space:]]*\[/ {
             flush_interface_defaults()
+            flush_peer_defaults()
             in_interface = ($0 ~ /^[[:space:]]*\[Interface\][[:space:]]*$/)
+            in_peer = ($0 ~ /^[[:space:]]*\[Peer\][[:space:]]*$/)
             table_written = in_interface ? 0 : 1
+            if (in_peer) {
+                keepalive_written = 0
+            }
+            print
+            next
+        }
+
+        in_peer && /^[[:space:]]*PersistentKeepalive[[:space:]]*=/ {
+            keepalive_written = 1
             print
             next
         }
@@ -540,6 +561,7 @@ prepare_wg_config() {
 
         END {
             flush_interface_defaults()
+            flush_peer_defaults()
         }
     ' "$source_config" >"$tmp_config"
 

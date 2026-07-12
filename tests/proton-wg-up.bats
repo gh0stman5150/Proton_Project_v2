@@ -123,3 +123,56 @@ EOF
   grep -F 'rule add from 192.168.96.44/32 lookup 51804 priority 114' "$IP_LOG"
   grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
 }
+
+@test "wg up injects PersistentKeepalive into the filtered runtime config" {
+  run env \
+    PATH="$PATH" \
+    STATE_DIR="$STATE_DIR" \
+    WG_RUNTIME_DIR="$WG_RUNTIME_DIR" \
+    WG_PROFILE="$WG_PROFILE" \
+    VPN_INTERFACE="$VPN_INTERFACE" \
+    WG_CONFIG="$WG_CONFIG" \
+    DOCKER_NETWORK_CIDR="$DOCKER_NETWORK_CIDR" \
+    LAN_IF="$LAN_IF" \
+    LAN_CIDR="$LAN_CIDR" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    MANAGE_RESOLVED_DNS="$MANAGE_RESOLVED_DNS" \
+    KILLSWITCH_SCRIPT="$KILLSWITCH_SCRIPT" \
+    bash ./proton-wg-up-safe.sh sonarr
+
+  [ "$status" -eq 0 ]
+  grep -Fq 'PersistentKeepalive = 25' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
+  grep -Fq 'Table = off' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
+}
+
+@test "wg up does not duplicate an existing PersistentKeepalive" {
+  cat > "$WG_CONFIG" <<'EOF'
+[Interface]
+Address = 10.2.0.2/32
+DNS = 10.2.0.1
+
+[Peer]
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 15
+EOF
+
+  run env \
+    PATH="$PATH" \
+    STATE_DIR="$STATE_DIR" \
+    WG_RUNTIME_DIR="$WG_RUNTIME_DIR" \
+    WG_PROFILE="$WG_PROFILE" \
+    VPN_INTERFACE="$VPN_INTERFACE" \
+    WG_CONFIG="$WG_CONFIG" \
+    DOCKER_NETWORK_CIDR="$DOCKER_NETWORK_CIDR" \
+    LAN_IF="$LAN_IF" \
+    LAN_CIDR="$LAN_CIDR" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    MANAGE_RESOLVED_DNS="$MANAGE_RESOLVED_DNS" \
+    KILLSWITCH_SCRIPT="$KILLSWITCH_SCRIPT" \
+    bash ./proton-wg-up-safe.sh sonarr
+
+  [ "$status" -eq 0 ]
+  run grep -c 'PersistentKeepalive' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
+  [ "$output" -eq 1 ]
+  grep -Fq 'PersistentKeepalive = 15' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
+}
