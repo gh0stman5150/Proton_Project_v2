@@ -378,6 +378,34 @@ compose_published_ports_summary() {
     ' <<< "$ports"
 }
 
+compose_container_has_zombie_process() {
+    local container_ref="$1"
+
+    docker top "$container_ref" -eo stat,cmd 2>/dev/null \
+        | awk 'NR > 1 && $1 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+compose_container_is_wedged_for_recreate() {
+    local container_ref
+    local status
+    local ports
+    local zombie_state="no"
+
+    container_ref="$(compose_container_ref_all)" || return 1
+    status="$(docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true)"
+    [[ "$status" == "running" ]] || return 1
+
+    ports="$(compose_published_ports || true)"
+    [[ -z "$ports" ]] || return 1
+
+    if compose_container_has_zombie_process "$container_ref"; then
+        zombie_state="yes"
+    fi
+
+    log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with no published ports (zombie process: $zombie_state); refusing Compose self-heal recreate to avoid Docker name-conflict orphan loop. Stop proton services and clear the stuck container cgroup/shim before recreating."
+    return 0
+}
+
 compose_current_published_port() {
     local ports
 
@@ -485,6 +513,10 @@ recreate_qbt_service_compose() {
 
     log "Recreating Compose service $QBT_COMPOSE_SERVICE in $QBT_COMPOSE_PROJECT_DIR for published port $target_port"
     ensure_directory "$DOCKER_CONFIG_DIR" 700
+    if compose_container_is_wedged_for_recreate; then
+        return 1
+    fi
+
     if ! run_compose_recreate "$target_port"; then
         return 1
     fi
@@ -628,6 +660,11 @@ if ! qbt_login "$COOKIE_JAR"; then
     # so the loop can self-heal instead of looping on "Web UI unreachable".
     if [[ "$QBT_PORT_APPLY_MODE" == "compose-recreate" ]] && require_compose_mode_ready; then
         log "qBittorrent Web UI unreachable on startup; attempting self-heal recreate on port $PORT"
+        if compose_container_is_wedged_for_recreate; then
+            log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"
+            exit 1
+        fi
+
         write_published_port
         if recreate_qbt_service_compose "$PORT"; then
             write_cache

@@ -179,6 +179,9 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
     exit 0
   fi
   if [[ "$3" == *'.NetworkSettings.Ports'* ]]; then
+    if [[ "${QBT_TEST_DOCKER_NO_PORTS:-}" == "1" ]]; then
+      exit 0
+    fi
     port="$(current_published_port)"
     printf '%s/tcp %s\n' "$port" "$port"
     printf '%s/udp %s\n' "$port" "$port"
@@ -190,6 +193,17 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
     exit 0
   fi
   echo 'starr=172.18.0.10'
+  exit 0
+fi
+if [[ "$1" == 'top' ]]; then
+  if [[ "${QBT_TEST_DOCKER_ZOMBIE:-}" == "1" ]]; then
+    printf 'STAT CMD\n'
+    printf 'Ss s6-svscan\n'
+    printf 'Zsl [qbittorrent-nox] <defunct>\n'
+  else
+    printf 'STAT CMD\n'
+    printf 'Ssl qbittorrent-nox\n'
+  fi
   exit 0
 fi
 if [[ "$1" == 'events' ]]; then
@@ -310,6 +324,18 @@ EOF
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 1 ]
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+}
+
+@test "compose-recreate mode refuses self-heal when running container has no published ports" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running QBT_TEST_DOCKER_NO_PORTS=1 QBT_TEST_DOCKER_ZOMBIE=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 1 ]
+  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
 @test "compose-recreate mode retries a busy host port before succeeding" {
