@@ -99,6 +99,8 @@ If `/archive` is absent or empty, say so explicitly and proceed without archive-
 4. Because the published port mapping cannot change while the container is running, stop and recreate the qBittorrent container after the port value changes
 5. Verify the new port after restart
 6. Confirm qBittorrent is bound only to the intended VPN path
+7. In compose-recreate mode, self-heal may recreate qBittorrent when the Web UI is unreachable, but it must not keep recreating when Docker still reports the named container as running with no published ports. That state indicates a wedged container or namespace/shim problem; the script must refuse normal Compose self-heal and require cgroup or containerd-shim cleanup first.
+8. A refused self-heal must preserve the existing published-port artifact so runtime state does not drift while the wedged container still owns the Docker name.
 
 ## DNS Rules
 
@@ -173,6 +175,7 @@ Include commands and steps to validate:
 8. VPN drop handling
 9. VPN reconnect handling
 10. kill switch activation and recovery
+11. qBittorrent wedged-container guard behavior, including that self-heal refuses normal Compose recreation when a running container has no published ports
 
 ### 6. Security Notes
 

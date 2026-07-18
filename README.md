@@ -204,12 +204,71 @@ When Proton assigns a new forwarded port, the default compose-recreate path must
 6. Verify that qBittorrent is listening on the expected port after the recreate path completes
 7. Keep legacy host-side DNAT support only when `QBT_PORT_APPLY_MODE=legacy-dnat`
 8. Confirm that qBittorrent remains bound only to the intended VPN path
+9. Refuse normal Compose self-heal if Docker still reports the named qBittorrent container as running but it has no published ports. That state means the container is wedged below the normal Compose control plane and another `docker compose up --force-recreate` will create short-ID orphans or Docker name conflicts instead of fixing the service.
 
 The recommended artifact path is `/etc/proton/qbittorrent-port.env`. In compose-recreate mode the sync script injects `QBT_PUBLISHED_PORT` into `docker compose`, so the service does not need write access to the Compose project tree just to update the published port.
 
 With `QBT_RESPECT_MANUAL_STOP=1`, the sync script treats an existing qBittorrent container in `created`, `exited`, `dead`, or `removing` state as intentionally stopped and skips compose recreation. It also treats recent Docker stop or network-disconnect events as a stop in progress for `QBT_MANUAL_STOP_EVENT_GRACE_SECONDS`, so a graceful qBittorrent shutdown is not mistaken for a wedged Web UI. Set `QBT_RESPECT_MANUAL_STOP=0` only if Proton should bring stopped qBittorrent containers back up automatically.
 
+When the Web UI is unreachable at sync startup, compose-recreate mode attempts one self-heal recreate. Before doing so, it checks the current Docker container state. If the named qBittorrent container is still `running` but Docker reports no published ports, the script logs an error and exits without rewriting the published-port artifact and without running Compose. This protects the host from the qBittorrent/s6 shutdown wedge where the old container still owns the Docker name and each recreate attempt produces a new `<shortid>_qbittorrent-<instance>` orphan.
+
 `QBITTORRENT_URL` should point to the host published qBittorrent Web UI endpoint. Host systemd services cannot assume direct reachability to Docker network names unless that path is explicitly published or proxied.
+
+### qBittorrent Wedged-Container Recovery
+
+The self-heal guard exists for this Docker state:
+
+1. The named container, such as `qbittorrent-prowlarr`, is still `running`
+2. Docker reports no published ports for that container
+3. qBittorrent Web UI probes fail
+4. `docker top` may show `qbittorrent-nox` as a zombie
+5. Compose recreate attempts would fail with a Docker name conflict because the old container still owns `/qbittorrent-<instance>`
+
+Diagnose the state with:
+
+```bash
+docker ps -a --filter 'name=qbittorrent-prowlarr' --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}'
+docker inspect qbittorrent-prowlarr --format 'PID={{.State.Pid}} Health={{if .State.Health}}{{.State.Health.Status}}{{end}} Ports={{json .NetworkSettings.Ports}}'
+docker top qbittorrent-prowlarr -eo pid,ppid,stat,wchan,cmd
+journalctl --no-pager -u proton-port-forward@prowlarr.service -u proton-docker-watch@prowlarr.service --since '30 minutes ago' \
+  | grep -E 'Web UI unreachable|self-heal|running with no published ports|name .* already in use|qBittorrent sync failed'
+```
+
+When the guard fires, stop the per-instance Proton automation before attempting cleanup:
+
+```bash
+sudo systemctl stop proton-port-forward@prowlarr.service proton-docker-watch@prowlarr.service
+```
+
+Try cgroup cleanup first, using the current container PID so the command targets the live stuck scope:
+
+```bash
+pid=$(docker inspect qbittorrent-prowlarr --format '{{.State.Pid}}')
+cgroup=$(sed -n 's/^0:://p' "/proc/$pid/cgroup")
+echo 1 | sudo tee "/sys/fs/cgroup${cgroup}/cgroup.kill"
+```
+
+If the cgroup remains populated and Docker still cannot remove the container, kill the per-container `containerd-shim` parent:
+
+```bash
+pid=$(docker inspect qbittorrent-prowlarr --format '{{.State.Pid}}')
+shim=$(ps -o ppid= -p "$pid" | tr -d ' ')
+sudo kill -9 "$shim"
+```
+
+Then remove stale containers, recreate the service with the current forwarded port, and restart automation:
+
+```bash
+docker rm -f qbittorrent-prowlarr 2>/dev/null || true
+docker rm $(docker ps -aq --filter 'name=_qbittorrent-prowlarr') 2>/dev/null || true
+
+cd /opt/qbittorrent-prowlarr
+QBT_HOST_BIND_IP=10.6.0.2 QBT_PUBLISHED_PORT=54322 docker compose up -d --force-recreate --no-deps qbittorrent
+
+sudo systemctl start proton-docker-watch@prowlarr.service proton-port-forward@prowlarr.service
+```
+
+Substitute the instance name, `QBT_HOST_BIND_IP`, Web UI port, and `QBT_PUBLISHED_PORT` for other qBittorrent instances. For prowlarr, the default VPN bind IP is `10.6.0.2` and the Web UI port is `8082`; the published torrent port must come from the active Proton state, not from the Compose fallback.
 
 ## Install
 
