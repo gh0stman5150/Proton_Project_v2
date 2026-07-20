@@ -381,28 +381,28 @@ compose_published_ports_summary() {
 compose_container_has_zombie_process() {
     local container_ref="$1"
 
-    docker top "$container_ref" -eo stat,cmd 2>/dev/null \
-        | awk 'NR > 1 && $1 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
+    docker top "$container_ref" -eo pid,stat,cmd 2>/dev/null \
+        | awk 'NR > 1 && $2 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
 }
 
 compose_container_is_wedged_for_recreate() {
     local container_ref
     local status
     local ports
-    local zombie_state="no"
 
     container_ref="$(compose_container_ref_all)" || return 1
     status="$(docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true)"
     [[ "$status" == "running" ]] || return 1
 
+    if compose_container_has_zombie_process "$container_ref"; then
+        log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with a zombie process (published ports: $(compose_published_ports_summary)); refusing Compose recreate to avoid hanging on Docker stop. Stop proton services and clear the stuck container cgroup/shim before recreating."
+        return 0
+    fi
+
     ports="$(compose_published_ports || true)"
     [[ -z "$ports" ]] || return 1
 
-    if compose_container_has_zombie_process "$container_ref"; then
-        zombie_state="yes"
-    fi
-
-    log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with no published ports (zombie process: $zombie_state); refusing Compose self-heal recreate to avoid Docker name-conflict orphan loop. Stop proton services and clear the stuck container cgroup/shim before recreating."
+    log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with no published ports; refusing Compose self-heal recreate to avoid Docker name-conflict orphan loop. Stop proton services and clear the stuck container cgroup/shim before recreating."
     return 0
 }
 
