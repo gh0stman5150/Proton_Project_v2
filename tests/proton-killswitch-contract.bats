@@ -8,10 +8,15 @@ setup() {
   export IPTABLES_LOG="$TEST_TMPDIR/iptables.log"
   export NFT_LOG="$TEST_TMPDIR/nft.log"
   export NFT_STDIN="$TEST_TMPDIR/nft.stdin"
+  export SYSTEMD_LOG="$TEST_TMPDIR/systemd.log"
+  export NFT_CONCURRENCY_LOG="$TEST_TMPDIR/nft-concurrency.log"
+  export NFT_ACTIVE_DIR="$TEST_TMPDIR/nft-active"
+  export STATE_DIR="$TEST_TMPDIR/state"
+  mkdir -p "$STATE_DIR"
 
   cat > "$TMPBIN/systemd-cat" <<'EOF'
 #!/usr/bin/env bash
-cat - >/dev/null
+cat - >> "$SYSTEMD_LOG"
 EOF
   chmod +x "$TMPBIN/systemd-cat"
 
@@ -53,12 +58,22 @@ EOF
   cat > "$TMPBIN/nft" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == '-f' ]]; then
+  if [[ "${TEST_NFT_CONCURRENCY:-0}" == 1 ]]; then
+    if ! mkdir "$NFT_ACTIVE_DIR" 2>/dev/null; then
+      printf '%s\n' overlap >> "$NFT_CONCURRENCY_LOG"
+    fi
+    /bin/sleep 0.2
+    rmdir "$NFT_ACTIVE_DIR" 2>/dev/null || true
+  fi
   cat > "$NFT_STDIN"
   exit 0
 fi
 printf '%s\n' "$*" >> "$NFT_LOG"
 case "$1" in
   list)
+    if [[ "$*" == "list table inet proton" && "${TEST_NFT_PROTON_EXISTS:-0}" == 1 ]]; then
+      exit 0
+    fi
     exit 1
     ;;
   *)
@@ -89,4 +104,58 @@ EOF
   ! grep -F 'accept        oifname' "$NFT_STDIN"
   ! grep -F 'meta mark set' "$NFT_STDIN"
   ! grep -F 'dport 53 return' "$NFT_STDIN"
+}
+
+@test "nft backend replaces an existing filter table in one atomic batch" {
+  run env TEST_NFT_PROTON_EXISTS=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 \
+    SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'delete table inet proton' "$NFT_STDIN"
+  grep -F 'table inet proton {' "$NFT_STDIN"
+  ! grep -Fx 'delete table inet proton' "$NFT_LOG"
+  [ -f "$STATE_DIR/killswitch.lock" ]
+}
+
+@test "nft backend serializes concurrent watcher applies" {
+  run bash -c '
+    TEST_NFT_CONCURRENCY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh &
+    first=$!
+    TEST_NFT_CONCURRENCY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh &
+    second=$!
+    wait "$first"
+    wait "$second"
+  '
+
+  [ "$status" -eq 0 ]
+  [ ! -s "$NFT_CONCURRENCY_LOG" ]
+}
+
+@test "nft backend allows Docker IPv6 only through Proton and installs scoped NAT66" {
+  run env \
+    DOCKER_NETWORK_CIDR=172.18.0.0/16 \
+    DOCKER_NETWORK_CIDR6=fdca:6c19:2096::/64 \
+    SERVER_POOL_ENABLED=off \
+    VPN_INTERFACE=proton \
+    bash ./proton-killswitch-nft.sh
+
+  [ "$status" -eq 0 ]
+  grep -F 'ip6 saddr fdca:6c19:2096::/64 ip6 daddr fdca:6c19:2096::/64 accept' "$NFT_STDIN"
+  grep -F 'oifname "proton" ip6 saddr fdca:6c19:2096::/64 accept' "$NFT_STDIN"
+  grep -F 'ip6 saddr fdca:6c19:2096::/64 drop' "$NFT_STDIN"
+  grep -F 'ip6 daddr fdca:6c19:2096::/64 drop' "$NFT_STDIN"
+  grep -F 'add rule ip6 proton_nat6 postrouting ip6 saddr fdca:6c19:2096::/64 oifname proton masquerade comment proton-wg-snat6' "$NFT_LOG"
+}
+
+@test "iptables backend refuses Docker IPv6 before creating chains" {
+  run env \
+    DOCKER_NETWORK_CIDR=172.18.0.0/16 \
+    DOCKER_NETWORK_CIDR6=fdca:6c19:2096::/64 \
+    SERVER_POOL_ENABLED=off \
+    VPN_INTERFACE=proton \
+    bash ./proton-killswitch-safe.sh
+
+  [ "$status" -ne 0 ]
+  grep -F 'Docker IPv6 requires KILLSWITCH_BACKEND=nftables' "$SYSTEMD_LOG"
+  [ ! -s "$IPTABLES_LOG" ]
 }

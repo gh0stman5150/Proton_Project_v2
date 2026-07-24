@@ -33,9 +33,11 @@ KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-/usr/local/bin/proton/proton-killswitch-
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
 QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
 QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
 QBT_CONTAINER_IP_STATE_FILE="${QBT_CONTAINER_IP_STATE_FILE:-${STATE_DIR}/qbt-container-ip}"
+QBT_CONTAINER_IP6_STATE_FILE="${QBT_CONTAINER_IP6_STATE_FILE:-${STATE_DIR}/qbt-container-ip6}"
 KILLSWITCH_BACKEND="${KILLSWITCH_BACKEND:-auto}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
@@ -45,6 +47,7 @@ DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
 QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
+DOCKER_IPV6_FALLBACK_INSTANCE="${DOCKER_IPV6_FALLBACK_INSTANCE:-sonarr}"
 DOCKER_DEST_MAIN_RULE_PRIORITY="${DOCKER_DEST_MAIN_RULE_PRIORITY:-98}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
@@ -276,6 +279,14 @@ normalize_ipv4_rule_source() {
 	fi
 }
 
+normalize_ipv6_rule_source() {
+	local value="$1"
+
+	value="$(trim_field "$value")"
+	[[ "$value" == *:* ]] || return 1
+	printf '%s/128\n' "${value%%/*}"
+}
+
 docker_fallback_vpn_routing_enabled() {
 	case "$DOCKER_FALLBACK_VPN_ROUTING" in
 	1 | true | yes | on)
@@ -307,6 +318,47 @@ resolve_qbt_container_ip() {
 
 	[[ -n "$ip" ]] || return 1
 	printf '%s\n' "$ip"
+}
+
+resolve_qbt_container_ipv6() {
+	local networks=""
+	local ip=""
+
+	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
+	command -v docker >/dev/null 2>&1 || return 1
+
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	[[ -n "$networks" ]] || return 1
+
+	if [[ -n "$QBT_NETWORK_NAME" ]]; then
+		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+	if [[ -z "$ip" ]]; then
+		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+
+	[[ -n "$ip" ]] || return 1
+	printf '%s\n' "$ip"
+}
+
+read_cached_qbt_container_ipv6() {
+	[[ -f "$QBT_CONTAINER_IP6_STATE_FILE" ]] || return 1
+	cat "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
+}
+
+persist_qbt_container_ipv6() {
+	local value="${1:-}"
+
+	if [[ -n "$value" ]]; then
+		umask 077
+		printf '%s' "$value" >"$QBT_CONTAINER_IP6_STATE_FILE"
+	else
+		rm -f "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
+	fi
+}
+
+docker_ipv6_fallback_enabled() {
+	ipv6_enabled && docker_fallback_vpn_routing_enabled && [[ "$INSTANCE" == "$DOCKER_IPV6_FALLBACK_INSTANCE" ]]
 }
 
 read_cached_qbt_container_ip() {
@@ -579,20 +631,43 @@ prepare_wg_config() {
 apply_tunnel_addressing() {
 	[[ -n "${WG_TUNNEL_ADDRESS:-}" ]] || return 0
 
-	local tmp_config
+	local tmp_config keep_ipv6=0
+	if ipv6_enabled; then
+		keep_ipv6=1
+	fi
 	tmp_config="$(mktemp "${WG_RUNTIME_DIR}/${WG_PROFILE}.XXXXXX.conf")"
 
-	awk -v addr="$WG_TUNNEL_ADDRESS" -v dns="${WG_TUNNEL_DNS:-}" '
+	awk -v addr="$WG_TUNNEL_ADDRESS" -v dns="${WG_TUNNEL_DNS:-}" -v keep_ipv6="$keep_ipv6" '
+		function trim(s) {
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+			return s
+		}
+
+		function ipv6_csv(csv,    n, i, item, out) {
+			n = split(csv, values, /,/)
+			for (i = 1; i <= n; i++) {
+				item = trim(values[i])
+				if (item ~ /:/) {
+					out = out == "" ? item : out ", " item
+				}
+			}
+			return out
+		}
+
         /^[[:space:]]*\[/ { section = $0 }
 
         section ~ /\[Interface\]/ && /^[[:space:]]*Address[[:space:]]*=/ {
-            print "Address = " addr
+			value = substr($0, index($0, "=") + 1)
+			preserved = keep_ipv6 ? ipv6_csv(value) : ""
+			print "Address = " addr (preserved != "" ? ", " preserved : "")
             next
         }
 
         section ~ /\[Interface\]/ && /^[[:space:]]*DNS[[:space:]]*=/ {
             if (dns != "") {
-                print "DNS = " dns
+				value = substr($0, index($0, "=") + 1)
+				preserved = keep_ipv6 ? ipv6_csv(value) : ""
+				print "DNS = " dns (preserved != "" ? ", " preserved : "")
             }
             next
         }
@@ -603,6 +678,19 @@ apply_tunnel_addressing() {
 	chmod 600 "$tmp_config"
 	mv -f "$tmp_config" "$WG_CONFIG_TO_USE"
 	log "Applied per-instance tunnel addressing: Address=${WG_TUNNEL_ADDRESS} DNS=${WG_TUNNEL_DNS:-unset} (NAT-PMP gateway ${NATPMP_GATEWAY})"
+}
+
+validate_runtime_ipv6() {
+	ipv6_enabled || return 0
+
+	if ! awk -F= '
+		/^[[:space:]]*Address[[:space:]]*=/ && $2 ~ /:/ { address = 1 }
+		/^[[:space:]]*AllowedIPs[[:space:]]*=/ && $2 ~ /(^|,[[:space:]]*)::\/0([[:space:]]*,|[[:space:]]*$)/ { allowed = 1 }
+		END { exit !(address && allowed) }
+	' "$WG_CONFIG_TO_USE"; then
+		log "ERROR: IPv6 mode requires a Proton-assigned IPv6 interface address and AllowedIPs ::/0 in $WG_CONFIG_TO_USE"
+		exit 1
+	fi
 }
 
 persist_docker_network_cidr() {
@@ -640,6 +728,7 @@ resolve_docker_network_cidr() {
 load_selected_server
 prepare_wg_config "$WG_CONFIG"
 apply_tunnel_addressing
+validate_runtime_ipv6
 secure_runtime_wg_config "$WG_CONFIG_TO_USE"
 DNS_SERVERS_CSV="$(config_dns_servers "$WG_CONFIG_TO_USE")"
 resolve_docker_network_cidr
@@ -681,6 +770,11 @@ inject_routes() {
 	ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 	ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
 	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
+	if ipv6_enabled; then
+		ip -6 route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
+		ip -6 rule del oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+		ip -6 rule add oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
+	fi
 	# NATPMP gateway must be reachable inside the tunnel table too.
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	# Keep the direct host route in the main table for natpmpc.
@@ -756,6 +850,49 @@ inject_routes() {
 		fi
 	else
 		log "VPN table $VPN_TABLE prepared on $VPN_INTERFACE without Docker source rules"
+	fi
+
+	if ipv6_enabled && [[ -n "$DOCKER_NETWORK_CIDR6" ]]; then
+		local qbt_container_ipv6=""
+		local qbt_ipv6_rule_source=""
+		local cached_qbt_container_ipv6=""
+		local cached_qbt_ipv6_rule_source=""
+
+		qbt_container_ipv6="$(resolve_qbt_container_ipv6 || true)"
+		cached_qbt_container_ipv6="$(read_cached_qbt_container_ipv6 || true)"
+		qbt_ipv6_rule_source="$(normalize_ipv6_rule_source "$qbt_container_ipv6" || true)"
+		cached_qbt_ipv6_rule_source="$(normalize_ipv6_rule_source "$cached_qbt_container_ipv6" || true)"
+
+		if [[ -n "$cached_qbt_ipv6_rule_source" ]]; then
+			ip -6 rule del from "$cached_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+		fi
+		if [[ -n "$qbt_ipv6_rule_source" ]]; then
+			ip -6 rule del from "$qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+		fi
+
+		for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
+			cidr="$(trim_field "$cidr")"
+			[[ -n "$cidr" ]] || continue
+			ip -6 rule del from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+			ip -6 rule add from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
+			ip -6 rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+			if docker_ipv6_fallback_enabled; then
+				ip -6 rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
+			fi
+		done
+
+		if [[ -n "$qbt_ipv6_rule_source" ]]; then
+			ip -6 rule add from "$qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
+			persist_qbt_container_ipv6 "$qbt_container_ipv6"
+			log "qBittorrent IPv6 policy routing: source $qbt_ipv6_rule_source -> table $VPN_TABLE via $VPN_INTERFACE"
+		else
+			persist_qbt_container_ipv6 ""
+			log "WARNING: Could not resolve an IPv6 address for $QBT_CONTAINER_NAME; IPv6 remains unavailable until the watcher reconciles it"
+		fi
+
+		if docker_ipv6_fallback_enabled; then
+			log "Docker IPv6 fallback owner: $INSTANCE routes $DOCKER_NETWORK_CIDR6 through table $VPN_TABLE via $VPN_INTERFACE"
+		fi
 	fi
 
 	ensure_vpn_tcp_mss_clamp_rules

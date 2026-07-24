@@ -4,7 +4,9 @@ set -euo pipefail
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_IF="${VPN_IF:-${VPN_INTERFACE:-$WG_PROFILE}}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
+KILLSWITCH_LOCK_FILE="${KILLSWITCH_LOCK_FILE:-${STATE_DIR}/killswitch.lock}"
 DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
@@ -45,7 +47,7 @@ require_command() {
     fi
 }
 
-for cmd in awk cat chmod ip mkdir nft systemd-cat; do
+for cmd in awk cat chmod flock ip mkdir nft systemd-cat; do
     require_command "$cmd"
 done
 
@@ -65,6 +67,12 @@ ensure_directory() {
 }
 
 ensure_directory "$STATE_DIR" 700
+
+exec 9>"$KILLSWITCH_LOCK_FILE"
+if ! flock -w 30 9; then
+    log "ERROR: Timed out waiting for kill-switch lock: $KILLSWITCH_LOCK_FILE"
+    exit 1
+fi
 
 if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
     DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
@@ -131,6 +139,13 @@ ensure_nat_postrouting_chain() {
         nft 'add chain ip proton_nat postrouting { type nat hook postrouting priority srcnat; policy accept; }'
 }
 
+ensure_nat6_postrouting_chain() {
+    [[ -n "$DOCKER_NETWORK_CIDR6" ]] || return 0
+    nft list table ip6 proton_nat6 >/dev/null 2>&1 || nft add table ip6 proton_nat6
+    nft list chain ip6 proton_nat6 postrouting >/dev/null 2>&1 || \
+        nft 'add chain ip6 proton_nat6 postrouting { type nat hook postrouting priority srcnat; policy accept; }'
+}
+
 ensure_masquerade_rule() {
     local handles="" iface added=0
 
@@ -162,6 +177,42 @@ ensure_masquerade_rule() {
 
     if (( ! added )); then
         log "INFO: no VPN interface up yet, skipping NAT setup"
+    fi
+}
+
+ensure_masquerade6_rule() {
+    local handles="" iface added=0
+
+    [[ -n "$DOCKER_NETWORK_CIDR6" ]] || return 0
+    for iface in $(vpn_interfaces); do
+        [[ -n "$iface" ]] || continue
+        ip link show "$iface" >/dev/null 2>&1 || continue
+
+        handles="$(
+            nft -a list chain ip6 proton_nat6 postrouting 2>/dev/null | \
+            awk -v vpn_if="$iface" '
+                $0 ~ ("oifname \"" vpn_if "\"") && /masquerade/ {
+                    for (i = 1; i <= NF; i++) {
+                        if ($i == "handle") print $(i + 1)
+                    }
+                }
+            '
+        )"
+
+        if [[ -n "$handles" ]]; then
+            while read -r handle; do
+                [[ -n "$handle" ]] || continue
+                nft delete rule ip6 proton_nat6 postrouting handle "$handle" 2>/dev/null || true
+            done <<< "$handles"
+        fi
+
+        nft add rule ip6 proton_nat6 postrouting ip6 saddr "$DOCKER_NETWORK_CIDR6" \
+            oifname "$iface" masquerade comment "proton-wg-snat6"
+        added=1
+    done
+
+    if (( ! added )); then
+        log "INFO: no VPN interface up yet, skipping IPv6 NAT setup"
     fi
 }
 
@@ -259,16 +310,74 @@ render_docker_drop_rules() {
     done
 }
 
+render_docker6_local_rules() {
+    local source_cidr target_cidr
+
+    for source_cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
+        source_cidr="$(trim_field "$source_cidr")"
+        [[ -n "$source_cidr" ]] || continue
+        for target_cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
+            target_cidr="$(trim_field "$target_cidr")"
+            [[ -n "$target_cidr" ]] || continue
+            printf '        ip6 saddr %s ip6 daddr %s accept\n' "$source_cidr" "$target_cidr"
+        done
+    done
+}
+
+render_vpn_to_docker6_rules() {
+    local cidr iface
+
+    for iface in $(vpn_interfaces); do
+        [[ -n "$iface" ]] || continue
+        for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
+            cidr="$(trim_field "$cidr")"
+            [[ -n "$cidr" ]] || continue
+            printf '        iifname "%s" ip6 daddr %s accept\n' "$iface" "$cidr"
+        done
+    done
+}
+
+render_docker6_to_vpn_rules() {
+    local cidr iface
+
+    for iface in $(vpn_interfaces); do
+        [[ -n "$iface" ]] || continue
+        for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
+            cidr="$(trim_field "$cidr")"
+            [[ -n "$cidr" ]] || continue
+            printf '        oifname "%s" ip6 saddr %s accept\n' "$iface" "$cidr"
+        done
+    done
+}
+
+render_docker6_drop_rules() {
+    local cidr
+
+    for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
+        cidr="$(trim_field "$cidr")"
+        [[ -n "$cidr" ]] || continue
+        printf '        ip6 saddr %s drop\n' "$cidr"
+        printf '        ip6 daddr %s drop\n' "$cidr"
+    done
+}
+
 load_selected_server
 
 require_value "LAN_IF" "$LAN_IF"
 require_value "LAN_CIDR" "$LAN_CIDR"
 
-nft delete table inet proton 2>/dev/null || true
 ensure_nat_postrouting_chain
 ensure_masquerade_rule
+ensure_nat6_postrouting_chain
+ensure_masquerade6_rule
+
+FILTER_TABLE_DELETE=""
+if nft list table inet proton >/dev/null 2>&1; then
+    FILTER_TABLE_DELETE="delete table inet proton"
+fi
 
 nft -f - <<EOF
+$FILTER_TABLE_DELETE
 table inet proton {
     chain forward {
         type filter hook forward priority 0; policy accept;
@@ -279,12 +388,16 @@ $(render_vpn_to_docker_rules)
 $(render_docker_to_lan_rules)
 $(render_docker_to_vpn_rules)
 $(render_docker_drop_rules)
+$(render_docker6_local_rules)
+$(render_vpn_to_docker6_rules)
+$(render_docker6_to_vpn_rules)
+$(render_docker6_drop_rules)
     }
 }
 EOF
 
-if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-    log "nftables Docker kill switch applied for [$DOCKER_NETWORK_CIDR] on $LAN_IF -> $VPN_IF; DNS to LAN is blocked and non-Docker host traffic is untouched"
+if [[ -n "$DOCKER_NETWORK_CIDR" || -n "$DOCKER_NETWORK_CIDR6" ]]; then
+    log "nftables Docker kill switch applied for IPv4 [$DOCKER_NETWORK_CIDR] IPv6 [$DOCKER_NETWORK_CIDR6] on $LAN_IF -> $VPN_IF; DNS to LAN is blocked and non-Docker host traffic is untouched"
 else
     log "nftables Docker kill switch applied without Docker CIDR state; non-Docker host traffic is untouched"
 fi

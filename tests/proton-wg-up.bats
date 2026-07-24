@@ -76,7 +76,11 @@ EOF
   cat > "$TMPBIN/docker" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == "inspect" ]]; then
-  printf 'starr_network=192.168.96.44\n'
+  if [[ "$*" == *"GlobalIPv6Address"* ]]; then
+    printf 'starr_network=fdca:6c19:2096::44\n'
+  else
+    printf 'starr_network=192.168.96.44\n'
+  fi
   exit 0
 fi
 exit 0
@@ -175,4 +179,74 @@ EOF
   run grep -c 'PersistentKeepalive' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
   [ "$output" -eq 1 ]
   grep -Fq 'PersistentKeepalive = 15' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
+}
+
+@test "wg up preserves Proton IPv6 fields and prepares the IPv6 route table when enabled" {
+  cat > "$WG_CONFIG" <<'EOF'
+[Interface]
+Address = 10.2.0.2/32, 2a07:b944::2:2/128
+DNS = 10.2.0.1, 2a07:b944::2:1
+
+[Peer]
+AllowedIPs = 0.0.0.0/0, ::/0
+EOF
+
+  run env \
+    PATH="$PATH" \
+    STATE_DIR="$STATE_DIR" \
+    WG_RUNTIME_DIR="$WG_RUNTIME_DIR" \
+    WG_PROFILE="$WG_PROFILE" \
+    VPN_INTERFACE="$VPN_INTERFACE" \
+    WG_CONFIG="$WG_CONFIG" \
+    WG_IPV6_ENABLED=on \
+    DOCKER_NETWORK_CIDR="$DOCKER_NETWORK_CIDR" \
+    DOCKER_NETWORK_CIDR6=fdca:6c19:2096::/64 \
+    DOCKER_IPV6_FALLBACK_INSTANCE=sonarr \
+    LAN_IF="$LAN_IF" \
+    LAN_CIDR="$LAN_CIDR" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    MANAGE_RESOLVED_DNS="$MANAGE_RESOLVED_DNS" \
+    KILLSWITCH_SCRIPT="$KILLSWITCH_SCRIPT" \
+    bash ./proton-wg-up-safe.sh sonarr
+
+  [ "$status" -eq 0 ]
+  grep -Fq 'Address = 10.4.0.2/32, 2a07:b944::2:2/128' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
+  grep -Fq 'DNS = 10.4.0.1, 2a07:b944::2:1' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
+  grep -Fq -- '-6 route replace default dev wg-test table 51804' "$IP_LOG"
+  grep -Fq -- '-6 rule add oif wg-test lookup 51804 priority 114' "$IP_LOG"
+  grep -Fq -- '-6 rule add from fdca:6c19:2096::/64 to fdca:6c19:2096::/64 lookup main priority 108' "$IP_LOG"
+  grep -Fq -- '-6 rule add from fdca:6c19:2096::44/128 lookup 51804 priority 114' "$IP_LOG"
+  grep -Fq -- '-6 rule add from fdca:6c19:2096::/64 lookup 51804 priority 130' "$IP_LOG"
+  [[ "$output" == *"qBittorrent IPv6 policy routing: source fdca:6c19:2096::44/128 -> table 51804 via wg-test"* ]]
+}
+
+@test "wg up refuses IPv6 mode when the profile has no IPv6 interface address" {
+  cat > "$WG_CONFIG" <<'EOF'
+[Interface]
+Address = 10.2.0.2/32
+DNS = 10.2.0.1
+
+[Peer]
+AllowedIPs = 0.0.0.0/0, ::/0
+EOF
+
+  run env \
+    PATH="$PATH" \
+    STATE_DIR="$STATE_DIR" \
+    WG_RUNTIME_DIR="$WG_RUNTIME_DIR" \
+    WG_PROFILE="$WG_PROFILE" \
+    VPN_INTERFACE="$VPN_INTERFACE" \
+    WG_CONFIG="$WG_CONFIG" \
+    WG_IPV6_ENABLED=on \
+    DOCKER_NETWORK_CIDR="$DOCKER_NETWORK_CIDR" \
+    LAN_IF="$LAN_IF" \
+    LAN_CIDR="$LAN_CIDR" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    MANAGE_RESOLVED_DNS="$MANAGE_RESOLVED_DNS" \
+    KILLSWITCH_SCRIPT="$KILLSWITCH_SCRIPT" \
+    bash ./proton-wg-up-safe.sh sonarr
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"IPv6 mode requires a Proton-assigned IPv6 interface address"* ]]
+  ! grep -Fq 'route replace default' "$IP_LOG"
 }

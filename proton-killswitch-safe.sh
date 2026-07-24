@@ -4,6 +4,7 @@ set -euo pipefail
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_IF="${VPN_IF:-${VPN_INTERFACE:-$WG_PROFILE}}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
 DOCKER_FORWARD_CHAIN="${DOCKER_FORWARD_CHAIN:-PROTON_DOCKER_FORWARD}"
 NAT_CHAIN="${NAT_CHAIN:-PROTON_POSTROUTING}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
@@ -70,6 +71,11 @@ ensure_directory "$STATE_DIR" 700
 
 if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
     DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
+fi
+
+if [[ -n "$DOCKER_NETWORK_CIDR6" ]]; then
+    log "ERROR: Docker IPv6 requires KILLSWITCH_BACKEND=nftables; the iptables backend refuses to continue"
+    exit 1
 fi
 
 server_pool_requested() {

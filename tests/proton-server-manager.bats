@@ -87,6 +87,23 @@ Endpoint = ${host}:51820
 EOF
 }
 
+write_ipv6_pool_config() {
+  local profile="$1"
+  local host="$2"
+
+  cat > "$WG_POOL_DIR/${profile}.conf" <<EOF
+[Interface]
+PrivateKey = test
+Address = 10.2.0.2/32, 2a07:b944::2:2/128
+DNS = 10.2.0.1, 2a07:b944::2:1
+
+[Peer]
+PublicKey = test
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = ${host}:51820
+EOF
+}
+
 @test "select prefers proven port-forward capable profiles once allowlist exists" {
   write_pool_config wg-a host-a
   write_pool_config wg-b host-b
@@ -209,6 +226,29 @@ EOF
 
   [ "$status" -eq 0 ]
   grep -F 'SELECTED_WG_PROFILE=wg-a' "$SERVER_SELECTION_FILE"
+}
+
+@test "select skips lower-latency IPv4-only profiles when IPv6 is enabled" {
+  write_pool_config wg-a host-a
+  write_ipv6_pool_config wg-b host-b
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    WG_POOL_DIR="$WG_POOL_DIR" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    BAD_SERVER_FILE="$BAD_SERVER_FILE" \
+    SERVER_RESELECT_FILE="$SERVER_RESELECT_FILE" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    WG_EXPECTED_DNS="10.2.0.1,2a07:b944::2:1" \
+    WG_IPV6_ENABLED=on \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    SERVER_POOL_STRICT_LINT="$SERVER_POOL_STRICT_LINT" \
+    PORT_FORWARD_REQUIRED=off \
+    bash ./proton-server-manager.sh select
+
+  [ "$status" -eq 0 ]
+  grep -F 'SELECTED_WG_PROFILE=wg-b' "$SERVER_SELECTION_FILE"
 }
 
 @test "mark-capable removes a profile from incapable state and records its port" {

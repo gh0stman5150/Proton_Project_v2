@@ -8,6 +8,15 @@
   grep -Fq 'proton-docker-watch@.service' install-proton-systemd.sh
 }
 
+@test "installer retires obsolete singleton services" {
+  grep -Fq 'LEGACY_SINGLETON_SERVICES=(' install-proton-systemd.sh
+  grep -Fq 'proton-wg.service' install-proton-systemd.sh
+  grep -Fq 'proton-port-forward.service' install-proton-systemd.sh
+  grep -Fq 'proton-healthcheck.service' install-proton-systemd.sh
+  grep -Fq 'systemctl disable --now "${LEGACY_SINGLETON_SERVICES[@]}"' install-proton-systemd.sh
+  grep -Fq 'systemctl reset-failed "${LEGACY_SINGLETON_SERVICES[@]}"' install-proton-systemd.sh
+}
+
 @test "installer creates instance examples and preserves real configs" {
   grep -Fq '${ETC_PROTON_DIR}/instances/${instance}' install-proton-systemd.sh
   grep -Fq 'proton.env.example' install-proton-systemd.sh

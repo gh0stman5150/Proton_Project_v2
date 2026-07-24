@@ -449,6 +449,98 @@ If your WireGuard profile or interface uses different names, update the environm
 
 IPv6 is intentionally not managed by the current kill switch path because it is disabled in the active Proton WireGuard profile.
 
+### IPv6 Safe Rollout
+
+IPv6 rollout is staged so recovery is proven before Docker networking changes. The current stage supports one tunnel-only canary while Docker remains IPv4-only.
+
+Run the read-only checks from the repository first:
+
+```bash
+sudo ./proton-ipv6-rollout.sh status
+sudo ./proton-ipv6-rollout.sh preflight
+```
+
+`preflight` must confirm all of the following before a snapshot is allowed:
+
+1. `WG_IPV6_ENABLED` is off
+2. `starr_network` has IPv6 disabled
+3. The nftables kill-switch backend is selected or available through `auto`
+4. The commands needed to capture and restore network state are installed
+
+Create the rollback point before deploying any dual-stack implementation:
+
+```bash
+sudo ./proton-ipv6-rollout.sh snapshot
+```
+
+Snapshots default to `/var/lib/proton/ipv6-rollbacks/<UTC timestamp>` and include:
+
+1. `/etc/proton`, including root-only per-instance configuration
+2. `/etc/wireguard`
+3. `/etc/docker`
+4. `/usr/local/bin/proton`
+5. Proton systemd units and the list of active units
+6. Every `QBT_COMPOSE_PROJECT_DIR` discovered from the per-instance configuration
+7. IPv4 and IPv6 rules and routes, the nftables ruleset, WireGuard state, and Docker network metadata for diagnosis
+
+The snapshot contains WireGuard keys and qBittorrent credentials. It is created with root-only permissions and must not be copied into the repository or logs.
+
+To restore immediately:
+
+```bash
+sudo /usr/local/bin/proton/proton-ipv6-rollout.sh rollback \
+  /var/lib/proton/ipv6-rollbacks/latest
+```
+
+Rollback stops every currently active Proton service, restores paths that existed at snapshot time, removes managed paths that were absent at snapshot time, reloads systemd, and starts exactly the Proton services that were active in the snapshot. Services are restored sequentially by dependency class so WireGuard instances cannot race while replacing shared policy rules. A failed service is reported without preventing the remaining baseline services from being attempted.
+
+The controller can activate one guarded tunnel canary:
+
+```bash
+sudo /usr/local/bin/proton/proton-ipv6-rollout.sh activate-canary sonarr
+```
+
+Activation verifies that the selected Proton profile has an IPv6 interface address, IPv6 DNS, and `AllowedIPs = ::/0`. It then checks the interface address, per-instance IPv6 route table, bound-interface policy rule, outbound IPv6 connectivity, and all instance services. Any failed check automatically restores the saved instance environment and restarts that instance in IPv4-only mode.
+
+Deactivate the canary without restoring the full snapshot:
+
+```bash
+sudo /usr/local/bin/proton/proton-ipv6-rollout.sh deactivate-canary sonarr
+```
+
+Do not enable Docker IPv6 during this stage. Docker dual-stack activation still requires nftables IPv6 source enforcement, IPv6 Docker policy rules, VPN-drop tests, and Docker network recreation support to land and pass first. The IPv4 NAT-PMP and qBittorrent published-port path remains unchanged.
+
+The kill-switch scripts understand an optional `DOCKER_NETWORK_CIDR6`. When it is empty, their live behavior remains IPv4-only. When it is set, the nftables backend installs IPv6 Docker-local rules, accepts Docker IPv6 only through active Proton interfaces, drops every other packet sourced from or destined to the Docker IPv6 subnet, and applies NAT66 only to that subnet on Proton interfaces. The iptables backend refuses to apply when `DOCKER_NETWORK_CIDR6` is set.
+
+Do not populate `DOCKER_NETWORK_CIDR6` until all of these maintenance-window prerequisites are ready:
+
+1. `KILLSWITCH_BACKEND=nftables` is explicit
+2. Host IPv6 forwarding is enabled persistently
+3. The external `starr_network` can be stopped and recreated with matching IPv6 IPAM
+4. Every attached Compose project can be recreated after the network replacement
+5. VPN-drop packet captures are ready to prove the ULA cannot leave through the WAN interface
+
+The current external `starr_network` is referenced by many independent Compose projects, so its conversion is not an in-place toggle. Network recreation is intentionally excluded from tunnel-canary activation.
+
+Before preparing a Docker maintenance window, run the read-only dual-stack gate with the proposed ULA:
+
+```bash
+sudo /usr/local/bin/proton/proton-ipv6-rollout.sh \
+  docker-preflight fdca:6c19:2096::/64
+```
+
+This command requires an explicit `KILLSWITCH_BACKEND=nftables`, confirms the tested firewall scripts match their installed copies, validates a canonical ULA `/64`, rejects overlap with host routes or Docker networks, verifies `starr_network` is still IPv4-only, and requires host IPv6 forwarding to remain off. It does not write configuration, enable forwarding, apply nftables, restart services, or modify Docker.
+
+Docker IPv6 policy routing mirrors the existing IPv4 ownership model. Each qBittorrent container receives a higher-priority IPv6 `/128` source rule for its own instance tunnel. `DOCKER_IPV6_FALLBACK_INSTANCE` names exactly one IPv6-capable tunnel that carries ordinary Docker application traffic at the lower fallback priority; it defaults to `sonarr`. Docker-to-Docker ULA traffic remains in the main table. The network watcher refreshes these rules after container recreation, and WireGuard teardown removes instance-owned IPv6 rules before flushing the tunnel table.
+
+Deploy the complete inert firewall and routing bundle before a maintenance window:
+
+```bash
+sudo /usr/local/bin/proton_project/deploy-live-ipv6-firewall.sh deploy
+```
+
+The helper creates a root-only timestamped snapshot of all six installed scripts and prints its exact rollback path. It does not restart services or activate Docker IPv6.
+
 ## DNS Policy
 
 The repository source of truth requires:

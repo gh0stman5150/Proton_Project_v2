@@ -26,6 +26,12 @@ OPTIONAL_SERVICES=(
     proton-docker-watch@.service
 )
 
+LEGACY_SINGLETON_SERVICES=(
+    proton-wg.service
+    proton-port-forward.service
+    proton-healthcheck.service
+)
+
 INSTANCES=(
     lidarr
     radarr
@@ -51,6 +57,7 @@ SCRIPTS=(
     proton-wg-up-safe.sh
     proton-wg-down-safe.sh
     proton-healthcheck.sh
+    proton-ipv6-rollout.sh
 )
 
 ENV_FILES=(
@@ -683,6 +690,8 @@ reset_runtime_state_for_redeploy() {
 
 enable_and_start_services() {
     systemctl daemon-reload
+    systemctl disable --now "${LEGACY_SINGLETON_SERVICES[@]}" >/dev/null 2>&1 || true
+    systemctl reset-failed "${LEGACY_SINGLETON_SERVICES[@]}" >/dev/null 2>&1 || true
     systemctl enable proton-killswitch.service
     systemctl reset-failed "${OPTIONAL_SERVICES[@]}" "${SERVICES[@]}" >/dev/null 2>&1 || true
     systemctl restart proton-killswitch.service
