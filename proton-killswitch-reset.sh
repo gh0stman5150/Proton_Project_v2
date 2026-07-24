@@ -36,6 +36,7 @@ cleanup_nft() {
 
 	nft delete table inet proton 2>/dev/null || true
 	nft delete table ip proton_nat 2>/dev/null || true
+	nft delete table ip6 proton_nat6 2>/dev/null || true
 }
 
 case "$KILLSWITCH_BACKEND" in

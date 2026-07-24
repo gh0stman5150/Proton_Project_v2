@@ -329,6 +329,14 @@ config_dns_value() {
     awk -F '=' '/^[[:space:]]*DNS[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$1"
 }
 
+config_address_value() {
+    awk -F '=' '/^[[:space:]]*Address[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$1"
+}
+
+config_allowed_ips_value() {
+    awk -F '=' '/^[[:space:]]*AllowedIPs[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$1"
+}
+
 normalize_csv() {
     printf '%s' "$1" | tr ',' '\n' | awk '
         {
@@ -379,7 +387,22 @@ allow_missing_dns() {
 
 lint_config() {
     local config="$1"
-    local dns_value expected_dns
+    local dns_value expected_dns address_value allowed_ips_value
+
+    if ipv6_enabled; then
+        address_value="$(config_address_value "$config")"
+        allowed_ips_value="$(normalize_csv "$(config_allowed_ips_value "$config")")"
+
+        if [[ "$address_value" != *:* ]]; then
+            log "Skipping $(config_profile "$config") because IPv6 mode requires a Proton-assigned IPv6 interface address"
+            return 1
+        fi
+
+        if [[ ",${allowed_ips_value}," != *",::/0,"* ]]; then
+            log "Skipping $(config_profile "$config") because IPv6 mode requires AllowedIPs ::/0"
+            return 1
+        fi
+    fi
 
     strict_lint_enabled || return 0
 

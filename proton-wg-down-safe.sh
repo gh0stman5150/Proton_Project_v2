@@ -22,10 +22,13 @@ WG_CONFIG="${WG_CONFIG:-/etc/wireguard/${WG_PROFILE}.conf}"
 FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
+WG_IPV6_ENABLED="${WG_IPV6_ENABLED:-off}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
 QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
 QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
 QBT_CONTAINER_IP_STATE_FILE="${QBT_CONTAINER_IP_STATE_FILE:-${STATE_DIR}/qbt-container-ip}"
+QBT_CONTAINER_IP6_STATE_FILE="${QBT_CONTAINER_IP6_STATE_FILE:-${STATE_DIR}/qbt-container-ip6}"
 KILLSWITCH_BACKEND="${KILLSWITCH_BACKEND:-auto}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
@@ -76,6 +79,25 @@ normalize_ipv4_rule_source() {
 	fi
 }
 
+normalize_ipv6_rule_source() {
+	local value="$1"
+
+	value="$(trim_field "$value")"
+	[[ "$value" == *:* ]] || return 1
+	printf '%s/128\n' "${value%%/*}"
+}
+
+ipv6_enabled() {
+	case "$WG_IPV6_ENABLED" in
+	1 | true | yes | on)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 resolve_qbt_container_ip() {
 	local networks=""
 	local ip=""
@@ -96,6 +118,27 @@ resolve_qbt_container_ip() {
 
 	[[ -n "$ip" ]] || return 1
 	printf '%s\n' "$ip"
+}
+
+resolve_qbt_container_ipv6() {
+	local networks=""
+	local ip=""
+
+	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
+	command -v docker >/dev/null 2>&1 || return 1
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	[[ -n "$networks" ]] || return 1
+	if [[ -n "$QBT_NETWORK_NAME" ]]; then
+		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+	[[ -n "$ip" ]] || ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
+	[[ -n "$ip" ]] || return 1
+	printf '%s\n' "$ip"
+}
+
+read_cached_qbt_container_ipv6() {
+	[[ -f "$QBT_CONTAINER_IP6_STATE_FILE" ]] || return 1
+	cat "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
 }
 
 read_cached_qbt_container_ip() {
@@ -241,6 +284,22 @@ ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null ||
 ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
 ip route flush table "$VPN_TABLE" 2>/dev/null || true
+if ipv6_enabled; then
+	QBT_CONTAINER_IPV6="$(resolve_qbt_container_ipv6 || true)"
+	CACHED_QBT_CONTAINER_IPV6="$(read_cached_qbt_container_ipv6 || true)"
+	for source_ip in "$QBT_CONTAINER_IPV6" "$CACHED_QBT_CONTAINER_IPV6"; do
+		source_rule="$(normalize_ipv6_rule_source "$source_ip" || true)"
+		[[ -n "$source_rule" ]] || continue
+		ip -6 rule del from "$source_rule" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+	done
+	for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
+		cidr="$(trim_field "$cidr")"
+		[[ -n "$cidr" ]] || continue
+		ip -6 rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+	done
+	ip -6 rule del oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+	ip -6 route flush table "$VPN_TABLE" 2>/dev/null || true
+fi
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 	detect_lan_cidr
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
@@ -273,3 +332,4 @@ fi
 
 rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
 rm -f "$QBT_CONTAINER_IP_STATE_FILE"
+rm -f "$QBT_CONTAINER_IP6_STATE_FILE"
