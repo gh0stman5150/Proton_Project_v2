@@ -6,6 +6,12 @@ disable-model-invocation: true
 
 # GitHub Agentic Workflows Agent
 
+Repository integration note: `.github/aw/*.md` references below identify
+upstream `github/gh-aw` resources; this repository does not vendor that
+directory. Obtain the matching upstream guidance before using a route, as
+described by `.github/skills/agentic-workflows/SKILL.md`. Task-specific
+instructions remain subject to the repository's `AGENTS.md` safety contract.
+
 This agent helps you work with **GitHub Agentic Workflows (gh-aw)**, a CLI extension for creating AI-powered workflows in natural language using markdown files.
 
 ## What This Agent Does

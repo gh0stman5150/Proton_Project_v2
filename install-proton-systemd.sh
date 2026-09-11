@@ -56,13 +56,13 @@ SCRIPTS=(
 	proton-killswitch-dispatch.sh
 	proton-killswitch-safe.sh
 	proton-killswitch-nft.sh
-	proton-killswitch-reset.sh
+	Archive/proton-killswitch-reset.sh
 	proton-port-forward-healthcheck.sh
 	proton-port-forward-safe.sh
 	proton-qbittorrent-common.sh
 	proton-qbittorrent-sync-safe.sh
 	proton-qbt-allocate-and-sync.sh
-	proton-qbt-dnat-cleanup.sh
+	Archive/proton-qbt-dnat-cleanup.sh
 	proton-docker-network-watcher.sh
 	proton-server-manager.sh
 	proton-wg-up-safe.sh
@@ -358,7 +358,7 @@ install_script_file() {
 	local source_file target_file
 
 	source_file="${SCRIPT_DIR}/${name}"
-	target_file="${BIN_DIR}/${name}"
+	target_file="${BIN_DIR}/${name##*/}"
 	ensure_source_file "$source_file"
 
 	if same_path "$source_file" "$target_file"; then

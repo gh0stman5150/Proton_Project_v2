@@ -4,7 +4,9 @@ This directory documents the five-instance qBittorrent fleet, its Proton port-fo
 
 The canonical source is `/usr/local/bin/proton_project`. Do not use `/opt/proton_project_work` as current source unless it has been explicitly synchronized and verified.
 
-## Current recovered baseline
+## Recorded recovered baseline
+
+This baseline reflects the August 2026 incident record and remains the required operating policy. Documentation review is not a fresh live-health or kernel-publication check.
 
 - The live SMB 3.1.1 `/mnt/data` mount uses `cache=none` for all five clients and every other consumer of the share. The 2026-08-17 oops at 19:05 preceded the 20:01 fstab edit and 20:16 activation reboot; the mitigation has no observed recurrence yet, but it is not a demonstrated kernel fix.
 - Both NAS mount units require the route-and-TCP-445 `nas-network-online.service` gate. Docker wants and follows all five Proton WireGuard units; the kill switch and runtime verifier remain independent safety gates.
@@ -12,6 +14,9 @@ The canonical source is `/usr/local/bin/proton_project`. Do not use `/opt/proton
 - Ubuntu `7.0.0-30.30` has no relevant netfs change; `7.0.0-31.31` is proposed-only; Linux 7.1.8 and 7.2 contain related but unproven repairs. Use the incident record and wedge runbook before changing kernels.
 
 ## Start here
+
+The [2026-09-10 documentation review](documentation-review-2026-09-10.md)
+records documentation corrections, validation, and remaining onboarding gaps.
 
 | Document | Use it when |
 | --- | --- |

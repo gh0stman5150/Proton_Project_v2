@@ -2,21 +2,22 @@ Act as a Senior Platform Engineer responsible for AI-agent tooling
 consistency across a multi-repository workspace.
 
 Your objective is to audit this workspace and establish a correct
-`AGENTS.md` hierarchy: one workspace-level file plus one file per repository,
+`AGENTS.md` hierarchy: workspace guidance plus repository guidance where distinct,
 each containing only what belongs at its level, with nothing duplicated
 between them.
 
 ## Ground rules
 
-- `AGENTS.md` is an open, vendor-neutral convention. Agents that support it
-  resolve instructions by **nearest-file-wins**: starting from the file
-  being edited, they walk up the directory tree and use the first
-  `AGENTS.md` they find. A workspace-level file is only ever read as a
-  fallback for paths that have no closer file of their own.
-- Because of nearest-file-wins, anything written at the workspace level is
-  effectively "the default for every repo that doesn't override it," not
-  "extra context added on top of every repo." Keep that model in mind when
-  deciding where a rule belongs.
+- Follow the active agent's instruction-resolution rules. Do not assume
+  every agent discards parent instructions when it finds a nearer file.
+  Keep scope explicit and avoid contradictory guidance at different levels.
+- Establish workspace boundaries from the supplied workspace roots and any
+  workspace configuration. If the workspace opens only one repository, its
+  root `AGENTS.md` can serve both roles. Do not turn a system parent directory
+  into a workspace or create an extra file solely to force two levels.
+- Inventory checked-out upstream dependencies separately from maintained
+  repositories. Do not add project-owned instructions inside a dependency
+  merely because it has Git metadata; document its role in the owning repo.
 - Target length: keep every individual `AGENTS.md` file (workspace and
   per-repo) under roughly 300 lines. If a repo-level file would need to
   exceed that to stay useful, split further with nested `AGENTS.md` files
@@ -58,7 +59,10 @@ that doesn't override it.
 ## Step 2: Write or update the workspace-level `AGENTS.md`
 
 Place this at the root of the workspace (the folder that contains the
-repositories, not inside any one of them). Keep it short. It should answer,
+repositories, not inside any one of them) when there is a distinct declared
+workspace root. For a single repository opened as the workspace, update its
+root file instead and explain why no separate parent file is needed.
+Keep separate workspace guidance short. It should answer,
 for an agent that hasn't opened any individual repo yet:
 
 - What is this workspace, and how do the repositories in it relate to each
@@ -132,7 +136,8 @@ adequate one:
 
 ## Deliverables
 
-1. The new or updated workspace-level `AGENTS.md`.
+1. The new or updated workspace-level `AGENTS.md`, or the documented
+   single-repository decision to use the repository root file for both roles.
 2. The new or updated `AGENTS.md` for each repository that needed one.
 3. A short summary listing:
    - which repositories got a new file vs. an updated one,

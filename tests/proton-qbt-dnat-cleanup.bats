@@ -25,7 +25,7 @@ EOF
   # Intentionally override PATH to simulate missing commands
   # shellcheck disable=SC2123
   PATH="/nonexistent"
-  run "$BASH_BIN" ./proton-qbt-dnat-cleanup.sh sonarr
+  run "$BASH_BIN" ./Archive/proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -ne 0 ]
   PATH="$OLD_PATH"
 }
@@ -47,7 +47,7 @@ exit 0
 EOF
   chmod +x "$TMPBIN/nft"
 
-  run bash ./proton-qbt-dnat-cleanup.sh sonarr
+  run bash ./Archive/proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -eq 0 ]
   [[ "$output" =~ "No DNAT chain" ]]
 }

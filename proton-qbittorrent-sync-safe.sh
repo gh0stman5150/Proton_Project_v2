@@ -14,7 +14,11 @@ proton_instance_init "${1:-}"
 ENV_FILE="${QBITTORRENT_ENV_FILE}"
 STATE_FILE="${STATE_FILE:-${STATE_DIR}/proton-port.state}"
 CACHE_FILE="${CACHE_FILE:-${STATE_DIR}/qbt-port.cache}"
-DNAT_CLEANUP_SCRIPT="${DNAT_CLEANUP_SCRIPT:-${SCRIPT_DIR}/proton-qbt-dnat-cleanup.sh}"
+DEFAULT_DNAT_CLEANUP_SCRIPT="${SCRIPT_DIR}/proton-qbt-dnat-cleanup.sh"
+if [[ -f "${SCRIPT_DIR}/Archive/proton-qbt-dnat-cleanup.sh" ]]; then
+	DEFAULT_DNAT_CLEANUP_SCRIPT="${SCRIPT_DIR}/Archive/proton-qbt-dnat-cleanup.sh"
+fi
+DNAT_CLEANUP_SCRIPT="${DNAT_CLEANUP_SCRIPT:-$DEFAULT_DNAT_CLEANUP_SCRIPT}"
 QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-qbittorrent-common.sh}"
 LOG_TAG="${LOG_TAG:-proton-qbt}"
 CACHE_DIR="${CACHE_FILE%/*}"

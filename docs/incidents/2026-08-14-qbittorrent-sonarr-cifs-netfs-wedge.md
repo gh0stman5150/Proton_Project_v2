@@ -2,6 +2,8 @@
 
 ## Document status
 
+Historical evidence note (2026-09-10 documentation review): status and package-channel statements below describe the recorded incident and follow-up observation window. No new runtime inspection or external kernel verification was performed by this review; it does not extend the recurrence-free observation period.
+
 - Incident date: 2026-08-14
 - Host timezone: America/Chicago (CDT)
 - Affected service: `qbittorrent-sonarr`

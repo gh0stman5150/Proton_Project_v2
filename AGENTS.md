@@ -1,5 +1,31 @@
 # Proton Project Agent Guide
 
+## Purpose And Instruction Scope
+
+This Bash project manages host Proton WireGuard routing, firewall protection,
+and NAT-PMP port synchronization for five Docker-hosted qBittorrent clients.
+
+- `Proton_Project_v2.code-workspace` opens only this repository (`.`). This file serves as both workspace and repository guidance; `/usr/local/bin` is not a declared multi-repository workspace.
+- This file is the authoritative project guide. `.github/copilot-instructions.md` remains a compatibility pointer to it; task prompts and workflow-specific guidance do not replace its safety boundaries.
+- `bats-core/` is a pinned upstream Git dependency used as the test runner, not another application maintained by this project. Follow its `docs/CONTRIBUTING.md` if explicitly changing that dependency; ordinary Proton changes belong outside it.
+- No separate workspace conventions or nested project instruction files are needed for the current single-repository layout. Reassess scope if the workspace gains another maintained repository or a distinct subproject.
+
+## Repository Layout And Tooling
+
+- Root `proton-*.sh`: tunnel lifecycle, shared helpers, routing/firewall policy, port allocation and synchronization, and health checks.
+- `install-proton-systemd.sh`, root `*.service`, and `*.conf`: installation, systemd units, and boot-ordering drop-ins.
+- `qbittorrent-compose.common.yml` and `qbittorrent-instances.tsv`: shared container policy and fleet identity manifest.
+- `tools/`: fleet verification and sequential reconciliation.
+- `Archive/`: relocated legacy and maintenance scripts; see `Archive/README.md`. Two archived cleanup scripts still supply installed runtime entrypoints. `Archive/verify_serialized_sync.sh` invokes allocation and sync and can mutate runtime state despite its name.
+- `tests/`: Bats behavioral and contract tests. Existing tests use temporary fixtures and PATH-injected command stubs to isolate host operations.
+- `docs/` and `README.md`: architecture, operator procedures, and historical incident evidence; see the documentation map below.
+- `.github/`: CI, compatibility instructions, task prompts, and optional Agentic Workflows guidance.
+- `bats-core/`: checked-out Bash test runner. The Proton application has no package-manager build step; CI installs ShellCheck, shfmt, and Bats through apt.
+
+Match the owning script's Bash conventions and reuse shared helpers. Keep host
+commands mocked in behavioral tests and use synthetic credentials in fixtures.
+CI checks tracked shell scripts with shfmt and `shellcheck -x`, then runs Bats.
+
 ## Authority And Repository Location
 
 - The canonical source repository is `/usr/local/bin/proton_project`.
@@ -70,8 +96,8 @@ From `/usr/local/bin/proton_project`:
 
 ```bash
 ./bats-core/bin/bats tests
-shellcheck ./*.sh tools/*.sh
-bash -n ./*.sh tools/*.sh
+shellcheck ./*.sh tools/*.sh Archive/*.sh
+for script in ./*.sh tools/*.sh Archive/*.sh; do bash -n "$script" || exit; done
 git diff --check
 ```
 
@@ -94,3 +120,12 @@ The `--recreate` command performs final runtime verification. Do not append a se
 - Sonarr incident record: `docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md`
 
 Keep historical evidence intact, but add dated recovery updates when operational status changes. Avoid hard-coded documentation or test line totals that become stale after ordinary edits.
+
+## Contributor And Documentation Standards
+
+- Reuse `proton-instance-common.sh` for instance loading and route locks, and `proton-qbittorrent-common.sh` for protected configuration and API authentication. Keep error exits and cleanup behavior consistent with the owning script; do not mask failed activation with a later successful check.
+- Preserve existing logging conventions: runtime scripts generally use their `LOG_TAG` and `systemd-cat`, with stderr fallback where implemented; installer and verification tools report to the terminal. Log the instance, operation, and failure without credentials or complete environment dumps.
+- Treat implementation and tests as evidence of behavior, and this guide as the required safety contract. If code conflicts with a safety invariant, report the defect rather than weakening the invariant to match code.
+- Keep README onboarding concise, architecture in `docs/architecture`, operations in `docs/runbooks`, and dated evidence in `docs/incidents`. Link to the owning document instead of copying a second procedure into Copilot guidance.
+- Check documented paths, flags, service names, configuration precedence, and mutation effects against source. Distinguish source validation, installation, and live verification. Label historical package/health observations with their evidence period; documentation edits do not extend it.
+- PRs or change records should explain the concrete problem, scope, final behavior, validation, documentation impact, and any deployment/rollback requirements. No additional branch or commit naming convention is established here.

@@ -20,7 +20,9 @@ The qBittorrent fleet has dedicated architecture, operations, and incident docum
 
 Shared configuration changes must be implemented once and reconciled across `lidarr`, `prowlarr`, `radarr`, `sonarr`, and `whisparr`. Dynamic Proton ports remain independent: a lease change recreates only the qBittorrent service that owns that tunnel, using the same synchronizer behavior as the other four.
 
-## Current Storage, Boot, And Kernel Baseline
+## Recorded Storage, Boot, And Kernel Baseline
+
+The following summarizes the August 2026 incident evidence and required operating baseline. This documentation review did not revalidate live health or current kernel publication channels; use the runtime gates before an operational change.
 
 - `/mnt/data` is an SMB 3.1.1 CIFS mount with active `cache=none`. It is one shared policy for all five qBittorrent clients and all other consumers of that mount.
 - The third oops occurred at 19:05 CDT on 2026-08-17 while the mount still used `cache=strict`; fstab changed at 20:01, and the 20:16 reboot created the first live `cache=none` mount. No recurrence has yet been observed on the fresh mount, but this is containment rather than a demonstrated kernel fix.
@@ -28,7 +30,7 @@ Shared configuration changes must be implemented once and reconciled across `lid
 - Docker wants and follows all five Proton WireGuard units. The ordering attempts tunnel activation before Docker; the kill switch and runtime verifier still decide whether application traffic is safe.
 - All five qBittorrent clients passed post-boot runtime verification. Torrent queueing remains disabled, and recovery introduced no active-upload or seeding limit. Shared changes remain sequential so four clients stay available while one is reconciled.
 
-There is no production kernel currently documented as a proven exact fix. Ubuntu `7.0.0-30.30` adds no relevant netfs correction, and `7.0.0-31.31` remains proposed-only. Linux 7.1.8 and 7.2 contain related netfs writeback and exclusion repairs, but they have not been demonstrated against this workload. Keep `cache=none` active and follow the [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) for candidate-kernel qualification.
+There is no production kernel currently documented as a proven exact fix. Ubuntu `7.0.0-30.30` adds no rele/establish-agents-md-hierarchyvant netfs correction, and `7.0.0-31.31` remains proposed-only. Linux 7.1.8 and 7.2 contain related netfs writeback and exclusion repairs, but they have not been demonstrated against this workload. Keep `cache=none` active and follow the [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) for candidate-kernel qualification.
 
 ## Required Behavior
 
@@ -72,7 +74,7 @@ The systemd units are wired to the hardened entrypoints below:
 9. `proton-healthcheck.sh`
 10. `install-proton-systemd.sh`
 
-Older scripts remain in the repository for reference only and must not be treated as the active service path.
+The installer’s `SCRIPTS` list and the units’ `ExecStart`/`ExecStop` fields define installed entrypoints. Other root scripts include maintenance and deployment helpers; inspect their behavior before running them.
 
 The kill switch dispatcher defaults to `KILLSWITCH_BACKEND=auto`. It prefers `nftables` when `nft` is available and falls back to `iptables` otherwise.
 
@@ -105,38 +107,17 @@ The following services are in scope for this routing and operational design:
 
 Prometheus is no longer used and is not in scope for this repository.
 
-## Legacy Singleton qBittorrent Env File
+## Requirements and authentication
 
-The installer preserves support for the older singleton file at `/etc/proton/qbittorrent.env`, root owned with mode `600`. New deployments use the named files under `/etc/proton/instances/<instance>/qbittorrent.env` described below.
+This deployment targets a Debian/Ubuntu Linux host with systemd, root administration, Docker Engine and the Compose plugin, WireGuard tools, iproute2, NAT-PMP (`natpmpc`), curl, flock, and the selected firewall backend. The NAS readiness gate also requires `nc`. ShellCheck, shfmt, Git, and Bats are development tools; there is no application build or PowerShell runtime.
 
-Minimum required variables:
+Before first activation, provide independent port-forward-capable WireGuard identities, the external `starr_network`, writable NAS mounts, and the five Compose projects and qBittorrent config directories. The installer installs common Compose policy and examples; it does not provision the NAS, Docker network, or all five project wrappers. See the [fleet contract](docs/architecture/qbittorrent-fleet-contract.md) for the required shape. A clean-host bootstrap procedure remains a documented gap.
 
-```bash
-QBITTORRENT_URL=http://192.168.237.78:8081
-QBITTORRENT_USER=change-me
-QBITTORRENT_PASS=change-me
-```
+The installer checks its Proton Debian package list and may download the Proton apt repository package and install `protonvpn`. That package step is not a complete host dependency provisioner. Review host routing and management access before approving installation: it restarts the host kill switch.
 
-Optional qB orchestration variables:
+Each protected `qbittorrent.env` supplies `QBITTORRENT_URL`, `QBITTORRENT_USER`, and `QBITTORRENT_PASS` for that instance’s Web API. Use its published host Web UI endpoint and enter credentials through an operator-controlled editor such as `sudoedit`. Keep the file root-owned with mode `0600`; it is sourced as shell code, so quote values correctly and treat write access as privileged. Never put real credentials in command examples, shell history, tickets, or this repository.
 
-```bash
-QBT_PORT_APPLY_MODE=compose-recreate
-QBT_RESPECT_MANUAL_STOP=1
-QBT_MANUAL_STOP_EVENT_GRACE_SECONDS=180
-QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent
-QBT_COMPOSE_SERVICE=qbittorrent
-QBT_PORT_ENV_FILE=/etc/proton/qbittorrent-port.env
-# Legacy DNAT mode only:
-QBT_CONTAINER_NAME=qbittorrent
-QBT_INTERNAL_PORT=6881
-QBT_NETWORK_NAME=starr_network
-```
-
-The hardened path expects:
-
-1. File path: `/etc/proton/qbittorrent.env`
-2. Owner: `root`
-3. Mode: `600`
+The installer retains `/etc/proton/qbittorrent.env` and `--qb-*` options for singleton compatibility. Those options do not configure all five named clients. Use the per-instance files below for fleet configuration; obsolete singleton services are disabled during installation.
 
 ## Named qBittorrent Instances
 
@@ -200,24 +181,7 @@ QBT_PORT_ENV_FILE=/etc/proton/instances/prowlarr/qbittorrent-port.env
 
 Each instance must use its own WireGuard identity, preferably generated as a separate Proton WireGuard config. Two configs may point at the same Proton server endpoint, but they still must be separate files with separate interface names, separate tunnel subnets, and separate runtime/service state.
 
-The migration is not complete until tests explicitly prove:
-
-1. `lidarr` and `radarr` may point to the same Proton server
-2. `lidarr` and `radarr` still use different WireGuard interfaces
-3. `lidarr` and `radarr` still write different forwarded-port state files
-4. stopping `radarr` does not stop `lidarr`
-5. restarting `prowlarr` does not change Sonarr's qBittorrent port
-6. each instance derives a distinct tunnel subnet and NAT-PMP gateway from `WG_ADDRESS_SUBNET`
-
-This is a core migration requirement, not a small config tweak. The final design needs multiple simultaneous Proton connections, multiple VPN interfaces, multiple qBittorrent env files, multiple port state files, templated service instances, and same-server isolation tests.
-
-Start one instance first during migration:
-
-```bash
-sudo systemctl start proton-wg@prowlarr proton-port-forward@prowlarr proton-healthcheck@prowlarr
-```
-
-After Prowlarr manual downloads work and its qBittorrent listen port follows the Proton forwarded port, repeat the same pattern for Sonarr, Radarr, Lidarr, and Whisparr.
+Tests cover accepted instance names, isolated configuration and state, derived subnet/gateway values, and templated service relationships. Preserve those contracts when extending the shared loader. For approved activation or recovery, follow the [sequential fleet procedure](docs/runbooks/qbittorrent-wedge-recovery.md); do not treat the deployed five-instance design as an unfinished singleton migration.
 
 ## qBittorrent Port Update Behavior
 
@@ -226,12 +190,12 @@ When Proton assigns a new forwarded port, the default compose-recreate path must
 1. Detect the new forwarded port automatically
 2. Update the qBittorrent listening port automatically
 3. Atomically update the per-instance `QBT_PORT_ENV_FILE`, `/etc/proton/instances/<instance>/qbittorrent-port.env`
-4. Recreate the qBittorrent Compose service only when the published port changes
-5. Do not recreate the qBittorrent container if the forwarded port is unchanged from the published-port artifact
+4. Recreate the matching Compose service when the applied artifact or Docker TCP/UDP mappings differ from the live port, or an authorized fleet rollout forces recreation
+5. Skip ordinary recreation when the artifact and Docker mappings already match; an unreachable Web UI can trigger guarded self-heal
 6. Verify that qBittorrent is listening on the expected port after the recreate path completes
 7. Keep legacy host-side DNAT support only when `QBT_PORT_APPLY_MODE=legacy-dnat`
 8. Confirm that qBittorrent remains bound only to the intended VPN path
-9. Refuse normal Compose self-heal if Docker still reports the named qBittorrent container as running but it has no published ports. That state means the container is wedged below the normal Compose control plane and another `docker compose up --force-recreate` will create short-ID orphans or Docker name conflicts instead of fixing the service.
+9. Refuse ordinary self-heal for a running container with no published ports. Missing metadata is a refusal condition, not proof of a kernel wedge. Forced fleet reconciliation can repair missing mappings only after the other safety gates pass; zombie and persistent `D`-state refusals still apply.
 
 The per-instance artifact contains exactly one assignment:
 
@@ -268,7 +232,7 @@ Run the installer from the project bundle directory that contains the scripts, s
 Example:
 
 ```bash
-cd /path/to/project-bundle
+cd /usr/local/bin/proton_project &&
 sudo ./install-proton-systemd.sh
 ```
 
@@ -291,25 +255,7 @@ The installer:
 
 After installation, run the protected fleet preflight and explicitly restart/reconcile the affected instance chains. A shared qBittorrent change is not complete until all five instances pass the runtime verifier.
 
-You can also pass qBittorrent credentials during install:
-
-```bash
-cd /path/to/project-bundle
-sudo ./install-proton-systemd.sh \
-  --qb-url http://192.168.237.78:8081 \
-  --qb-user your-user \
-  --qb-pass your-pass
-```
-
-You may also set Docker related values at install time:
-
-```bash
-cd /path/to/project-bundle
-sudo ./install-proton-systemd.sh \
-  --qb-container qbittorrent \
-  --qb-int-port 6881 \
-  --qb-network starr
-```
+Configure credentials in each protected instance file as described above. Do not use installer command-line password arguments for normal fleet setup.
 
 After the base install, you may optionally enable `proton-docker-watch@INSTANCE.service` if your Docker network CIDR or qBittorrent container IP can change over time.
 
@@ -336,16 +282,9 @@ Do not use a Prowlarr-only redeploy sequence as a fleet upgrade. Follow the [fle
 
 ## Runtime State
 
-Live state is stored under `/run/proton`:
+Per-instance state lives under `/run/proton/<instance>/`, including `proton-port.state`, `qbt-port.cache`, `docker-network-cidr`, `current-server.env`, `reselect-server.flag`, `recovery.lock`, and `qbt-sync.lock`.
 
-1. `/run/proton/proton-port.state`
-2. `/run/proton/qbt-port.cache`
-3. `/run/proton/docker-network-cidr`
-4. `/run/proton/current-server.env`
-5. `/run/proton/bad-servers.tsv`
-6. `/run/proton/reselect-server.flag`
-7. `/run/proton/recovery.lock`
-8. `/run/proton/pf-incapable-strikes.tsv`
+Host-wide coordination remains under `/run/proton`, including `policy-routing.lock`, `killswitch.lock`, server selection locking, `bad-servers.tsv`, and `pf-incapable-strikes.tsv`. Shared profile capability lists persist under `/etc/proton`. The loader rebases legacy per-instance paths; do not copy singleton runtime paths into new instance examples.
 
 Do not store live state files in the repository.
 
@@ -355,7 +294,7 @@ State under `/run/proton` must be treated as runtime data only and must be recre
 
 If `/etc/wireguard/proton-pool` contains one or more `*.conf` files, the active path treats that directory as a rotation pool. Reconnect or bad node recovery may select the lowest latency candidate by probing the endpoint IP from each config.
 
-The selector stores the active choice in `/run/proton/current-server.env` and tracks cooldowns in `/run/proton/bad-servers.tsv`. It uses hysteresis so the current server is kept unless a replacement is meaningfully better or the current server is degraded.
+The selector stores the active choice in `/run/proton/<instance>/current-server.env` and tracks cooldowns in `/run/proton/bad-servers.tsv`. It uses hysteresis so the current server is kept unless a replacement is meaningfully better or the current server is degraded.
 
 When `PORT_FORWARD_REQUIRED=on`, the pool also learns which profiles have actually returned a Proton forwarded port. Successful profiles are recorded in `PF_CAPABLE_PROFILES_FILE`, failed profiles can be recorded in `PF_INCAPABLE_PROFILES_FILE`, and the selector effectively treats the pool as three categories:
 
@@ -419,7 +358,7 @@ Any server rotation logic must preserve the repository routing rules, kill switc
 
 ## WireGuard Defaults
 
-The units currently default to values such as:
+Shared compatibility defaults include the following; named services override profile/interface identity through their instance configuration:
 
 1. `WG_PROFILE=proton`
 2. `VPN_INTERFACE=proton`
@@ -438,11 +377,11 @@ For the templated per-instance services, `NATPMP_GATEWAY` is not taken from this
 If your WireGuard profile or interface uses different names, update the environment files consumed by:
 
 1. `proton-killswitch.service`
-2. `proton-wg.service`
-3. `proton-port-forward.service`
-4. `proton-healthcheck.service`
+2. `proton-wg@<instance>.service`
+3. `proton-port-forward@<instance>.service`
+4. `proton-healthcheck@<instance>.service`
 
-IPv6 is intentionally not managed by the current kill switch path because it is disabled in the active Proton WireGuard profile.
+IPv6 support is conditional: the nftables backend supports configured Docker IPv6 policy, while the iptables backend refuses a configured Docker IPv6 subnet. Source capability does not establish live activation status.
 
 ### IPv6 Safe Rollout
 
@@ -503,7 +442,7 @@ Deactivate the canary without restoring the full snapshot:
 sudo /usr/local/bin/proton/proton-ipv6-rollout.sh deactivate-canary sonarr
 ```
 
-Do not enable Docker IPv6 during this stage. Docker dual-stack activation still requires nftables IPv6 source enforcement, IPv6 Docker policy rules, VPN-drop tests, and Docker network recreation support to land and pass first. The IPv4 NAT-PMP and qBittorrent published-port path remains unchanged.
+Tunnel-canary activation does not enable Docker IPv6. Source code includes nftables IPv6 enforcement and Docker IPv6 policy routing, but network recreation and live VPN-drop validation still require an approved maintenance procedure. The IPv4 NAT-PMP and qBittorrent published-port path remains unchanged.
 
 The kill-switch scripts understand an optional `DOCKER_NETWORK_CIDR6`. When it is empty, their live behavior remains IPv4-only. When it is set, the nftables backend installs IPv6 Docker-local rules, accepts Docker IPv6 only through active Proton interfaces, drops every other packet sourced from or destined to the Docker IPv6 subnet, and applies NAT66 only to that subnet on Proton interfaces. The iptables backend refuses to apply when `DOCKER_NETWORK_CIDR6` is set.
 
@@ -531,7 +470,7 @@ Docker IPv6 policy routing mirrors the existing IPv4 ownership model. Each qBitt
 Deploy the complete inert firewall and routing bundle before a maintenance window:
 
 ```bash
-sudo /usr/local/bin/proton_project/deploy-live-ipv6-firewall.sh deploy
+sudo /usr/local/bin/proton_project/Archive/deploy-live-ipv6-firewall.sh deploy
 ```
 
 The helper creates a root-only timestamped snapshot of all six installed scripts and prints its exact rollback path. It does not restart services or activate Docker IPv6.
@@ -569,7 +508,7 @@ VPN bound containers must not be able to reach WAN directly outside the intended
 
 ## Healthcheck
 
-`proton-healthcheck.service` watches qBittorrent only when there are active transfers. If combined download and upload throughput stays below the configured threshold for multiple checks, the recovery ladder is:
+`proton-healthcheck@<instance>.service` watches qBittorrent only when there are active transfers. If combined download and upload throughput stays below the configured threshold for multiple checks, the recovery ladder is:
 
 1. qBittorrent port and DNAT refresh
 2. One shot NAT PMP refresh
@@ -577,7 +516,7 @@ VPN bound containers must not be able to reach WAN directly outside the intended
 
 The healthcheck and port forward loop share `RECOVERY_LOCK_FILE` so they do not trigger overlapping reconnect storms.
 
-Default thresholds:
+Shared template thresholds:
 
 1. `CHECK_INTERVAL=60`
 2. `MIN_COMBINED_SPEED_BPS=65536` which is 64 KB/s
@@ -594,7 +533,7 @@ first step. That keeps healthy-but-slow swarms from escalating into a full
 WireGuard restart just because throughput stayed below the target while the
 forwarded port and qBittorrent sync path were already confirmed working.
 
-Tune those values in `proton-healthcheck.service` if the workload is bursty or often idle between peer activity.
+For a bursty workload, tune shared thresholds in `/etc/proton/proton-healthcheck.env` or document an intentional override in the protected instance configuration.
 
 Any healthcheck driven recovery must preserve:
 
@@ -669,7 +608,7 @@ Confirm all of the following:
 3. SSH and RDP remain reachable through WAN and LAN
 4. qBittorrent remains bound only to the intended VPN path
 
-### Safe failure test
+### Disruptive failure test (explicit runtime authorization required)
 
 ```bash
 sudo ip link set dev pvprowlarr down
@@ -699,9 +638,8 @@ The watcher listens for Docker network and container events and can:
 Install and start the watcher:
 
 ```bash
-cd /path/to/project-bundle
+cd /usr/local/bin/proton_project &&
 sudo ./install-proton-systemd.sh &&
-sudo systemctl daemon-reload &&
 sudo systemctl enable --now proton-docker-watch@prowlarr.service &&
 sudo journalctl -fu proton-docker-watch@prowlarr.service
 ```
@@ -760,3 +698,21 @@ When evaluating or changing this repository:
 3. Do not claim root cause without file evidence, command output, or reproducible behavior
 4. Be explicit about whether the active firewall control plane is `iptables` or `nftables`
 5. Do not mix `iptables` and `nftables` in recommendations unless the existing repository already depends on both and the interaction is explained clearly
+
+
+## Development, contributions, and support
+
+Run from `/usr/local/bin/proton_project`:
+
+```bash
+./bats-core/bin/bats tests
+shellcheck ./*.sh tools/*.sh Archive/*.sh
+for script in ./*.sh tools/*.sh Archive/*.sh; do bash -n "$script" || exit; done
+git diff --check
+```
+
+CI additionally checks tracked shell formatting with shfmt and runs `shellcheck -x`. Use the pinned `bats-core/bin/bats` checkout for local tests; do not modify the upstream runner to accommodate a Proton failure. Keep tests isolated with temporary fixtures and mocked host commands.
+
+Follow [AGENTS.md](AGENTS.md) for contribution and safety requirements. A change record should identify the problem, per-instance or shared scope, implementation, validation, documentation impact, and any authorized deployment/rollback steps. Source tests do not establish installed provenance or live fleet health.
+
+No named support owner, on-call contact, or support SLA is declared in this repository. Report defects through the repository’s existing issue/PR process or the host operator’s established channel. Include the affected instance, timestamps, source revision, failing command and exit status, and redacted logs. The maintainer should add ownership details when confirmed; do not invent contacts.

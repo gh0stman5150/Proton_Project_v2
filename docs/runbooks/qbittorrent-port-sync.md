@@ -118,7 +118,7 @@ It defines identity, credentials, Compose project/service, network, apply mode, 
 18. It verifies Docker publishes the port for both TCP and UDP.
 19. It commits the per-instance cache and reports success.
 
-An unchanged lease does not normally recreate the container. If the artifact is in the legacy two-key format, the script canonicalizes it to one key without an unnecessary restart.
+An unchanged lease does not normally recreate the container when the artifact and both Docker mappings match. Stale mappings or an unreachable Web UI can trigger guarded recreation. Forced fleet sync can repair absent port mappings after lifecycle checks, but never bypasses zombie or persistent `D`-state refusal. If the artifact is in the legacy two-key format, the script canonicalizes it to one key without an unnecessary restart.
 
 ## Preflight
 
@@ -171,7 +171,7 @@ Do not start a forced fleet rollout if one member is already unhealthy. Diagnose
 Use the allocator unit rather than bare Compose:
 
 ```bash
-sudo systemctl start proton-qbt-allocate@sonarr.service
+sudo systemctl start proton-qbt-allocate@sonarr.service &&
 sudo systemctl status proton-qbt-allocate@sonarr.service --no-pager -l
 ```
 
@@ -238,13 +238,13 @@ awk -F= '$1 == "Session\\Port" {print $2}' \
   /opt/qbittorrent-sonarr/config/qBittorrent/qBittorrent.conf
 ```
 
-The Web API check is stronger because a running qBittorrent may not have flushed every preference to disk yet. Use the configured credentials without printing them:
+The Web API check is stronger because a running qBittorrent may not have flushed every preference to disk yet. For read-only authenticated validation, use the fleet runtime verifier:
 
 ```bash
-sudo /usr/local/bin/proton/proton-qbittorrent-sync-safe.sh sonarr
+sudo /usr/local/bin/proton/proton-qbt-fleet-verify.sh --runtime
 ```
 
-The script performs authenticated post-apply verification internally.
+The synchronizer is a mutating operation and can recreate a container; use the manual synchronization procedure only with runtime authorization.
 
 ## Verify the complete fleet
 

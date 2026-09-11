@@ -226,16 +226,17 @@ For qBittorrent preferences, do not copy entire `qBittorrent.conf` files across 
 From the repository root:
 
 ```bash
-bash -n ./*.sh tools/*.sh
-./bats-core/bin/bats tests/*.bats
+for script in ./*.sh tools/*.sh Archive/*.sh; do bash -n "$script" || exit; done
+./bats-core/bin/bats tests
+shellcheck ./*.sh tools/*.sh Archive/*.sh
 git diff --check
 ```
 
-If `shfmt` and `shellcheck` are installed:
+CI also requires shfmt formatting and ShellCheck with sourced-file analysis:
 
 ```bash
-shfmt -d ./*.sh tools/*.sh tests/*.bats
-shellcheck ./*.sh tools/*.sh
+shfmt -d ./*.sh tools/*.sh Archive/*.sh
+shellcheck -x ./*.sh tools/*.sh Archive/*.sh
 ```
 
 Tests for a shared fix must be table-driven over all five instances or exercise the shared implementation directly. A grep that happens to find another instance's value is not an adequate per-instance assertion.

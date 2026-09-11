@@ -4,7 +4,7 @@ Your objective is to evaluate this entire repository and ensure that all reposit
 
 Repository Context:
 - This is an internal enterprise automation repository.
-- Technologies are primarily PowerShell and Bash.
+- Determine technologies from the repository; this project is Bash with systemd and Docker Compose, not PowerShell.
 - Documentation quality may vary and may contain outdated, incomplete, inconsistent, or legacy information.
 - The repository may have evolved over time and documentation may not accurately reflect the current implementation.
 
@@ -20,7 +20,7 @@ Treat the repository implementation as the authoritative source of truth, includ
 - Dependency definitions
 - Build and deployment artifacts
 
-If documentation conflicts with code or configuration, assume the code and configuration are correct and update documentation accordingly.
+Use code and tests to establish implemented behavior, while preserving the safety and authority requirements in AGENTS.md. If implementation conflicts with a safety requirement, record a defect rather than silently rewriting the requirement. Preserve historical incident evidence and distinguish its observation period from current runtime verification.
 
 Documentation Governance Tasks:
 
@@ -59,7 +59,7 @@ Documentation Governance Tasks:
 
 3. copilot-instructions.md
    - Create or update copilot-instructions.md.
-   - Provide detailed guidance for GitHub Copilot and AI-assisted development.
+   - Keep it a compatibility pointer when AGENTS.md already owns the guidance; add links to the relevant sections instead of duplicating rules.
    - Include:
      - Repository objectives
      - Preferred coding patterns
@@ -74,7 +74,7 @@ Documentation Governance Tasks:
      - Repository-specific implementation guidance
 
 4. Documentation Validation
-   - Identify and eliminate:
+   - Correct these in current operational guidance; retain clearly labeled historical evidence and supported compatibility behavior:
      - References to deprecated workflows
      - References to previous versions
      - Legacy implementation details
