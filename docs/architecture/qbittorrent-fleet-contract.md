@@ -52,7 +52,7 @@ The five clients share one host and one `/mnt/data` CIFS mount, but they must no
 
 Boot follows two explicit dependency edges. `mnt-data.mount` and `mnt-plex.mount` require and follow `nas-network-online.service`, which waits for a NAS route and TCP port 445. Docker wants and follows all five Proton WireGuard units. `Wants=` provides ordering and activation attempts, not a guarantee of tunnel health, so the host kill switch and final runtime verification remain mandatory.
 
-Kernel package numbers are not part of the fleet contract. Ubuntu `7.0.0-30.30` has no relevant netfs correction, `7.0.0-31.31` remains proposed-only, and the related Linux 7.1.8/7.2 repairs have not been proven on this workload. A replacement kernel must retain a rollback path and pass the storage gate plus all-five runtime and workload validation.
+Kernel package numbers are not part of the fleet contract. The following package observations are retained from the August 2026 investigation and require fresh verification before a kernel change. Ubuntu `7.0.0-30.30` has no relevant netfs correction, `7.0.0-31.31` remains proposed-only, and the related Linux 7.1.8/7.2 repairs have not been proven on this workload. A replacement kernel must retain a rollback path and pass the storage gate plus all-five runtime and workload validation.
 
 ## Canonical instance catalog
 
@@ -314,7 +314,7 @@ If the Web UI is unavailable but processes are killable and the container is not
 
 ### Docker/runtime wedge
 
-If the named container remains running with no published ports or contains a zombie, normal self-heal is refused to prevent orphan/name-conflict loops.
+If the named container remains running with no published ports or contains a zombie, normal self-heal is refused to prevent orphan/name-conflict loops. Missing port metadata alone does not prove a kernel wedge: an authorized forced fleet reconciliation may repair it after lifecycle safety checks. Zombie and persistent same-LWP `D`-state refusals still apply.
 
 ### Kernel I/O wedge
 

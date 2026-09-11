@@ -13,6 +13,8 @@ setup() {
     printf '#!/usr/bin/env bash\necho old-%s\n' "$script" > "$LIVE/$script"
     chmod 0755 "$PROJECT/$script" "$LIVE/$script"
   done
+  mkdir -p "$PROJECT/Archive"
+  mv "$PROJECT/proton-killswitch-reset.sh" "$PROJECT/Archive/"
 }
 
 @test "deployment snapshots and replaces scripts without invoking services" {
@@ -22,7 +24,7 @@ setup() {
     BACKUP_ROOT="$BACKUPS" \
     DEPLOY_TIMESTAMP=canary \
     DEPLOY_ALLOW_UNPRIVILEGED_TEST=1 \
-    bash ./deploy-live-ipv6-firewall.sh deploy
+    bash ./Archive/deploy-live-ipv6-firewall.sh deploy
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"Rollback snapshot: $BACKUPS/canary"* ]]
@@ -41,7 +43,7 @@ setup() {
     BACKUP_ROOT="$BACKUPS" \
     DEPLOY_TIMESTAMP=canary \
     DEPLOY_ALLOW_UNPRIVILEGED_TEST=1 \
-    bash ./deploy-live-ipv6-firewall.sh deploy
+    bash ./Archive/deploy-live-ipv6-firewall.sh deploy
   [ "$status" -eq 0 ]
 
   run env \
@@ -50,7 +52,7 @@ setup() {
     BACKUP_ROOT="$BACKUPS" \
     DEPLOY_TIMESTAMP=recovery \
     DEPLOY_ALLOW_UNPRIVILEGED_TEST=1 \
-    bash ./deploy-live-ipv6-firewall.sh rollback "$BACKUPS/canary"
+    bash ./Archive/deploy-live-ipv6-firewall.sh rollback "$BACKUPS/canary"
 
   [ "$status" -eq 0 ]
   grep -F 'echo old-proton-killswitch-nft.sh' "$LIVE/proton-killswitch-nft.sh"

@@ -165,7 +165,7 @@ raise SystemExit(1)
 
 docker_preflight() {
 	local cidr="${1:-}"
-	local backend docker_ipv6 forwarding default_forwarding script
+	local backend docker_ipv6 forwarding default_forwarding script source_script
 	local failed=0
 	local -a firewall_scripts=(
 		proton-killswitch-nft.sh
@@ -217,8 +217,12 @@ docker_preflight() {
 	fi
 
 	for script in "${firewall_scripts[@]}"; do
-		if [[ ! -f "$PROJECT_DIR/$script" || ! -f "$LIVE_DIR/$script" ]] ||
-			! cmp -s "$PROJECT_DIR/$script" "$LIVE_DIR/$script"; then
+		source_script="$PROJECT_DIR/$script"
+		if [[ "$script" == proton-killswitch-reset.sh && -f "$PROJECT_DIR/Archive/$script" ]]; then
+			source_script="$PROJECT_DIR/Archive/$script"
+		fi
+		if [[ ! -f "$source_script" || ! -f "$LIVE_DIR/$script" ]] ||
+			! cmp -s "$source_script" "$LIVE_DIR/$script"; then
 			printf 'FAIL: tested and installed Docker IPv6 scripts differ: %s\n' "$script" >&2
 			failed=1
 		fi

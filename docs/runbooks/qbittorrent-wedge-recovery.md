@@ -168,7 +168,7 @@ sudo /usr/local/bin/proton/proton-qbt-fleet-reconcile.sh --check
 If only the active lease for one instance needs applying, invoke its allocator:
 
 ```bash
-sudo systemctl start "proton-qbt-allocate@${instance}.service"
+sudo systemctl start "proton-qbt-allocate@${instance}.service" &&
 sudo systemctl status "proton-qbt-allocate@${instance}.service" --no-pager -l
 ```
 
@@ -243,10 +243,10 @@ Perform a bounded write/read/delete test in an operator-approved scratch directo
 
 ```bash
 test_dir=/mnt/data/.proton-qbt-recovery-check
-sudo install -d -m 0755 "$test_dir"
-printf 'qbt-recovery %s\n' "$(date --iso-8601=seconds)" | sudo tee "$test_dir/probe" >/dev/null
-sudo cat "$test_dir/probe"
-sudo rm "$test_dir/probe"
+sudo install -d -m 0755 "$test_dir" &&
+printf 'qbt-recovery %s\n' "$(date --iso-8601=seconds)" | sudo tee "$test_dir/probe" >/dev/null &&
+sudo cat "$test_dir/probe" &&
+sudo rm "$test_dir/probe" &&
 sudo rmdir "$test_dir"
 ```
 
@@ -311,22 +311,23 @@ Normal boot now orders Docker after all five Proton WireGuard activation attempt
 If an instance chain is inactive after the storage gate and evidence capture, the route-race fix allows concurrent activation, but sequential recovery gives a clearer failure boundary. Start one instance chain at a time:
 
 ```bash
-for instance in lidarr prowlarr radarr sonarr whisparr; do
+# Run only for instance chains identified as inactive and approved for recovery.
+# Fill this array from that inspection; do not restart healthy members.
+instances_to_recover=(sonarr)
+for instance in "${instances_to_recover[@]}"; do
   sudo systemctl reset-failed \
     "proton-wg@${instance}.service" \
     "proton-port-forward@${instance}.service" \
     "proton-docker-watch@${instance}.service" \
     "proton-healthcheck@${instance}.service" \
-    "proton-qbt-allocate@${instance}.service"
-
-  sudo systemctl start "proton-wg@${instance}.service"
-  sudo systemctl start "proton-port-forward@${instance}.service"
-  sudo systemctl start "proton-docker-watch@${instance}.service"
-  sudo systemctl start "proton-healthcheck@${instance}.service"
-  sudo systemctl start "proton-qbt-allocate@${instance}.service"
-
-  systemctl is-active "proton-wg@${instance}.service"
-  systemctl is-active "proton-port-forward@${instance}.service"
+    "proton-qbt-allocate@${instance}.service" &&
+  sudo systemctl start "proton-wg@${instance}.service" &&
+  sudo systemctl start "proton-port-forward@${instance}.service" &&
+  sudo systemctl start "proton-docker-watch@${instance}.service" &&
+  sudo systemctl start "proton-healthcheck@${instance}.service" &&
+  sudo systemctl start "proton-qbt-allocate@${instance}.service" &&
+  systemctl is-active "proton-wg@${instance}.service" &&
+  systemctl is-active "proton-port-forward@${instance}.service" || exit
 done
 ```
 
@@ -432,6 +433,8 @@ The capacity-independent mitigation is active: the shared `/mnt/data` fstab entr
 The timing is authoritative: oops at 19:05 CDT, fstab edit at 20:01, fresh `cache=none` mount at 20:16 on 2026-08-17. The current absence of recurrence is evidence for containment, not proof of a kernel repair.
 
 ## Kernel upgrade qualification
+
+The package/channel observations below come from the August 2026 incident investigation. Recheck publication status and exact patches before selecting a candidate; this review did not refresh external kernel evidence.
 
 Do not select a kernel from its version number alone:
 

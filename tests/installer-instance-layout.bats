@@ -79,5 +79,27 @@
 }
 
 @test "instance normalizer applies unique Compose service names" {
-  grep -Fq 'QBT_COMPOSE_SERVICE=qbittorrent-$inst' proton-instances-normalize.sh
+  grep -Fq 'QBT_COMPOSE_SERVICE=qbittorrent-$inst' Archive/proton-instances-normalize.sh
+}
+
+@test "archived cleanup scripts install at the existing flat runtime paths" {
+  run bash -c '
+    set -euo pipefail
+    SCRIPT_DIR="$PWD"
+    BIN_DIR="$1/live"
+    mkdir -p "$BIN_DIR"
+    eval "$(sed -n "/^install_script_file() {/,/^}/p" install-proton-systemd.sh)"
+    ensure_source_file() { test -f "$1"; }
+    same_path() { [[ "$1" == "$2" ]]; }
+    install_normalized_file() { install -m "$3" "$1" "$2"; }
+    log() { :; }
+    for source in Archive/proton-killswitch-reset.sh Archive/proton-qbt-dnat-cleanup.sh; do
+      install_script_file "$source"
+      target="$BIN_DIR/${source##*/}"
+      test -x "$target"
+      cmp "$source" "$target"
+    done
+    test ! -e "$BIN_DIR/Archive"
+  ' _ "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
 }

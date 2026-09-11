@@ -82,6 +82,10 @@ EOF
     proton-wg-up-safe.sh proton-wg-down-safe.sh proton-docker-network-watcher.sh; do
     printf '#!/usr/bin/env bash\n' > "$PROTON_PROJECT_DIR/$script"
     cp "$PROTON_PROJECT_DIR/$script" "$PROTON_LIVE_DIR/$script"
+    if [[ "$script" == proton-killswitch-reset.sh ]]; then
+      mkdir -p "$PROTON_PROJECT_DIR/Archive"
+      mv "$PROTON_PROJECT_DIR/$script" "$PROTON_PROJECT_DIR/Archive/$script"
+    fi
   done
 }
 
