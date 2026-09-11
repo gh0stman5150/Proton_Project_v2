@@ -6,7 +6,10 @@
 	],
 	"settings": {
 		"github.copilot.enable": {
-			"markdown": true
+			"*": true,
+			"plaintext": false,
+			"markdown": true,
+			"scminput": false
 		}
 	}
 }
