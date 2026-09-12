@@ -725,7 +725,6 @@ When evaluating or changing this repository:
 4. Be explicit about whether the active firewall control plane is `iptables` or `nftables`
 5. Do not mix `iptables` and `nftables` in recommendations unless the existing repository already depends on both and the interaction is explained clearly
 
-
 ## Development, contributions, and support
 
 Run from `/usr/local/bin/proton_project`:
