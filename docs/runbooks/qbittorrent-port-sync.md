@@ -185,6 +185,58 @@ sudo /usr/local/bin/proton/proton-qbittorrent-sync-safe.sh sonarr
 
 Do not run an unqualified `docker compose up` to “fix” a port. The wrappers intentionally refuse to render without an explicitly injected `QBT_PUBLISHED_PORT`; use the allocator/synchronizer so that value comes from the matching live Proton lease.
 
+### Recreating a fleet whose containers were removed
+
+`proton-qbt-fleet-reconcile.sh --recreate` is a rolling replacement command,
+not a bootstrap command. It deliberately refuses to start if any managed
+container is absent, unhealthy, a zombie, or persistently blocked in kernel
+`D` state. Therefore, after all five qBittorrent containers have been removed,
+do not retry `--recreate` and do not use `docker run` to create replacements.
+There is no supported non-Compose container creation path: the synchronizer
+must inject the current per-instance Proton port, configure qBittorrent, clean
+stale qBittorrent lock artifacts, and verify the TCP/UDP mappings and health.
+
+Use the installed bootstrap command, which performs this override in a
+temporary mode-0600 environment file and does not modify protected instance
+configuration:
+
+```bash
+sudo /usr/local/bin/proton/proton-qbt-fleet-recreate.sh --bootstrap
+```
+
+The command requires root, validates the protected fleet configuration, starts
+or refreshes each instance's Proton port-forward service, and restores the
+five containers sequentially through the allocator/synchronizer path. It
+temporarily sets `QBT_RESPECT_MANUAL_STOP=0` and `QBT_FORCE_RECREATE=1` only for
+the synchronizer invocation; it does not change either protected file.
+
+If the command is not installed yet, install the canonical source first:
+
+```bash
+cd /usr/local/bin/proton_project &&
+sudo ./install-proton-systemd.sh
+```
+
+The bootstrap command requires the same prerequisites as normal port
+synchronization: valid per-instance Proton/WireGuard configuration, the
+installed Compose wrappers, the external `starr_network`, mounted storage,
+and healthy Docker. It stops on the first failed instance; inspect its
+port-forward and allocator journal before retrying.
+
+After successful recreation, run the final fleet gate:
+
+```bash
+sudo /usr/local/bin/proton/proton-qbt-fleet-verify.sh --runtime
+```
+
+If any instance fails, stop and inspect its port-forward and allocator journal;
+do not continue with a partially validated fleet:
+
+```bash
+sudo journalctl --no-pager -u "proton-port-forward@${instance}.service" \
+  -u "proton-qbt-allocate@${instance}.service" -n 200
+```
+
 ## Verify one instance manually
 
 The following example uses Sonarr. Substitute the instance matrix values for another client.

@@ -5,17 +5,17 @@
 This Bash project manages host Proton WireGuard routing, firewall protection,
 and NAT-PMP port synchronization for five Docker-hosted qBittorrent clients.
 
-- `Proton_Project_v2.code-workspace` opens only this repository (`.`). This file serves as both workspace and repository guidance; `/usr/local/bin` is not a declared multi-repository workspace.
+- `Proton_Project_v2.code-workspace` opens only this repository (`.`). This file serves as both workspace and repository guidance in that view. The user-requested `/usr/local/bin/AGENTS.md` supplies parent navigation when working across local automation; it does not change this repository boundary.
 - This file is the authoritative project guide. `.github/copilot-instructions.md` remains a compatibility pointer to it; task prompts and workflow-specific guidance do not replace its safety boundaries.
 - `bats-core/` is a pinned upstream Git dependency used as the test runner, not another application maintained by this project. Follow its `docs/CONTRIBUTING.md` if explicitly changing that dependency; ordinary Proton changes belong outside it.
-- No separate workspace conventions or nested project instruction files are needed for the current single-repository layout. Reassess scope if the workspace gains another maintained repository or a distinct subproject.
+- No additional nested instruction files are needed within this repository for its current layout. Reassess if a distinct subproject needs different guidance.
 
 ## Repository Layout And Tooling
 
 - Root `proton-*.sh`: tunnel lifecycle, shared helpers, routing/firewall policy, port allocation and synchronization, and health checks.
 - `install-proton-systemd.sh`, root `*.service`, and `*.conf`: installation, systemd units, and boot-ordering drop-ins.
 - `qbittorrent-compose.common.yml` and `qbittorrent-instances.tsv`: shared container policy and fleet identity manifest.
-- `tools/`: fleet verification and sequential reconciliation.
+- `tools/`: fleet verification, sequential reconciliation, and container bootstrap/recreation.
 - `Archive/`: relocated legacy and maintenance scripts; see `Archive/README.md`. Two archived cleanup scripts still supply installed runtime entrypoints. `Archive/verify_serialized_sync.sh` invokes allocation and sync and can mutate runtime state despite its name.
 - `tests/`: Bats behavioral and contract tests. Existing tests use temporary fixtures and PATH-injected command stubs to isolate host operations.
 - `docs/` and `README.md`: architecture, operator procedures, and historical incident evidence; see the documentation map below.
@@ -108,6 +108,17 @@ Fleet gates:
 sudo /usr/local/bin/proton/proton-qbt-fleet-verify.sh --config
 sudo /usr/local/bin/proton/proton-qbt-fleet-reconcile.sh --recreate
 ```
+
+When containers have been removed and must be bootstrapped, use the installed
+fleet recreate tool instead of raw Docker commands:
+
+```bash
+sudo /usr/local/bin/proton/proton-qbt-fleet-recreate.sh --bootstrap
+```
+
+It restores all five instances sequentially through the live Proton lease and
+Compose synchronizer, then runs runtime verification. It must not be used to
+bypass zombie or persistent `D`-state safety gates.
 
 The `--recreate` command performs final runtime verification. Do not append a separate newline-delimited verifier as a substitute for checking its exit status.
 
