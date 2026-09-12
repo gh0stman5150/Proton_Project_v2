@@ -16,6 +16,11 @@ provenance, systemd recovery, or a kernel fix. Use the sequential source-version
 migration in the [fleet change runbook](docs/runbooks/qbittorrent-fleet-changes.md)
 before treating an existing installation as upgraded.
 
+Source follow-up, 2026-09-12: recreation now rechecks lease freshness before
+replacement startup and success, retries its own recorded stopped container
+after a failed recreation, and bounds complete WireGuard teardown below the
+systemd stop timeout. These changes are source-only and are not deployed.
+
 ## Detailed Documentation
 
 The qBittorrent fleet has dedicated architecture, operations, and incident documentation:
@@ -218,7 +223,7 @@ QBT_PUBLISHED_PORT=<last-applied-port>
 
 Every instance wrapper requires both `QBT_HOST_BIND_IP` and an explicitly injected `QBT_PUBLISHED_PORT`. There is no `0.0.0.0` bind fallback and no automatic torrent-port fallback. A bare `docker compose up` therefore fails safely instead of publishing a stale or WAN-wide port; use the Proton allocator/synchronizer.
 
-With `QBT_RESPECT_MANUAL_STOP=1`, the sync script treats an existing qBittorrent container in `created`, `exited`, `dead`, or `removing` state as intentionally stopped and skips compose recreation. It also treats recent Docker stop or network-disconnect events as a stop in progress for `QBT_MANUAL_STOP_EVENT_GRACE_SECONDS`, so a graceful qBittorrent shutdown is not mistaken for a wedged Web UI. Set `QBT_RESPECT_MANUAL_STOP=0` only if Proton should bring stopped qBittorrent containers back up automatically.
+With `QBT_RESPECT_MANUAL_STOP=1`, the sync script treats an existing qBittorrent container in `created`, `exited`, `dead`, or `removing` state as intentionally stopped and skips compose recreation. The exception is an unchanged `created` or `exited` container recorded as stopped by an unfinished automated recreation; retry still requires a fresh lease and the normal safety gates. A different container ID or stop timestamp invalidates that exception. It also treats recent Docker stop or network-disconnect events as a stop in progress for `QBT_MANUAL_STOP_EVENT_GRACE_SECONDS`, so a graceful qBittorrent shutdown is not mistaken for a wedged Web UI. Set `QBT_RESPECT_MANUAL_STOP=0` only if Proton should bring stopped qBittorrent containers back up automatically.
 
 When the Web UI is unreachable at sync startup, compose-recreate mode attempts one self-heal recreate. Before doing so, it checks the current Docker container state. If the named qBittorrent container is still `running` but Docker reports no published ports, the script logs an error and exits without rewriting the published-port artifact and without running Compose. This protects the host from the qBittorrent/s6 shutdown wedge where the old container still owns the Docker name and each recreate attempt produces a new `<shortid>_qbittorrent-<instance>` orphan.
 

@@ -198,6 +198,22 @@ It defines identity, credentials, Compose project/service, network, apply mode, 
 
 An unchanged lease does not normally recreate the container when the artifact and both Docker mappings match. Stale mappings or an unreachable Web UI can trigger guarded recreation. Forced fleet sync can repair absent port mappings after lifecycle checks, but never bypasses zombie or persistent `D`-state refusal. If the artifact is in the legacy two-key format, the script canonicalizes it to one key without an unnecessary restart.
 
+Source follow-up, 2026-09-12 (not deployed): recreation revalidates the live lease
+immediately before Compose startup and after post-start verification. A lease
+that expires or changes during shutdown cannot authorize replacement startup;
+expiry during startup cannot produce a success report. Previous port artifacts
+remain last-applied metadata, never a fallback lease.
+
+After a successful automated stop, sync atomically writes a mode-0600
+`qbt-recreate.pending` beside its per-instance cache (normally under
+`/run/proton/<instance>`). It records the container ID and Docker `FinishedAt`,
+not credentials or an authoritative port. If Compose fails, the next sync can
+retry that exact stopped container with a fresh lease and normal safety checks.
+Successful Compose startup removes the record. A different ID, a later stop,
+missing identity evidence, or a missing container does not authorize retry; the
+manual-stop policy still applies. Interruption before the record is published
+also requires operator review. Do not manufacture a record to bypass a stop.
+
 ### Routing and lifecycle recovery
 
 The watcher reconciles routes after Docker events and at the end of each bounded
@@ -213,6 +229,14 @@ config, stop using the previous runtime config, and publish a generation only
 after routes and the expected address are established. Failed or interrupted
 starts attempt bounded cleanup of that instance. Teardown failure is not success:
 retain diagnostics and retry caches, and do not proceed with container recreation.
+
+Complete teardown, including configuration reads and lock waits, now has a
+45-second deadline plus a 5-second forced-termination allowance, below the
+unit's 60-second stop limit and the partial-start cleanup deadline. The
+`PROTON_WG_STOP_TIMEOUT_SECONDS` process environment can lower the deadline
+to 1-45 seconds but cannot increase it. A timeout reports failure and leaves
+unfinished retry caches intact. Signals cannot release kernel-blocked tasks;
+the persistent-D-state recovery boundary is unchanged.
 
 Per-instance start/stop never deletes shared main-table or legacy singleton
 rules. Review any legacy rules as a fleet migration before deployment; do not

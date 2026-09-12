@@ -136,7 +136,7 @@ Interpret the `STAT` column:
 - `Z`: zombie; the task exited but its parent/runtime has not reaped it.
 - `D`: uninterruptible sleep, normally waiting in the kernel for I/O. `SIGKILL` remains pending until the task returns from that wait.
 
-A one-snapshot `D` state can be ordinary transient CIFS I/O. Record the LWP/TID and sample it again before classifying a kernel wedge. The automation uses the same rule: it rejects recreation only when the same LWP remains `D` across multiple samples. A kernel oops or Docker kill timeout still requires an immediate mutation freeze while evidence is collected.
+A one-snapshot `D` state can be ordinary transient CIFS I/O. Record the LWP/TID and sample it again before classifying a kernel wedge. The automation uses the same rule: it rejects recreation on the basis of `D` state only when the same LWP remains `D` across multiple samples. A kernel oops or Docker kill timeout still requires an immediate mutation freeze while evidence is collected.
 
 The decisive 2026-08-14 Sonarr pattern was:
 

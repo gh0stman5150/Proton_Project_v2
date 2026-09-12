@@ -124,3 +124,31 @@ EOF
   [ ! -f "$WG_LOG" ]
   [ -f "$STATE_DIR/qbt-container-ip6" ]
 }
+
+@test "the total stop deadline bounds stalled cleanup and preserves retry state" {
+  mkfifo "$TEST_TMPDIR/blocked"
+  export STOP_BLOCKED_FIFO="$TEST_TMPDIR/blocked"
+  cat > "$TMPBIN/ip" <<'EOF'
+#!/usr/bin/env bash
+exec 7<>"$STOP_BLOCKED_FIFO"
+read -r -t 10 -u 7 ignored
+EOF
+  before="$SECONDS"
+  run env PROTON_WG_STOP_TIMEOUT_SECONDS=1 bash ./proton-wg-down-safe.sh sonarr
+  [ "$status" -eq 124 ]
+  [ "$((SECONDS - before))" -lt 8 ]
+  [ ! -f "$WG_LOG" ]
+  [ -f "$STATE_DIR/qbt-container-ip6" ]
+  run flock -n "$PROTON_ROUTE_LOCK_FILE" true
+  [ "$status" -eq 0 ]
+  run flock -n "$STATE_DIR/lifecycle.lock" true
+  [ "$status" -eq 0 ]
+}
+
+@test "stop deadline cannot exceed the systemd and partial-start cleanup budgets" {
+  run env PROTON_WG_STOP_TIMEOUT_SECONDS=46 bash ./proton-wg-down-safe.sh sonarr
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'must be between 1 and 45'* ]]
+  [ ! -s "$IP_LOG" ]
+  grep -Fx 'TimeoutStopSec=60' proton-wg@.service
+}

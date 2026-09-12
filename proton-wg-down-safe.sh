@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${2:-}" != --bounded-stop ]]; then
+	STOP_TIMEOUT_SECONDS="${PROTON_WG_STOP_TIMEOUT_SECONDS:-45}"
+	if [[ ! "$STOP_TIMEOUT_SECONDS" =~ ^[1-9][0-9]?$ ]] || ((STOP_TIMEOUT_SECONDS > 45)); then
+		echo "ERROR: PROTON_WG_STOP_TIMEOUT_SECONDS must be between 1 and 45." >&2
+		exit 1
+	fi
+	exec timeout --kill-after=5s "${STOP_TIMEOUT_SECONDS}s" bash "${BASH_SOURCE[0]}" "${1:-}" --bounded-stop
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-instance-common.sh}"
 if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then

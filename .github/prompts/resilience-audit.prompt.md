@@ -5,6 +5,11 @@ qBittorrent fleet contract. Do not propose anything that conflicts with it
 or upload/seeding limits, do not bypass the lock files under /run/proton, 
 do not touch Archive/ as if it's dead code).
 
+If any referenced file or README.md's "Active Service Path" list is missing,
+or if the referenced documents contradict each other, stop and report the
+discrepancy rather than inferring the intended behavior. AGENTS.md takes
+precedence over README.md and the runbooks.
+
 Goal: find and fix the specific causes of fragility when systemd services 
 restart or qBittorrent containers are recreated, without changing the 
 architecture described in AGENTS.md and README.md.
@@ -46,11 +51,14 @@ anywhere containers get recreated, not just in the one script it was
 originally added to.
 
 ## 4. Extend the existing Bats suite — don't invent a new test framework
+You may add and run isolated Bats tests before my go-ahead; keep host operations
+mocked. Production script and unit edits require my go-ahead under section 5.
 Add cases to tests/ (matching the existing PATH-stub/fixture style already 
 used, e.g. in proton-wg-up.bats) for:
 - A unit restarting while a dependent unit's state file is missing/stale
 - A container recreated directly via Docker, bypassing 
-  proton-qbt-allocate-and-sync.sh, then reconciled by the fleet reconciler
+  proton-qbt-allocate-and-sync.sh, then reconciled by
+  tools/reconcile-qbittorrent-fleet.sh (installed as proton-qbt-fleet-reconcile.sh)
 - Re-running each *-safe.sh entrypoint twice in a row with no state change
 - A killed process leaving a stale lock in /run/proton
 Run `shfmt` and `shellcheck -x` per the CI config before considering any 
@@ -59,6 +67,7 @@ script fixed.
 ## 5. Report before patching
 For each fragility found, tell me: which file, what breaks, why (state 
 location, missing idempotency check, ordering assumption), and the minimal 
-fix — then wait for my go-ahead before editing, since AGENTS.md requires 
-explicit authorization before anything that touches fleet/container 
-recreation behavior.
+fix — then wait for my go-ahead before editing production scripts or units.
+The isolated test additions in section 4 are allowed before that approval.
+Deployment and live fleet/container recreation still require explicit
+authorization under AGENTS.md.

@@ -184,6 +184,22 @@ EOF
   [ "$(cat "$STATE_DIR/proton-port.state")" = existing-lease ]
 }
 
+@test "bring-up replaces a missing generation and discards the previous lease" {
+  run bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  previous_generation="$(cat "$STATE_DIR/tunnel-generation")"
+  printf 'stale-lease\n' > "$STATE_DIR/proton-port.state"
+  rm "$STATE_DIR/tunnel-generation"
+
+  run bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^up ' "$WG_LOG")" -eq 2 ]
+  [ "$(grep -c '^down ' "$WG_LOG")" -eq 1 ]
+  [ -s "$STATE_DIR/tunnel-generation" ]
+  [ "$(cat "$STATE_DIR/tunnel-generation")" != "$previous_generation" ]
+  [ ! -f "$STATE_DIR/proton-port.state" ]
+}
+
 @test "bring-up refuses missing or failed kill switch before tunnel mutation" {
   run env FAIL_KILLSWITCH=1 bash ./proton-wg-up-safe.sh sonarr
   [ "$status" -ne 0 ]
