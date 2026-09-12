@@ -146,3 +146,26 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(stat -c %i "$ROUTE_LOCK_FILE")" = "$inode" ]
 }
+
+@test "a killed firewall-lock holder permits reuse of the same lock inode" {
+  export KILLSWITCH_LOCK_FILE="$TEST_TMPDIR/killswitch.lock"
+  mkfifo "$TEST_TMPDIR/firewall-ready" "$TEST_TMPDIR/firewall-blocked"
+  env TEST_ROOT="$TEST_TMPDIR" bash -c '
+    source ./proton-instance-common.sh
+    hold_firewall() {
+      printf "%s\n" "$BASHPID" > "$TEST_ROOT/firewall-ready"
+      exec 7<>"$TEST_ROOT/firewall-blocked"
+      read -r -t 10 -u 7 ignored
+    }
+    proton_with_firewall_lock hold_firewall
+  ' &
+  parent_pid=$!
+  read -r holder_pid < "$TEST_TMPDIR/firewall-ready"
+  inode="$(stat -c %i "$KILLSWITCH_LOCK_FILE")"
+  kill -KILL "$holder_pid"
+  wait "$parent_pid" || true
+
+  run env PROTON_FIREWALL_LOCK_WAIT_SECONDS=0 bash -c 'source ./proton-instance-common.sh; proton_with_firewall_lock true'
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %i "$KILLSWITCH_LOCK_FILE")" = "$inode" ]
+}

@@ -158,7 +158,7 @@ EOF
   [ ! -s "$STATE_DIR/sonarr/docker-network-watcher.last" ]
 }
 
-@test "all five instances reconcile isolated defaults and owner rules" {
+@test "all five instances reconcile isolated routes after out-of-band container address changes" {
   for instance in lidarr prowlarr radarr sonarr whisparr; do
     case "$instance" in
       lidarr) subnet=2; host=15 ;;
@@ -167,12 +167,18 @@ EOF
       sonarr) subnet=4; host=17 ;;
       whisparr) subnet=5; host=18 ;;
     esac
+    mkdir -p "$STATE_DIR/$instance"
+    printf '192.168.96.%s\n' "$((host + 100))" > "$STATE_DIR/$instance/qbt-container-ip"
+    printf 'fdca:6c19:2096::%s\n' "$((host + 100))" > "$STATE_DIR/$instance/qbt-container-ip6"
     : > "$IP_LOG"
     run bash -c 'source ./proton-docker-network-watcher.sh "$1"; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64' fixture "$instance"
     [ "$status" -eq 0 ]
+    grep -Fx "rule del from 192.168.96.$((host + 100))/32 lookup $((51800 + subnet)) priority $((110 + subnet))" "$IP_LOG"
+    grep -Fx -- "-6 rule del from fdca:6c19:2096::$((host + 100))/128 lookup $((51800 + subnet)) priority $((110 + subnet))" "$IP_LOG"
     grep -Fx "route replace default dev pv$instance table $((51800 + subnet))" "$IP_LOG"
     grep -Fx "rule add from 192.168.96.$host/32 lookup $((51800 + subnet)) priority $((110 + subnet))" "$IP_LOG"
     [ "$(cat "$STATE_DIR/$instance/qbt-container-ip")" = "192.168.96.$host" ]
+    [ "$(cat "$STATE_DIR/$instance/qbt-container-ip6")" = "fdca:6c19:2096::$host" ]
   done
 }
 

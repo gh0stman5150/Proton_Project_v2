@@ -365,6 +365,25 @@ EOF
   [ "$output" = 45678 ]
 }
 
+@test "repeated one-shot renewal preserves generation port and change timestamp" {
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+printf 'Mapped public port 45678 protocol %s lifetime 60\n' "$4"
+EOF
+  run bash ./proton-port-forward-safe.sh sonarr once
+  [ "$status" -eq 0 ]
+  sed -i 's/^PORT_CHANGED_AT=.*/PORT_CHANGED_AT=100/' "$STATE_FILE"
+
+  run bash ./proton-port-forward-safe.sh sonarr once
+  [ "$status" -eq 0 ]
+  grep -Fx 'CURRENT_PORT=45678' "$STATE_FILE"
+  grep -Fx 'LEASE_GENERATION=fixture-generation' "$STATE_FILE"
+  grep -Fx 'PORT_CHANGED_AT=100' "$STATE_FILE"
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -eq 0 ]
+  [ "$output" = 45678 ]
+}
+
 @test "a busy lifecycle or NAT-PMP writer lock prevents publication" {
   rm "$TMPBIN/flock"
   for lock in lifecycle natpmp; do

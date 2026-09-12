@@ -80,6 +80,7 @@ printf '%s\n' "$*" >> "$CURL_LOG"
 case "$*" in
   *'/api/v2/auth/login'*)
     if [[ "${QBT_TEST_LOGIN_FAIL:-}" == "1" ]] ||
+      { [[ "${QBT_TEST_LOGIN_FAIL:-}" == "while-stopped" ]] && [[ "$(cat "${DOCKER_LOG}.status" 2>/dev/null)" == exited ]]; } ||
       { [[ "${QBT_TEST_LOGIN_FAIL:-}" == "until-compose" ]] && ! compgen -G "${DOCKER_LOG}.compose-*.count" >/dev/null; }; then
       printf 'connection refused\n' >&2
       exit 7
@@ -147,6 +148,9 @@ if [[ "$1" == 'compose' ]]; then
   if [[ "$2" == 'stop' ]]; then
 	if [[ "${QBT_TEST_STOP_FAIL:-}" == 1 ]]; then exit 1; fi
 	printf 'exited' > "${DOCKER_LOG}.status"
+    if [[ "${QBT_TEST_EXPIRE_LEASE_ON_STOP:-0}" == 1 ]]; then
+      sed -i 's/^LEASE_EXPIRES_AT=.*/LEASE_EXPIRES_AT=1/' "$STATE_FILE"
+    fi
     exit 0
   fi
 
@@ -177,6 +181,9 @@ if [[ "$1" == 'compose' ]]; then
     printf '%s' "$QBT_PUBLISHED_PORT" > "$DOCKER_PORT_FILE"
   fi
 	printf 'running' > "${DOCKER_LOG}.status"
+  if [[ "${QBT_TEST_EXPIRE_LEASE_ON_UP:-0}" == 1 ]]; then
+    sed -i 's/^LEASE_EXPIRES_AT=.*/LEASE_EXPIRES_AT=1/' "$STATE_FILE"
+  fi
   exit 0
 fi
 if [[ "$1" == 'restart' ]]; then
@@ -188,8 +195,16 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
     echo "${QBT_TEST_CONTAINER_STATUS:-running}"
     exit 0
   fi
+  if [[ "$3" == '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ]]; then
+    printf 'healthy\n'
+    exit 0
+  fi
   if [[ "$3" == '{{.Id}}' ]]; then
     echo "${QBT_TEST_CONTAINER_ID:-123456789abc0000000000000000000000000000000000000000000000000000}"
+    exit 0
+  fi
+  if [[ "$3" == '{{.State.FinishedAt}}' ]]; then
+    printf '%s\n' "${QBT_TEST_FINISHED_AT:-2026-09-12T00:00:00Z}"
     exit 0
   fi
   if [[ "$3" == '{{.HostConfig.NetworkMode}}' ]]; then
@@ -278,7 +293,7 @@ write_lease() {
   printf 'fixture-generation\n' > "${STATE_FILE%/*}/tunnel-generation"
   cat > "$STATE_FILE" <<EOF
 CURRENT_PORT=$1
-CURRENT_IP=10.4.0.2
+CURRENT_IP=${2:-10.4.0.2}
 LEASE_EXPIRES_AT=$(( $(date +%s) + 600 ))
 LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
 LEASE_GENERATION=fixture-generation
@@ -287,18 +302,89 @@ EOF
 
 write_qbt_env() {
   local mode="$1"
+  local container="${2:-qbittorrent}"
   cat > "$ENV_FILE" <<EOF
 QBITTORRENT_URL=http://127.0.0.1:8081
 QBITTORRENT_USER=test-user
 QBITTORRENT_PASS=test-pass
 QBT_PORT_APPLY_MODE=$mode
 QBT_COMPOSE_PROJECT_DIR=$PROJECT_DIR
-QBT_COMPOSE_SERVICE=qbittorrent
+QBT_COMPOSE_SERVICE=$container
 QBT_PORT_ENV_FILE=$PORT_ENV_FILE
-QBT_CONTAINER_NAME=qbittorrent
+QBT_CONTAINER_NAME=$container
 QBT_INTERNAL_PORT=6881
 QBT_NETWORK_NAME=starr
 EOF
+}
+
+@test "fleet reconciliation repairs out-of-band Docker port drift for all five independent leases" {
+  if ! command -v unshare >/dev/null || ! unshare --user --map-root-user true 2>/dev/null; then
+    skip "user namespaces are required for the mocked root-only fleet entrypoint"
+  fi
+  local instance subnet port
+  export FLEET_ORDER_LOG="$TEST_TMPDIR/fleet-order.log"
+  export QBT_INSTANCE_MANIFEST="$PWD/qbittorrent-instances.tsv"
+  export QBT_COMMON_SCRIPT="$PWD/proton-qbittorrent-common.sh"
+  export QBT_FLEET_LOCK_FILE="$TEST_TMPDIR/fleet.lock"
+  export QBT_FLEET_VERIFY_SCRIPT="$TEST_TMPDIR/verify.sh"
+  export QBT_SYNC_SCRIPT="$TEST_TMPDIR/fleet-sync.sh"
+  export TEST_SYNC_SOURCE="$PWD/proton-qbittorrent-sync-safe.sh"
+  cat > "$QBT_FLEET_VERIFY_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+printf 'verify %s\n' "$1" >> "$FLEET_ORDER_LOG"
+EOF
+  cat > "$QBT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+printf 'sync %s force=%s\n' "$1" "$QBT_FORCE_RECREATE" >> "$FLEET_ORDER_LOG"
+exec bash "$TEST_SYNC_SOURCE" "$@"
+EOF
+  chmod +x "$QBT_FLEET_VERIFY_SCRIPT" "$QBT_SYNC_SCRIPT"
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    case "$instance" in
+      lidarr) subnet=2 ;;
+      prowlarr) subnet=6 ;;
+      radarr) subnet=3 ;;
+      sonarr) subnet=4 ;;
+      whisparr) subnet=5 ;;
+    esac
+    port=$((40000 + subnet))
+    ENV_FILE="$PROTON_INSTANCE_ROOT/$instance/qbittorrent.env"
+    PORT_ENV_FILE="$PROTON_INSTANCE_ROOT/$instance/qbittorrent-port.env"
+    PROJECT_DIR="$TEST_TMPDIR/project-$instance"
+    STATE_FILE="$TEST_TMPDIR/state-$instance/proton-port.state"
+    CACHE_FILE="$TEST_TMPDIR/state-$instance/cache"
+    CURL_STATE="$TEST_TMPDIR/state-$instance/listen-port"
+    DOCKER_PORT_FILE="$TEST_TMPDIR/state-$instance/docker-port"
+    DOCKER_LOG="$TEST_TMPDIR/state-$instance/docker.log"
+    mkdir -p "$PROTON_INSTANCE_ROOT/$instance" "$PROJECT_DIR" "${STATE_FILE%/*}"
+    cat > "$PROTON_INSTANCE_ROOT/$instance/proton.env" <<EOF
+WG_ADDRESS_SUBNET=$subnet
+STATE_DIR=${STATE_FILE%/*}
+STATE_FILE=$STATE_FILE
+CACHE_FILE=$CACHE_FILE
+CURL_STATE=$CURL_STATE
+DOCKER_PORT_FILE=$DOCKER_PORT_FILE
+DOCKER_LOG=$DOCKER_LOG
+PORT_ENV_FILE=$PORT_ENV_FILE
+EOF
+    write_qbt_env compose-recreate "qbittorrent-$instance"
+    write_lease "$port" "10.$subnet.0.2"
+    printf 'QBT_PUBLISHED_PORT=%s\n' "$port" > "$PORT_ENV_FILE"
+    printf '%s\n' "$port" > "$CURL_STATE"
+    printf '30000\n' > "$DOCKER_PORT_FILE"
+  done
+
+  run unshare --user --map-root-user env QBT_FLEET_DSTATE_DELAY=0 bash tools/reconcile-qbittorrent-fleet.sh --recreate
+  [ "$status" -eq 0 ]
+  [ "$(head -n 1 "$FLEET_ORDER_LOG")" = 'verify --config' ]
+  [ "$(tail -n 1 "$FLEET_ORDER_LOG")" = 'verify --runtime' ]
+  [ "$(awk '$1 == "sync" {print $2}' "$FLEET_ORDER_LOG" | paste -sd ' ')" = 'lidarr prowlarr radarr sonarr whisparr' ]
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    port="$(awk -F= '$1 == "CURRENT_PORT" {print $2}' "$TEST_TMPDIR/state-$instance/proton-port.state")"
+    grep -Fx "sync $instance force=1" "$FLEET_ORDER_LOG"
+    [ "$(cat "$TEST_TMPDIR/state-$instance/docker-port")" = "$port" ]
+    grep -F "QBT_PUBLISHED_PORT=$port CMD=compose up -d --force-recreate --no-deps qbittorrent-$instance" "$TEST_TMPDIR/state-$instance/docker.log"
+  done
 }
 
 @test "compose-recreate mode skips docker compose when forwarded port is unchanged" {
@@ -307,8 +393,10 @@ EOF
   echo 'QBT_PUBLISHED_PORT=40000' > "$PORT_ENV_FILE"
   printf '40000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
-  [ "$status" -eq 0 ]
+  for ((attempt = 1; attempt <= 2; attempt++)); do
+    run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
+    [ "$status" -eq 0 ]
+  done
   run grep -F 'CMD=compose up ' "$DOCKER_LOG"
   [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
@@ -368,6 +456,36 @@ EOF
   [ "$(awk '/^[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' "$PORT_ENV_FILE")" -eq 1 ]
 }
 
+@test "recreation refuses a lease that expires while Docker stops the old container" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=40001' > "$PORT_ENV_FILE"
+  printf '40001' > "$CURL_STATE"
+  printf '40001' > "$DOCKER_PORT_FILE"
+
+  run env QBT_FORCE_RECREATE=1 QBT_TEST_EXPIRE_LEASE_ON_STOP=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  sync_status="$status"
+  grep -F 'CMD=compose stop ' "$DOCKER_LOG"
+  run grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
+  [ "$sync_status" -ne 0 ]
+}
+
+@test "recreation cannot report success when the lease expires during replacement startup" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+  printf '30000' > "$DOCKER_PORT_FILE"
+
+  run env QBT_TEST_EXPIRE_LEASE_ON_UP=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -ne 0 ]
+  grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  grep -Fx 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+  [ "$(cat "$CACHE_FILE")" = 30000 ]
+  [ ! -f "${CACHE_FILE%/*}/qbt-recreate.pending" ]
+}
+
 @test "failed forced same-port recreation preserves the published-port artifact and cache" {
   write_qbt_env compose-recreate
   write_lease 40001
@@ -411,6 +529,48 @@ EOF
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
   [ "$(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' "$PORT_ENV_FILE")" -eq 1 ]
   ! grep -Fq 'QBT_FORWARDED_PORT=' "$PORT_ENV_FILE"
+}
+
+@test "sync retries its own failed recreation instead of treating it as a manual stop" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_COMPOSE_RECREATE_RETRIES=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -ne 0 ]
+  [ "$(cat "${DOCKER_LOG}.status")" = exited ]
+  [ "$(cat "${DOCKER_LOG}.compose-40001.count")" -eq 1 ]
+  [ -s "${CACHE_FILE%/*}/qbt-recreate.pending" ]
+  [ "$("$REAL_STAT" -c %a "${CACHE_FILE%/*}/qbt-recreate.pending")" = 600 ]
+
+  run env QBT_TEST_LOGIN_FAIL=while-stopped bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$(cat "${DOCKER_LOG}.compose-40001.count")" -eq 2 ]
+  [ "$status" -eq 0 ]
+  [ "$(cat "${DOCKER_LOG}.status")" = running ]
+  [ ! -f "${CACHE_FILE%/*}/qbt-recreate.pending" ]
+}
+
+@test "pending recreation never overrides a later stop or a replacement container" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  for changed_identity in \
+    QBT_TEST_FINISHED_AT=2026-09-12T00:01:00Z \
+    QBT_TEST_CONTAINER_ID=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff; do
+    rm -f "${DOCKER_LOG}.compose-40001.count"
+    run env QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_COMPOSE_RECREATE_RETRIES=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
+    [ "$status" -ne 0 ]
+    [ -s "${CACHE_FILE%/*}/qbt-recreate.pending" ]
+
+    run env "$changed_identity" QBT_TEST_LOGIN_FAIL=while-stopped bash ./proton-qbittorrent-sync-safe.sh sonarr
+    [ "$status" -eq 0 ]
+    [ "$(cat "${DOCKER_LOG}.compose-40001.count")" -eq 1 ]
+    [ "$(cat "${DOCKER_LOG}.status")" = exited ]
+    [ ! -f "${CACHE_FILE%/*}/qbt-recreate.pending" ]
+  done
 }
 
 @test "compose-recreate mode skips self-heal when qBittorrent is manually stopped" {

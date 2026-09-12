@@ -78,6 +78,7 @@ QBT_COMPOSE_PROJECT_DIR="${QBT_COMPOSE_PROJECT_DIR:-}"
 QBT_COMPOSE_SERVICE="${QBT_COMPOSE_SERVICE:-qbittorrent}"
 QBT_CONFIG_DIR="${QBT_CONFIG_DIR:-${QBT_COMPOSE_PROJECT_DIR:+${QBT_COMPOSE_PROJECT_DIR%/}/config}}"
 QBT_SYNC_LOCK_FILE="${QBT_SYNC_LOCK_FILE:-${CACHE_DIR}/qbt-sync.lock}"
+QBT_RECREATE_PENDING_FILE="${CACHE_DIR}/qbt-recreate.pending"
 QBT_COMPOSE_RECREATE_RETRIES="${QBT_COMPOSE_RECREATE_RETRIES:-3}"
 QBT_COMPOSE_RECREATE_RETRY_DELAY="${QBT_COMPOSE_RECREATE_RETRY_DELAY:-5}"
 QBT_RESPECT_MANUAL_STOP="${QBT_RESPECT_MANUAL_STOP:-1}"
@@ -376,8 +377,26 @@ recent_manual_stop_event() {
         '
 }
 
+pending_recreate_identity() {
+	local container_id finished_at
+	container_id="$(docker inspect -f '{{.Id}}' "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}")" || return 1
+	finished_at="$(docker inspect -f '{{.State.FinishedAt}}' "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}")" || return 1
+	[[ "$container_id" =~ ^[a-f0-9]{64}$ && -n "$finished_at" && "$finished_at" != 0001-* ]] || return 1
+	printf '%s|%s\n' "$container_id" "$finished_at"
+}
+
+record_pending_recreate() {
+	local identity temporary
+	identity="$(pending_recreate_identity)" || return 1
+	temporary="$(mktemp "${QBT_RECREATE_PENDING_FILE}.XXXXXX")" || return 1
+	if ! { printf '%s\n' "$identity" >"$temporary" && mv -f "$temporary" "$QBT_RECREATE_PENDING_FILE"; }; then
+		rm -f "$temporary"
+		return 1
+	fi
+}
+
 skip_sync_for_manual_stop() {
-	local status
+	local status identity recorded_identity
 	local container_label="${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}"
 
 	respect_manual_stop_enabled || return 1
@@ -385,6 +404,16 @@ skip_sync_for_manual_stop() {
 	require_compose_mode_ready || return 1
 
 	status="$(compose_container_status || true)"
+	if [[ -f "$QBT_RECREATE_PENDING_FILE" ]]; then
+		if [[ "$status" == exited || "$status" == created ]] &&
+			identity="$(pending_recreate_identity)" &&
+			recorded_identity="$(cat "$QBT_RECREATE_PENDING_FILE")" &&
+			[[ -n "$identity" && "$identity" == "$recorded_identity" ]]; then
+			log "Retrying the stopped container from an unfinished automated recreation"
+			return 1
+		fi
+		rm -f "$QBT_RECREATE_PENDING_FILE"
+	fi
 	case "$status" in
 	created | exited | dead | removing)
 		log "qBittorrent container $container_label is $status; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
@@ -618,16 +647,24 @@ run_compose_recreate() {
 			return 1
 			;;
 		esac
+		if [[ "$stopped_status" != absent ]]; then
+			record_pending_recreate || {
+				rm -f "$output_file"
+				return 1
+			}
+		fi
 		clean_stale_qbt_lock || {
 			rm -f "$output_file"
 			return 1
 		}
 		if (
 			cd "$QBT_COMPOSE_PROJECT_DIR"
+			[[ "$(proton_lease_read)" == "$target_port" ]] || exit 1
 			DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
 				QBT_PUBLISHED_PORT="$target_port" \
 				docker compose up -d --force-recreate --no-deps "$QBT_COMPOSE_SERVICE"
 		) >"$output_file" 2>&1; then
+			rm -f "$QBT_RECREATE_PENDING_FILE"
 			if [[ -s "$output_file" ]]; then
 				cat "$output_file"
 			fi
@@ -687,6 +724,10 @@ recreate_qbt_service_compose() {
 
 	if ! compose_service_publishes_port "$target_port"; then
 		log "ERROR: Docker did not publish qBittorrent TCP/UDP port $target_port after recreating $QBT_COMPOSE_SERVICE (actual: $(compose_published_ports_summary))"
+		return 1
+	fi
+	if [[ "$(proton_lease_read)" != "$target_port" ]]; then
+		log "ERROR: Proton lease changed or expired during recreation; synchronization must retry"
 		return 1
 	fi
 }
