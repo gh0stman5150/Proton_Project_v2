@@ -50,3 +50,8 @@ jobs:
           else
             echo "No tests directory found; skipping BATS."
           fi
+          
+      - name: Check line-ending normalization
+        run: |
+          git add --renormalize .
+          git diff --exit-code
