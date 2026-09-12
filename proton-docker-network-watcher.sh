@@ -398,6 +398,47 @@ refresh_qb_state() {
 	timeout 10s systemctl --no-block start "proton-qbt-allocate@${INSTANCE}.service"
 }
 
+# Decide whether a raw `docker events` line is relevant to THIS instance.
+# Format: "<type>:<action>:<name>" (see the --format string in main()).
+# - network events: Actor name is the network's name. A shared "starr"
+#   network's create/destroy/connect/disconnect can change the CIDR every
+#   instance routes against, so react unless QBT_NETWORK_NAME is set and
+#   this event is for a different network.
+# - container events: Actor name is the container's name. Without scoping,
+#   ANY container starting/stopping/being recreated on the whole host would
+#   wake up every instance's watcher and contend on the shared
+#   policy-routing lock. Only react when it's this instance's own
+#   qBittorrent container (or QBT_CONTAINER_NAME isn't configured, in which
+#   case we can't scope and fall back to the old unscoped behavior).
+event_is_relevant() {
+	local ev="$1" ev_type ev_rest ev_action ev_name
+
+	ev_type="${ev%%:*}"
+	ev_rest="${ev#*:}"
+	ev_action="${ev_rest%%:*}"
+	ev_name="${ev_rest#*:}"
+
+	case "$ev_type" in
+	network)
+		case "$ev_action" in
+		create | destroy | connect | disconnect) ;;
+		*) return 1 ;;
+		esac
+		[[ -z "$QBT_NETWORK_NAME" || "$ev_name" == "$QBT_NETWORK_NAME" ]]
+		;;
+	container)
+		case "$ev_action" in
+		create | start | destroy) ;;
+		*) return 1 ;;
+		esac
+		[[ -z "$QBT_CONTAINER_NAME" || "$ev_name" == "$QBT_CONTAINER_NAME" ]]
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 graceful_shutdown() {
 	log "Shutting down"
 	exit 0
@@ -424,8 +465,7 @@ main() {
 				--filter 'type=network' --filter 'type=container' \
 				--format '{{.Type}}:{{.Action}}:{{.Actor.Attributes.name}}' 2>/dev/null |
 				while IFS= read -r ev; do
-					case "$ev" in
-					*:create:* | *:connect:* | *:disconnect:* | *:start:* | *:destroy:*)
+					if event_is_relevant "$ev"; then
 						log "Docker event: $ev -- waiting ${DEBOUNCE_SECONDS}s"
 						sleep "$DEBOUNCE_SECONDS"
 						cidr=$(find_network_cidr)
@@ -439,9 +479,7 @@ main() {
 							continue
 						fi
 						refresh_qb_state
-						;;
-					*) ;;
-					esac
+					fi
 				done || true
 
 			cidr=$(find_network_cidr)

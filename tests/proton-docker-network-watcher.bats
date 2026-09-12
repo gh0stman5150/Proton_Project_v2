@@ -175,3 +175,40 @@ EOF
     [ "$(cat "$STATE_DIR/$instance/qbt-container-ip")" = "192.168.96.$host" ]
   done
 }
+
+@test "watcher only reacts to its own qBittorrent container, not host-wide container churn" {
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "container:start:qbittorrent-sonarr"'
+  [ "$status" -eq 0 ]
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "container:destroy:qbittorrent-sonarr"'
+  [ "$status" -eq 0 ]
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "container:start:qbittorrent-radarr"'
+  [ "$status" -ne 0 ]
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "container:create:some-unrelated-container"'
+  [ "$status" -ne 0 ]
+}
+
+@test "watcher still reacts to the shared starr network, ignores unrelated networks" {
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "network:connect:starr_network"'
+  [ "$status" -eq 0 ]
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "network:disconnect:starr_network"'
+  [ "$status" -eq 0 ]
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "network:connect:some-other-network"'
+  [ "$status" -ne 0 ]
+}
+
+@test "watcher ignores docker event actions outside the reconciliation set" {
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "container:die:qbittorrent-sonarr"'
+  [ "$status" -ne 0 ]
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; event_is_relevant "network:remove:starr_network"'
+  [ "$status" -ne 0 ]
+}
+
+@test "an instance with no QBT_CONTAINER_NAME configured falls back to the old unscoped behavior" {
+  cat > "$PROTON_INSTANCE_ROOT/radarr/qbittorrent.env" <<EOF
+QBITTORRENT_URL=http://127.0.0.1:8083
+EOF
+  run bash -c 'source ./proton-docker-network-watcher.sh radarr; event_is_relevant "container:start:anything-at-all"'
+  [ "$status" -eq 0 ]
+  run bash -c 'source ./proton-docker-network-watcher.sh radarr; event_is_relevant "network:connect:any-network"'
+  [ "$status" -eq 0 ]
+}
