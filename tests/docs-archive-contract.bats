@@ -75,3 +75,11 @@
   grep -Fq 'Linux 7.1.8 contains later writeback error and `ENOMEM` iteration-state repairs' docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md
   grep -Fq 'The latter changes are relevant but do not prove prevention of this exact `netfs_read_gaps` oops.' docs/runbooks/qbittorrent-wedge-recovery.md
 }
+
+@test "audit documentation distinguishes source fixes from deployment and preserves quarantined profiles" {
+  grep -Fq 'Source status, 2026-09-11:' README.md
+  grep -Fq 'They have not been deployed or verified on live host traffic' README.md
+  grep -Fq 'Its pool config remains in `WG_POOL_DIR` for review.' README.md
+  run grep -E 'rele/establish-agents-md-hierarchyvant|pool config is deleted|start one instance first' README.md install-proton-systemd.sh
+  [ "$status" -eq 1 ]
+}

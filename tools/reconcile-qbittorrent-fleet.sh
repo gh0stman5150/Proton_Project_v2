@@ -86,8 +86,8 @@ fi
 QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-/usr/local/bin/proton/proton-qbittorrent-common.sh}"
 # shellcheck disable=SC1090
 source "$QBT_COMMON_SCRIPT"
-QBT_DSTATE_SAMPLES="$DSTATE_SAMPLES"
-QBT_DSTATE_DELAY="$DSTATE_DELAY"
+export QBT_DSTATE_SAMPLES="$DSTATE_SAMPLES"
+export QBT_DSTATE_DELAY="$DSTATE_DELAY"
 qbt_fleet_preflight "$MANIFEST_FILE"
 
 instances=()

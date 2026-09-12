@@ -155,7 +155,10 @@ acquire_sync_lock() {
 
 acquire_sync_lock
 
-PORT="$(proton_lease_read)" || { log "ERROR: Missing, stale, or invalid Proton lease"; exit 1; }
+PORT="$(proton_lease_read)" || {
+	log "ERROR: Missing, stale, or invalid Proton lease"
+	exit 1
+}
 
 if [[ ! "$PORT" =~ ^[0-9]+$ ]] || ((PORT < 1 || PORT > 65535)); then
 	log "ERROR: Invalid port value: $PORT"
@@ -583,24 +586,42 @@ run_compose_recreate() {
 	local exit_code=0
 	local output_file
 
-	qbt_storage_ready || { log "ERROR: Required writable CIFS leaf is unavailable; refusing recreation"; return 1; }
+	qbt_storage_ready || {
+		log "ERROR: Required writable CIFS leaf is unavailable; refusing recreation"
+		return 1
+	}
 	output_file="$(mktemp)"
 	while ((attempt <= QBT_COMPOSE_RECREATE_RETRIES)); do
-		[[ "$(proton_lease_read)" == "$target_port" ]] || { rm -f "$output_file"; return 1; }
+		[[ "$(proton_lease_read)" == "$target_port" ]] || {
+			rm -f "$output_file"
+			return 1
+		}
 		(
 			cd "$QBT_COMPOSE_PROJECT_DIR"
 			QBT_PUBLISHED_PORT="$target_port" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose stop "$QBT_COMPOSE_SERVICE"
-		) >/dev/null 2>&1 || { rm -f "$output_file"; return 1; }
+		) >/dev/null 2>&1 || {
+			rm -f "$output_file"
+			return 1
+		}
 		local stopped_status
 		stopped_status="$(docker inspect -f '{{.State.Status}}' "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}" 2>/dev/null)" || {
-			qbt_container_safe_for_recreate "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}" 1 || { rm -f "$output_file"; return 1; }
+			qbt_container_safe_for_recreate "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}" 1 || {
+				rm -f "$output_file"
+				return 1
+			}
 			stopped_status=absent
 		}
 		case "$stopped_status" in
 		exited | created | absent) ;;
-		*) rm -f "$output_file"; return 1 ;;
+		*)
+			rm -f "$output_file"
+			return 1
+			;;
 		esac
-		clean_stale_qbt_lock || { rm -f "$output_file"; return 1; }
+		clean_stale_qbt_lock || {
+			rm -f "$output_file"
+			return 1
+		}
 		if (
 			cd "$QBT_COMPOSE_PROJECT_DIR"
 			DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \

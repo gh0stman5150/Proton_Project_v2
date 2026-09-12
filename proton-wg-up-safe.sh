@@ -317,7 +317,10 @@ docker_fallback_vpn_routing_enabled() {
 }
 
 resolve_qbt_container_ip() {
-	if [[ "${QBT_SNAPSHOT_READY:-0}" == 1 ]]; then printf '%s\n' "$QBT_IP_SNAPSHOT"; return; fi
+	if [[ "${QBT_SNAPSHOT_READY:-0}" == 1 ]]; then
+		printf '%s\n' "$QBT_IP_SNAPSHOT"
+		return
+	fi
 	proton_docker_ready || return 1
 	local networks=""
 	local ip=""
@@ -341,7 +344,10 @@ resolve_qbt_container_ip() {
 }
 
 resolve_qbt_container_ipv6() {
-	if [[ "${QBT_SNAPSHOT_READY:-0}" == 1 ]]; then printf '%s\n' "$QBT_IP6_SNAPSHOT"; return; fi
+	if [[ "${QBT_SNAPSHOT_READY:-0}" == 1 ]]; then
+		printf '%s\n' "$QBT_IP6_SNAPSHOT"
+		return
+	fi
 	proton_docker_ready || return 1
 	local networks=""
 	local ip=""
@@ -755,24 +761,24 @@ if [[ "${PROTON_FORCE_RECONNECT:-0}" != 1 && -n "$OLD_RUNTIME_HASH" && "$OLD_RUN
 	KEEP_TUNNEL=1
 fi
 
-if (( ! KEEP_TUNNEL )); then
-LIFECYCLE_CHANGED=1
-rm -f "$STATE_FILE" "${STATE_DIR}/tunnel-generation"
-if [[ " $WIREGUARD_INTERFACES " == *" $PREVIOUS_VPN_INTERFACE "* ]]; then
-	teardown_resolved_dns "$PREVIOUS_VPN_INTERFACE"
-	if [[ -n "$PREVIOUS_WG_CONFIG" && -f "$PREVIOUS_WG_CONFIG" ]]; then
-		run_wg_quick down "$PREVIOUS_WG_CONFIG"
-	else
-		run_wg_quick down "$PREVIOUS_WG_PROFILE"
+if ((!KEEP_TUNNEL)); then
+	LIFECYCLE_CHANGED=1
+	rm -f "$STATE_FILE" "${STATE_DIR}/tunnel-generation"
+	if [[ " $WIREGUARD_INTERFACES " == *" $PREVIOUS_VPN_INTERFACE "* ]]; then
+		teardown_resolved_dns "$PREVIOUS_VPN_INTERFACE"
+		if [[ -n "$PREVIOUS_WG_CONFIG" && -f "$PREVIOUS_WG_CONFIG" ]]; then
+			run_wg_quick down "$PREVIOUS_WG_CONFIG"
+		else
+			run_wg_quick down "$PREVIOUS_WG_PROFILE"
+		fi
 	fi
-fi
 
-mv -f "$WG_CONFIG_TO_USE" "$ACTIVE_CONFIG_PATH"
-WG_CONFIG_TO_USE="$ACTIVE_CONFIG_PATH"
+	mv -f "$WG_CONFIG_TO_USE" "$ACTIVE_CONFIG_PATH"
+	WG_CONFIG_TO_USE="$ACTIVE_CONFIG_PATH"
 
-run_wg_quick up "$WG_CONFIG_TO_USE"
+	run_wg_quick up "$WG_CONFIG_TO_USE"
 
-configure_resolved_dns "$VPN_INTERFACE" "$DNS_SERVERS_CSV"
+	configure_resolved_dns "$VPN_INTERFACE" "$DNS_SERVERS_CSV"
 fi
 
 inject_routes() {
@@ -920,7 +926,7 @@ for _i in $(seq 1 "$WG_UP_WAIT_SECONDS"); do
 	sleep 1
 done
 
-if [[ -z "$IP" || ( -n "${WG_TUNNEL_ADDRESS:-}" && "$IP" != "${WG_TUNNEL_ADDRESS%%/*}" ) ]]; then
+if [[ -z "$IP" || (-n "${WG_TUNNEL_ADDRESS:-}" && "$IP" != "${WG_TUNNEL_ADDRESS%%/*}") ]]; then
 	log "ERROR: $VPN_INTERFACE did not come up with its expected IPv4 address"
 	exit 1
 fi
@@ -929,7 +935,7 @@ log "WireGuard up on $VPN_INTERFACE with IP: $IP"
 persist_docker_network_cidr
 persist_qbt_container_ip "$QBT_IP_SNAPSHOT"
 if ipv6_enabled; then persist_qbt_container_ipv6 "$QBT_IP6_SNAPSHOT"; fi
-if (( ! KEEP_TUNNEL )); then
+if ((!KEEP_TUNNEL)); then
 	umask 077
 	GENERATION_TEMP="$(mktemp "${STATE_DIR}/.generation.XXXXXX")"
 	cat /proc/sys/kernel/random/uuid >"$GENERATION_TEMP"

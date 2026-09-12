@@ -15,6 +15,12 @@ This baseline reflects the August 2026 incident record and remains the required 
 
 ## Start here
 
+The 2026-09-11 source audit adds fresh generation-bound leases, lifecycle and
+firewall serialization, checked selector publication, and recreation safety.
+No installation or live recovery was performed during that work. Follow the
+[fresh-lease migration](runbooks/qbittorrent-fleet-changes.md#fresh-lease-schema-migration)
+and its remaining acceptance gates before deploying the updated bundle.
+
 The [2026-09-10 documentation review](documentation-review-2026-09-10.md)
 records documentation corrections, validation, and remaining onboarding gaps.
 
@@ -48,9 +54,12 @@ sudo /usr/local/bin/proton/proton-qbt-fleet-verify.sh --runtime
 For a shared container/configuration rollout:
 
 ```bash
-cd /usr/local/bin/proton_project &&
-sudo ./install-proton-systemd.sh &&
+sudo /usr/local/bin/proton/proton-qbt-fleet-reconcile.sh --preflight &&
 sudo /usr/local/bin/proton/proton-qbt-fleet-reconcile.sh --recreate
 ```
+
+This assumes the approved bundle is already installed and its instance chains
+have completed any required source-version migration. The installer also changes
+the host kill switch; do not treat installation as a read-only prerequisite.
 
 The reconciler performs final runtime verification itself. Keep dependent commands joined with `&&` so a later verifier cannot mask an earlier failure. The tool refuses unhealthy or zombie members immediately and rejects a persistent same-LWP `D` state after multiple samples; a one-snapshot CIFS wait is allowed to clear.

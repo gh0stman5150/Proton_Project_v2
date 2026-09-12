@@ -88,6 +88,23 @@ EOF
   [[ "$output" == *"http://127.0.0.1:8085"* ]]
 }
 
+@test "instance loader propagates failed env sourcing even in a conditional caller" {
+  for env_file in "$PROTON_COMMON_ENV" "$PROTON_INSTANCE_ROOT/sonarr/proton.env" "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env"; do
+    cp "$env_file" "$TEST_TMPDIR/env-before"
+    printf '\nreturn 17\n' >> "$env_file"
+    run bash -c 'source ./proton-instance-common.sh; if proton_instance_init sonarr; then exit 0; else exit 1; fi'
+    [ "$status" -eq 1 ]
+    cp "$TEST_TMPDIR/env-before" "$env_file"
+  done
+}
+
+@test "instance state directory override precedes derived lease and lock defaults" {
+  printf '\nSTATE_DIR=%s/custom-state\n' "$TEST_TMPDIR" >> "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n" "$STATE_FILE" "$CACHE_FILE" "$QBT_SYNC_LOCK_FILE"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$TEST_TMPDIR/custom-state/proton-port.state"$'\n'"$TEST_TMPDIR/custom-state/qbt-port.cache"$'\n'"$TEST_TMPDIR/custom-state/qbt-sync.lock" ]
+}
+
 @test "instance loader derives a distinct tunnel subnet, DNS, and NAT-PMP gateway" {
   run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n%s\n%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY" "$VPN_TABLE" "$QBT_VPN_RULE_PRIORITY"'
 

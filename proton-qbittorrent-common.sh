@@ -59,7 +59,10 @@ qbt_fleet_preflight() {
 	mkdir -p "${lock_file%/*}" || return 1
 	exec {QBT_FLEET_LOCK_FD}>"$lock_file" || return 1
 	flock -w "${QBT_FLEET_LOCK_WAIT_SECONDS:-30}" "$QBT_FLEET_LOCK_FD" || return 1
-	qbt_storage_ready || { printf 'ERROR: Expected writable cache=none CIFS leaf is unavailable.\n' >&2; return 1; }
+	qbt_storage_ready || {
+		printf 'ERROR: Expected writable cache=none CIFS leaf is unavailable.\n' >&2
+		return 1
+	}
 	[[ "$(awk -F '\t' '!/^#/ && NF { print $1 }' "$manifest" | sort)" == "$(printf '%s\n' lidarr prowlarr radarr sonarr whisparr | sort)" ]] || return 1
 	while IFS=$'\t' read -r instance _; do
 		[[ -n "$instance" && "$instance" != \#* ]] || continue

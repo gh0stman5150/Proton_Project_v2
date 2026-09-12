@@ -70,3 +70,20 @@ EOF
   [ "$status" -ne 0 ]
   [ ! -f "$FLEET_LOG" ]
 }
+
+@test "verifier help does not load runtime helper files" {
+  run env QBT_COMMON_SCRIPT="$TEST_TMPDIR/missing-helper" PROTON_INSTANCE_COMMON_SCRIPT="$TEST_TMPDIR/missing-instance-helper" bash tools/verify-qbittorrent-fleet.sh --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Usage: verify-qbittorrent-fleet.sh'* ]]
+}
+
+@test "verifier requires a Docker executable despite its sourced wrapper function" {
+  local bash_bin dirname_bin
+  bash_bin="$(command -v bash)"
+  dirname_bin="$(command -v dirname)"
+  mkdir -p "$TEST_TMPDIR/minimal-bin"
+  ln -s "$dirname_bin" "$TEST_TMPDIR/minimal-bin/dirname"
+  run env PATH="$TEST_TMPDIR/minimal-bin" "$bash_bin" tools/verify-qbittorrent-fleet.sh --static-only
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Docker Compose is required for verification'* ]]
+}
