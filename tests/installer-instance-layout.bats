@@ -13,6 +13,8 @@
   grep -Fq 'QBT_COMPOSE_COMMON_DIR="/opt/qbittorrent-common"' install-proton-systemd.sh
   grep -Fq 'proton-qbt-fleet-verify.sh' install-proton-systemd.sh
   grep -Fq 'proton-qbt-fleet-reconcile.sh' install-proton-systemd.sh
+  grep -Fq 'proton-qbt-fleet-recreate.sh' install-proton-systemd.sh
+  grep -Fq 'tools/recreate-qbittorrent-fleet.sh' install-proton-systemd.sh
   grep -Fq 'nas-network-online.sh' install-proton-systemd.sh
   grep -Fq 'nas-network-online.service' install-proton-systemd.sh
   grep -Fq 'nas-network-online.mount.conf' install-proton-systemd.sh
