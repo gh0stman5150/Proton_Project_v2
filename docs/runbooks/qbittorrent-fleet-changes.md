@@ -227,8 +227,9 @@ From the repository root:
 
 ```bash
 for script in ./*.sh tools/*.sh Archive/*.sh; do bash -n "$script" || exit; done
-./bats-core/bin/bats tests
-shellcheck ./*.sh tools/*.sh Archive/*.sh
+timeout --kill-after=5s 300s env BATS_TEST_TIMEOUT=30 ./bats-core/bin/bats tests &&
+shellcheck -x ./*.sh tools/*.sh Archive/*.sh &&
+shfmt -d ./*.sh tools/*.sh Archive/*.sh || exit
 git diff --check
 ```
 
@@ -310,6 +311,38 @@ A canary is allowed as an observation step only if the change plan explicitly re
 
 ### 9. Roll out shared Proton/systemd code
 
+#### Fresh-lease schema migration
+
+The 2026-09-11 audit changes are source changes, not evidence of an upgraded
+installation. Old two-field port state is rejected. Never manufacture expiry,
+boot ID, or generation fields from a persistent port artifact.
+
+Before activation, obtain maintenance approval, pass the protected all-five
+preflight, and retain a coherent rollback bundle of helpers, callers, cleanup
+scripts, and units. The installer copies files while templated services remain
+running and restarts the global kill switch. An old loop can invoke newly copied
+helpers, so file copying is itself an operational change, not inert staging.
+Include `proton-instance-common.sh` in firewall copy and rollback bundles.
+
+For each of lidarr, prowlarr, radarr, sonarr, and whisparr, sequentially:
+
+1. Quiesce that instance's healthcheck, watcher, allocator, and lease producer
+  under the approved maintenance plan; confirm their stop jobs completed.
+2. Restart its WireGuard lifecycle with the updated installed bundle. Require
+  successful kill-switch application, routes, and a new tunnel generation.
+3. Start the updated port-forward producer and require matching fresh UDP/TCP
+  lease state for that generation and the current boot. Preserve lock files;
+  lifecycle code, not manual state deletion, owns invalidation.
+4. Restore its watcher and healthcheck coverage, run allocation/sync, and check
+  container health, port parity, and routing before advancing.
+5. Stop on the first failure. Preserve evidence and use the coherent rollback
+  procedure; do not complete only a canary and call the fleet upgraded.
+
+After the fifth member, run full runtime verification and inspect systemd jobs
+and journals. A bounded `systemctl` client or `--no-block` request does not prove
+job completion, and a timeout does not cancel a queued job. Do not repeat a
+restart blindly. Persistent kernel-blocked tasks remain a host recovery boundary.
+
 After deploying route, kill-switch, watcher, port-forward, allocator, or sync code:
 
 1. run `systemctl daemon-reload` if units changed;
@@ -355,6 +388,23 @@ For every instance, require:
 - existing uploads and seeding resume without a new active-upload, seeding, or queueing limit.
 
 Record the deployed revision and validation time.
+
+#### Source validation versus deployment acceptance
+
+Fixture tests and disposable user/network-namespace firewall tests establish
+source behavior only. They do not prove installed checksums, the live systemd
+dependency graph, NAT-PMP server response variants, reconnect traffic isolation,
+DNS leak prevention, or storage health. Those checks require separately approved
+live validation. nft filter/NAT replacement is one transaction; iptables commits
+one table at a time, and raw/MSS updates are serialized command sequences, not a
+cross-table transaction.
+
+Before deployment closure, also qualify aggregate lifecycle deadlines against
+unit limits, short granted lease lifetimes, strict lease field validation, legacy
+shared-rule migration, and sync retry/rollback behavior under injected failure.
+Bootstrap tests must exercise force/manual-stop precedence through the real
+installed configuration load path, not only a stub synchronizer. Passing existing
+source tests alone is not closure of every integration risk.
 
 ## Dynamic Proton port workflow
 

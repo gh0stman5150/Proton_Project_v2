@@ -6,7 +6,15 @@ This repository implements and maintains a host level Proton WireGuard routing d
 
 `AGENTS.md` is the source of truth for this repository. The canonical source checkout is `/usr/local/bin/proton_project`; `/opt/proton_project_work` is a non-authoritative working copy that may be stale.
 
-This README documents the active implementation, runtime behavior, installation flow, and validation steps. If this README and `AGENTS.md` ever differ, follow `AGENTS.md`.
+This README documents the source implementation, intended runtime behavior, installation flow, and validation steps. If this README and `AGENTS.md` ever differ, follow `AGENTS.md`.
+
+Source status, 2026-09-11: the audit fixes cover bootstrap/recreation safety,
+fresh leases and renewal, routing/lifecycle recovery, and selector/firewall
+ownership. They have not been deployed or verified on live host traffic during
+this work. Fixture and isolated network-namespace tests do not establish installed
+provenance, systemd recovery, or a kernel fix. Use the sequential source-version
+migration in the [fleet change runbook](docs/runbooks/qbittorrent-fleet-changes.md)
+before treating an existing installation as upgraded.
 
 ## Detailed Documentation
 
@@ -25,12 +33,12 @@ Shared configuration changes must be implemented once and reconciled across `lid
 The following summarizes the August 2026 incident evidence and required operating baseline. This documentation review did not revalidate live health or current kernel publication channels; use the runtime gates before an operational change.
 
 - `/mnt/data` is an SMB 3.1.1 CIFS mount with active `cache=none`. It is one shared policy for all five qBittorrent clients and all other consumers of that mount.
-- The third oops occurred at 19:05 CDT on 2026-08-17 while the mount still used `cache=strict`; fstab changed at 20:01, and the 20:16 reboot created the first live `cache=none` mount. No recurrence has yet been observed on the fresh mount, but this is containment rather than a demonstrated kernel fix.
+- The third oops occurred at 19:05 CDT on 2026-08-17 while the mount still used `cache=strict`; fstab changed at 20:01, and the 20:16 reboot created the first live `cache=none` mount. The recorded post-reboot checks found no recurrence on the fresh mount; that observation does not establish current health or a demonstrated kernel fix.
 - `mnt-data.mount` and `mnt-plex.mount` require and follow `nas-network-online.service`, which waits for both a route to the NAS and a successful SMB connection on TCP port 445.
 - Docker wants and follows all five Proton WireGuard units. The ordering attempts tunnel activation before Docker; the kill switch and runtime verifier still decide whether application traffic is safe.
 - All five qBittorrent clients passed post-boot runtime verification. Torrent queueing remains disabled, and recovery introduced no active-upload or seeding limit. Shared changes remain sequential so four clients stay available while one is reconciled.
 
-There is no production kernel currently documented as a proven exact fix. Ubuntu `7.0.0-30.30` adds no rele/establish-agents-md-hierarchyvant netfs correction, and `7.0.0-31.31` remains proposed-only. Linux 7.1.8 and 7.2 contain related netfs writeback and exclusion repairs, but they have not been demonstrated against this workload. Keep `cache=none` active and follow the [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) for candidate-kernel qualification.
+There is no production kernel currently documented as a proven exact fix. In the recorded package review, Ubuntu `7.0.0-30.30` adds no relevant netfs correction, and `7.0.0-31.31` remains proposed-only. Linux 7.1.8 and 7.2 contain related netfs writeback and exclusion repairs, but they have not been demonstrated against this workload. Keep `cache=none` active and follow the [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) for candidate-kernel qualification. These are historical findings, not a new check of package publication channels.
 
 ## Required Behavior
 
@@ -78,7 +86,10 @@ The installer’s `SCRIPTS` list and the units’ `ExecStart`/`ExecStop` fields 
 
 The kill switch dispatcher defaults to `KILLSWITCH_BACKEND=auto`. It prefers `nftables` when `nft` is available and falls back to `iptables` otherwise.
 
-`proton-docker-watch@INSTANCE.service` is optional. See the Optional Docker Network Watcher section for when to enable it.
+The installer treats `proton-docker-watch@INSTANCE.service` as opt-in. For this
+five-instance fleet, enable all five watchers: Docker recreation can change
+container addresses outside the synchronizer. See the Docker Network Watcher
+section for event and periodic reconciliation behavior.
 
 Do not rename, consolidate, or remove any script listed here without explicit instruction.
 
@@ -257,7 +268,9 @@ After installation, run the protected fleet preflight and explicitly restart/rec
 
 Configure credentials in each protected instance file as described above. Do not use installer command-line password arguments for normal fleet setup.
 
-After the base install, you may optionally enable `proton-docker-watch@INSTANCE.service` if your Docker network CIDR or qBittorrent container IP can change over time.
+After the base install, include all five `proton-docker-watch@INSTANCE.service`
+units in the approved sequential fleet activation. File installation alone does
+not enable those watchers or upgrade running producer loops.
 
 ## Upgrade and Redeploy
 
@@ -290,6 +303,17 @@ Do not store live state files in the repository.
 
 State under `/run/proton` must be treated as runtime data only and must be recreated safely across service restart, VPN reconnect, and host reboot events.
 
+Port state is usable only with a valid port, expected tunnel address, unexpired
+lease, current boot ID, and matching `tunnel-generation`. The producer publishes
+atomically only after matching UDP/TCP mappings and uses the shortest granted
+lifetime. Two-field legacy state and persistent port artifacts are not fresh
+leases. Slow bounded sync runs separately from renewal; allocator commands share
+one overall deadline. See the [lease schema and timing contract](docs/runbooks/qbittorrent-port-sync.md#live-proton-lease).
+
+Keep lifecycle, route, firewall, selector, and NAT-PMP lock paths intact. File
+existence is not lock ownership; never unlink a lock to force progress. Selector
+state errors abort publication, and failed firewall inspection is not absence.
+
 ## Server Pool and Latency Selection
 
 If `/etc/wireguard/proton-pool` contains one or more `*.conf` files, the active path treats that directory as a rotation pool. Reconnect or bad node recovery may select the lowest latency candidate by probing the endpoint IP from each config.
@@ -304,15 +328,18 @@ When `PORT_FORWARD_REQUIRED=on`, the pool also learns which profiles have actual
 
 `port-forward incapable` remains a hard exclusion until the profile is proven again or the incapable state is reset. When the proven-good set is non-empty, the selector prefers those proven-good nodes first. If every proven-good node is temporarily cooling down or otherwise unavailable, the selector can temporarily widen to healthy unproven nodes instead of immediately recycling a cooling-down proven-good node.
 
-### Transient failures versus eviction
+### Transient failures versus quarantine
 
 The port-forward loop distinguishes a temporary NAT-PMP hiccup from a genuinely port-forward incapable server:
 
 1. When a **proven-good** server (one already in `PF_CAPABLE_PROFILES_FILE`) hits `MAX_FAILURES`, the failure is treated as transient. The tunnel is kept and retried in place so the forwarded port stays stable and qBittorrent's published port -- and therefore its container -- is not recreated. Only after `PROVEN_TRANSIENT_MAX_KEEPS` consecutive transient windows without a successful port does it fall back to a full reconnect.
 2. When an **unproven** server hits `MAX_FAILURES`, the port-forward loop records a consecutive incapability strike via `proton-server-manager.sh mark-incapable-attempt` and reconnects to a different server. Strikes accumulate in `/run/proton/pf-incapable-strikes.tsv` and reset the instant the server proves it can forward a port (`mark-capable`).
-3. Once an unproven server accumulates `PF_INCAPABLE_STRIKE_THRESHOLD` consecutive strikes (default 3), the server manager evicts it: it is written to `PF_INCAPABLE_PROFILES_FILE` and its pool config is deleted from `WG_POOL_DIR`. A proven-good server is never evicted this way; it is only cooled down.
+3. Once an unproven server accumulates `PF_INCAPABLE_STRIKE_THRESHOLD` consecutive strikes (default 3), the server manager quarantines it in `PF_INCAPABLE_PROFILES_FILE`. Its pool config remains in `WG_POOL_DIR` for review. A proven-good server is not quarantined by transient strikes; it is only cooled down.
 
-This keeps a working server (and its forwarded port) stable across brief Proton hiccups while still permanently removing servers that genuinely cannot forward a port.
+This avoids unnecessary rotation during transient failures without deleting
+operator-managed pool configurations. Claims reserve profiles, not endpoint IPs
+or numeric ports. Interrupted selection publication may retain a conservative
+claim until retry or expiry; do not bypass it by deleting shared state.
 
 The port-forward service must be able to write both `/etc/proton` for the learned PF-capable/incapable lists and the directory containing `QBT_PORT_ENV_FILE` for Compose port-artifact updates.
 
@@ -444,7 +471,7 @@ sudo /usr/local/bin/proton/proton-ipv6-rollout.sh deactivate-canary sonarr
 
 Tunnel-canary activation does not enable Docker IPv6. Source code includes nftables IPv6 enforcement and Docker IPv6 policy routing, but network recreation and live VPN-drop validation still require an approved maintenance procedure. The IPv4 NAT-PMP and qBittorrent published-port path remains unchanged.
 
-The kill-switch scripts understand an optional `DOCKER_NETWORK_CIDR6`. When it is empty, their live behavior remains IPv4-only. When it is set, the nftables backend installs IPv6 Docker-local rules, accepts Docker IPv6 only through active Proton interfaces, drops every other packet sourced from or destined to the Docker IPv6 subnet, and applies NAT66 only to that subnet on Proton interfaces. The iptables backend refuses to apply when `DOCKER_NETWORK_CIDR6` is set.
+The kill-switch scripts understand an optional `DOCKER_NETWORK_CIDR6`. When it is empty, their behavior remains IPv4-only. When it is set, the nftables backend installs IPv6 Docker-local rules, accepts Docker IPv6 only through the five managed Proton interface names and any explicitly configured legacy interface, drops every other packet sourced from or destined to the Docker IPv6 subnet, and applies NAT66 only to that subnet on those interfaces. Rules may be installed before the interfaces exist; unrelated WireGuard interfaces are not implicitly trusted. The iptables backend refuses to apply when `DOCKER_NETWORK_CIDR6` is set.
 
 Do not populate `DOCKER_NETWORK_CIDR6` until all of these maintenance-window prerequisites are ready:
 
@@ -625,7 +652,7 @@ ip rule show
 ip route show table 51806
 ```
 
-## Optional Docker Network Watcher
+## Docker Network Watcher
 
 If qBittorrent or other Docker hosted application services run on a bridged Docker network and routing depends on Docker network CIDR or container IP discovery, enable the per-instance watcher service to keep routing and DNAT in sync with Docker events.
 
@@ -635,13 +662,13 @@ The watcher listens for Docker network and container events and can:
 2. Reapply the Docker kill-switch state after Docker restarts or network changes
 3. Refresh qBittorrent port state so compose-recreate or legacy-DNAT mode stays in sync
 
-Install and start the watcher:
+After approved installation and the fleet preflight, enable watchers sequentially
+for all five instances as part of the fleet activation:
 
 ```bash
-cd /usr/local/bin/proton_project &&
-sudo ./install-proton-systemd.sh &&
-sudo systemctl enable --now proton-docker-watch@prowlarr.service &&
-sudo journalctl -fu proton-docker-watch@prowlarr.service
+for instance in lidarr prowlarr radarr sonarr whisparr; do
+  sudo systemctl enable --now "proton-docker-watch@${instance}.service" || exit
+done
 ```
 
 Verify watcher behavior:
@@ -652,11 +679,10 @@ ip route show table 51806
 sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
 ```
 
-Disable the watcher if not needed:
-
-```bash
-sudo systemctl disable --now proton-docker-watch@prowlarr.service
-```
+The watcher also reconciles periodically when no event arrives. Disabling it
+removes out-of-band Docker address recovery; do not omit it from this fleet's
+steady-state service coverage. A successful start is not a routing acceptance
+test: verify all five instances using the fleet change runbook.
 
 ## Archive Analysis Requirement
 
@@ -705,8 +731,9 @@ When evaluating or changing this repository:
 Run from `/usr/local/bin/proton_project`:
 
 ```bash
-./bats-core/bin/bats tests
-shellcheck ./*.sh tools/*.sh Archive/*.sh
+timeout --kill-after=5s 300s env BATS_TEST_TIMEOUT=30 ./bats-core/bin/bats tests &&
+shellcheck -x ./*.sh tools/*.sh Archive/*.sh &&
+shfmt -d ./*.sh tools/*.sh Archive/*.sh || exit
 for script in ./*.sh tools/*.sh Archive/*.sh; do bash -n "$script" || exit; done
 git diff --check
 ```

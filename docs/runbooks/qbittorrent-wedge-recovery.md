@@ -239,18 +239,23 @@ df -hT /mnt/data
 
 For the current fleet baseline, the live CIFS leaf must report `cache=none`. The third oops occurred at 19:05 CDT on 2026-08-17 under `cache=strict`; fstab changed at 20:01, and the 20:16 reboot created the first live `cache=none` mount. Do not attribute that oops to the mitigation.
 
-Perform a bounded write/read/delete test in an operator-approved scratch directory on the actual mounted share:
+Perform a timeout-wrapped write/read/delete test in a new operator-approved
+scratch directory on the actual mounted share:
 
 ```bash
-test_dir=/mnt/data/.proton-qbt-recovery-check
-sudo install -d -m 0755 "$test_dir" &&
-printf 'qbt-recovery %s\n' "$(date --iso-8601=seconds)" | sudo tee "$test_dir/probe" >/dev/null &&
-sudo cat "$test_dir/probe" &&
-sudo rm "$test_dir/probe" &&
-sudo rmdir "$test_dir"
+test_dir="$(sudo timeout --kill-after=5s 15s mktemp -d /mnt/data/.proton-qbt-recovery-check.XXXXXX)" &&
+printf 'qbt-recovery %s\n' "$(date --iso-8601=seconds)" | sudo timeout --kill-after=5s 15s tee "$test_dir/probe" >/dev/null &&
+sudo timeout --kill-after=5s 15s cat "$test_dir/probe" &&
+sudo timeout --kill-after=5s 15s rm -- "$test_dir/probe" &&
+sudo timeout --kill-after=5s 15s rmdir -- "$test_dir"
 ```
 
 The two delete commands above target only the explicit scratch objects created by this procedure. Stop if the leaf mount is missing, unexpectedly local, read-only, stale, or returns an I/O error. Do not start torrents onto the host filesystem beneath an absent mount.
+
+Timeout signals cannot repair or reliably terminate kernel-blocked I/O. If the
+probe stalls or times out, preserve its path and task evidence; do not retry it
+or force cleanup. A successful probe is a point-in-time check, not proof that the
+kernel defect is fixed.
 
 Inspect the new boot for immediate storage/kernel faults:
 
@@ -305,6 +310,12 @@ It must prove:
 - per-instance identity, path, table, priority, URL, and service name match the manifest.
 
 ## Phase 5: restart Proton instances sequentially
+
+This phase restores approved inactive chains at the existing fleet version.
+For a shared source upgrade, including migration from legacy port state to
+generation-bound leases, use the all-five sequential migration in the
+[fleet change runbook](qbittorrent-fleet-changes.md#fresh-lease-schema-migration).
+Do not mistake a single recovered chain for completion of a shared upgrade.
 
 Normal boot now orders Docker after all five Proton WireGuard activation attempts, while both NAS mount units wait for the route-and-SMB readiness service. First inspect the units that systemd already started. Do not restart a healthy chain merely to reproduce the sequence.
 

@@ -325,6 +325,21 @@ Use the detailed procedure in `docs/runbooks/qbittorrent-wedge-recovery.md`.
 
 ## Remaining risk and prevention
 
+### Source audit update, 2026-09-11
+
+The canonical source now includes generation/boot/expiry-bound leases, isolated
+bootstrap configuration, checked lifecycle recovery and Docker reconciliation,
+claim-first selector publication, and shared firewall ownership guards.
+Quarantine retains pool configurations. Cleanup/reset preserves foreign NAT and
+DNAT rules; nft changes are transactional and iptables changes commit per table.
+
+Validation used fixtures and disposable unprivileged network namespaces, not
+production networking. No deployment, reboot, container recreation, storage
+change, or new recurrence observation was performed. The August recovery
+evidence and kernel closure work above remain unchanged. See the
+[fleet migration and acceptance gates](../runbooks/qbittorrent-fleet-changes.md#fresh-lease-schema-migration)
+for activation, rollback, and integration risks still requiring qualification.
+
 ### Kernel risk
 
 The installed Ubuntu `7.0.0-29.29` kernel reproduced the signature three times even though Ubuntu's advisory marks an earlier package fixed. The host's local APT metadata still offered `-29` during the incident follow-up, while Launchpad now publishes `7.0.0-30.30` in updates. The `-30` changelog adds an unrelated Open vSwitch CVE fix and no relevant netfs correction. `7.0.0-31.31` remains proposed-only; it incorporates upstream stable changes through Linux 7.1.4, but neither its channel nor its changelog demonstrates a fix for this incident. Do not install or recommend `-31` as a production repair on that basis.

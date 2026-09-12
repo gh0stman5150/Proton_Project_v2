@@ -227,8 +227,14 @@ save_state() {
 		echo "LEASE_BOOT_ID=$boot"
 		echo "LEASE_GENERATION=$generation"
 		echo "PORT_CHANGED_AT=$changed"
-	} >"$temporary" || { rm -f "$temporary"; return 1; }
-	mv -f "$temporary" "$STATE_FILE" || { rm -f "$temporary"; return 1; }
+	} >"$temporary" || {
+		rm -f "$temporary"
+		return 1
+	}
+	mv -f "$temporary" "$STATE_FILE" || {
+		rm -f "$temporary"
+		return 1
+	}
 }
 
 load_state_port() {

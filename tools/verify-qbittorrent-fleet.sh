@@ -17,11 +17,7 @@ else
 	DEFAULT_QBT_COMMON_SCRIPT="${PROJECT_DIR}/proton-qbittorrent-common.sh"
 fi
 QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-$DEFAULT_QBT_COMMON_SCRIPT}"
-# shellcheck disable=SC1090
-source "$QBT_COMMON_SCRIPT" || exit 1
 INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${QBT_COMMON_SCRIPT%/*}/proton-instance-common.sh}"
-# shellcheck disable=SC1090
-source "$INSTANCE_COMMON_SCRIPT" || exit 1
 CHECK_CONFIG=0
 CHECK_RUNTIME=0
 ERRORS=0
@@ -57,6 +53,11 @@ case "${1:---static-only}" in
 	exit 2
 	;;
 esac
+
+# shellcheck disable=SC1090
+source "$INSTANCE_COMMON_SCRIPT" || exit 1
+# shellcheck disable=SC1090
+source "$QBT_COMMON_SCRIPT" || exit 1
 
 pass() {
 	printf 'PASS: %s\n' "$*"
@@ -113,12 +114,18 @@ runtime_qbt_listen_port() {
 	)
 }
 
+if ! type -P docker >/dev/null 2>&1; then
+	fail "Docker Compose is required for verification"
+	exit 1
+fi
 if [[ ! -r "$MANIFEST_FILE" ]]; then
 	fail "instance manifest is missing or unreadable: $MANIFEST_FILE"
 	exit 1
 fi
-[[ "$(awk -F '\t' '!/^#/ && NF {print $1}' "$MANIFEST_FILE" | sort)" == "$(printf '%s\n' lidarr prowlarr radarr sonarr whisparr | sort)" ]] || { fail "manifest must contain each managed instance exactly once"; exit 1; }
-command -v docker >/dev/null 2>&1 || { fail "Docker Compose is required for verification"; exit 1; }
+[[ "$(awk -F '\t' '!/^#/ && NF {print $1}' "$MANIFEST_FILE" | sort)" == "$(printf '%s\n' lidarr prowlarr radarr sonarr whisparr | sort)" ]] || {
+	fail "manifest must contain each managed instance exactly once"
+	exit 1
+}
 if [[ ! -r "$COMMON_COMPOSE_FILE" ]]; then
 	fail "shared Compose policy is missing or unreadable: $COMMON_COMPOSE_FILE"
 fi

@@ -17,11 +17,26 @@ proton_lease_read() {
 	[[ -r "$file" ]] || return 1
 	while IFS='=' read -r key value; do
 		case "$key" in
-		CURRENT_PORT) port="$value"; count=$((count + 1)) ;;
-		CURRENT_IP) address="$value"; count=$((count + 1)) ;;
-		LEASE_EXPIRES_AT) expires="$value"; count=$((count + 1)) ;;
-		LEASE_BOOT_ID) boot="$value"; count=$((count + 1)) ;;
-		LEASE_GENERATION) lease_generation="$value"; count=$((count + 1)) ;;
+		CURRENT_PORT)
+			port="$value"
+			count=$((count + 1))
+			;;
+		CURRENT_IP)
+			address="$value"
+			count=$((count + 1))
+			;;
+		LEASE_EXPIRES_AT)
+			expires="$value"
+			count=$((count + 1))
+			;;
+		LEASE_BOOT_ID)
+			boot="$value"
+			count=$((count + 1))
+			;;
+		LEASE_GENERATION)
+			lease_generation="$value"
+			count=$((count + 1))
+			;;
 		esac
 	done <"$file"
 	[[ "$count" == 5 && "$port" =~ ^[1-9][0-9]{0,4}$ && "$expires" =~ ^[1-9][0-9]{0,10}$ ]] || return 1
@@ -222,7 +237,10 @@ proton_replace_ip_rule() {
 
 proton_persist_route_state() (
 	local file="$1" value="$2" temporary
-	if [[ -z "$value" ]]; then rm -f "$file"; return; fi
+	if [[ -z "$value" ]]; then
+		rm -f "$file"
+		return
+	fi
 	umask 077
 	temporary="$(mktemp "${file}.XXXXXX")" || return 1
 	trap 'rm -f "$temporary"' EXIT
@@ -426,22 +444,22 @@ proton_instance_init() {
 
 	export INSTANCE PROTON_INSTANCE_ROOT INSTANCE_DIR INSTANCE_PROTON_ENV
 
-	proton_source_env_if_present "$PROTON_COMMON_ENV"
+	proton_source_env_if_present "$PROTON_COMMON_ENV" || return 1
 	if [[ -n "$role_env" ]]; then
-		proton_source_env_if_present "$role_env"
+		proton_source_env_if_present "$role_env" || return 1
 	fi
-
-	proton_rebase_legacy_runtime_paths
 
 	proton_require_env_file "$INSTANCE_PROTON_ENV" "Instance Proton env"
 	# shellcheck disable=SC1090
-	source "$INSTANCE_PROTON_ENV"
+	source "$INSTANCE_PROTON_ENV" || return 1
 
-	proton_rebase_legacy_runtime_paths
+	if [[ -z "${QBITTORRENT_ENV_FILE:-}" || "$QBITTORRENT_ENV_FILE" == /etc/proton/qbittorrent.env ]]; then
+		QBITTORRENT_ENV_FILE="${INSTANCE_DIR}/qbittorrent.env"
+	fi
 	proton_require_env_file "$QBITTORRENT_ENV_FILE" "Instance qBittorrent env"
 	proton_require_secure_real_env_file "$QBITTORRENT_ENV_FILE"
 	# shellcheck disable=SC1090
-	source "$QBITTORRENT_ENV_FILE"
+	source "$QBITTORRENT_ENV_FILE" || return 1
 
 	proton_rebase_legacy_runtime_paths
 	proton_apply_tunnel_subnet

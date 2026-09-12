@@ -4,7 +4,8 @@ setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
   mkdir -p "$TMPBIN"
-  export REAL_STAT="$(command -v stat)"
+  REAL_STAT="$(command -v stat)"
+  export REAL_STAT
   export PATH="$TMPBIN:$PATH"
   export STATE_FILE="$TEST_TMPDIR/proton-port.state"
   export CACHE_FILE="$TEST_TMPDIR/qbt-port.cache"
@@ -308,7 +309,8 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
-  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  run grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
 }
 
@@ -326,7 +328,8 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(awk '/^[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' "$PORT_ENV_FILE")" -eq 1 ]
   grep -Fxq 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
-  ! grep -Fq 'QBT_FORWARDED_PORT=' "$PORT_ENV_FILE"
+  run grep -Fq 'QBT_FORWARDED_PORT=' "$PORT_ENV_FILE"
+  [ "$status" -eq 1 ]
   ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
 }
 
@@ -418,7 +421,8 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=exited bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
-  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  run grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
@@ -430,7 +434,8 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running QBT_TEST_RECENT_MANUAL_STOP_EVENT=network bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
-  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  run grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
@@ -453,7 +458,8 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running QBT_TEST_DOCKER_NO_PORTS=1 QBT_TEST_DOCKER_ZOMBIE=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 1 ]
-  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  run grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
@@ -477,7 +483,8 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running QBT_TEST_DOCKER_ZOMBIE=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 1 ]
-  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  run grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
@@ -489,7 +496,8 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running QBT_TEST_DOCKER_DSTATE=1 QBT_DSTATE_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 1 ]
-  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  run grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
@@ -525,7 +533,8 @@ EOF
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=always QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
-  ! grep -F 'QBT_PUBLISHED_PORT=30000 CMD=compose up' "$DOCKER_LOG"
+  run grep -F 'QBT_PUBLISHED_PORT=30000 CMD=compose up' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
   [[ "$(cat "$CURL_STATE")" == "40001" ]]
 }
 

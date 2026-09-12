@@ -856,7 +856,10 @@ reset_bad_servers() {
 
 mkdir -p "${SERVER_SELECT_LOCK_FILE%/*}"
 exec 209>"$SERVER_SELECT_LOCK_FILE"
-flock -w "${SERVER_SELECT_LOCK_WAIT_SECONDS:-30}" 209 || { log "ERROR: Server-state lock unavailable"; exit 1; }
+flock -w "${SERVER_SELECT_LOCK_WAIT_SECONDS:-30}" 209 || {
+	log "ERROR: Server-state lock unavailable"
+	exit 1
+}
 selection_deadline=$((SECONDS + ${SERVER_SELECTION_BUDGET_SECONDS:-20}))
 
 case "${1:-select}" in
