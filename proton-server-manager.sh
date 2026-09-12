@@ -57,7 +57,7 @@ require_command() {
 require_common_tools() {
 	local cmd
 
-	for cmd in awk chmod date grep mkdir mv paste rm systemd-cat tr; do
+	for cmd in awk chmod date flock grep mkdir mktemp mv paste rm systemd-cat timeout tr; do
 		require_command "$cmd"
 	done
 }
@@ -102,7 +102,8 @@ ensure_parent_directory() {
 profile_state_tmp_file() {
 	local file="$1"
 
-	printf '%s/.%s.tmp\n' "$STATE_DIR" "${file##*/}"
+	ensure_parent_directory "$file"
+	mktemp "${file%/*}/.${file##*/}.XXXXXX"
 }
 
 port_forward_required() {
@@ -543,10 +544,9 @@ mark_incapable_attempt() {
 		remove_claim_for_profile "$profile" || true
 		remove_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile"
 		write_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile" "$reason" "strikes=${PF_INCAPABLE_STRIKE_THRESHOLD}"
-		delete_pool_config "$profile"
 		: >"$SERVER_RESELECT_FILE"
 		chmod 600 "$SERVER_RESELECT_FILE"
-		log "Evicted server $profile after ${PF_INCAPABLE_STRIKE_THRESHOLD} consecutive port-forward failures ($reason); added to the incapable list and deleted its pool config"
+		log "Quarantined server $profile after ${PF_INCAPABLE_STRIKE_THRESHOLD} consecutive port-forward failures ($reason); pool config retained"
 	else
 		set_incapable_strike_count "$profile" "$strikes"
 		mark_server_bad "$profile" "$reason"
@@ -578,13 +578,13 @@ resolve_endpoint_ip() {
 		return 0
 	fi
 
-	getent ahostsv4 "$host" | awk 'NR == 1 {print $1}'
+	timeout 5s getent ahostsv4 "$host" | awk 'NR == 1 {print $1}'
 }
 
 cleanup_bad_servers() {
 	local now tmp_file
 	now="$(date +%s)"
-	tmp_file="${STATE_DIR}/bad-servers.tmp"
+	tmp_file="$(profile_state_tmp_file "$BAD_SERVER_FILE")"
 
 	if [[ -f "$BAD_SERVER_FILE" ]]; then
 		awk -F '\t' -v now="$now" 'NF >= 2 && $2 > now {print $0}' "$BAD_SERVER_FILE" >"$tmp_file"
@@ -630,8 +630,10 @@ save_selection() {
 	local endpoint_ip="$4"
 	local endpoint_port="$5"
 	local latency_ms="$6"
+	local temporary
 
 	umask 077
+	temporary="$(profile_state_tmp_file "$SERVER_SELECTION_FILE")"
 	{
 		echo "SELECTED_WG_PROFILE=$profile"
 		echo "SELECTED_VPN_INTERFACE=$profile"
@@ -641,7 +643,8 @@ save_selection() {
 		echo "SELECTED_ENDPOINT_PORT=$endpoint_port"
 		echo "SELECTED_LATENCY_MS=$latency_ms"
 		echo "SELECTED_AT=$(date +%s)"
-	} >"$SERVER_SELECTION_FILE"
+	} >"$temporary"
+	mv -f "$temporary" "$SERVER_SELECTION_FILE"
 }
 
 select_best_server() {
@@ -672,9 +675,9 @@ select_best_server() {
 
 	# Build a short-lived snapshot of active selections from other instances so
 	# the selector will avoid choosing a profile or endpoint already in use.
-	active_snapshot_temp="$(profile_state_tmp_file /run/proton/active-selections)"
+	active_snapshot_temp="$(profile_state_tmp_file "${STATE_DIR}/active-selections")"
 	: >"$active_snapshot_temp"
-	for sel in /run/proton/*/current-server.env; do
+	for sel in "${PROTON_RUNTIME_ROOT:-/run/proton}"/*/current-server.env; do
 		[[ -f "$sel" ]] || continue
 		sel_inst="$(basename "$(dirname "$sel")")"
 		# skip our own instance selection file
@@ -692,6 +695,7 @@ select_best_server() {
 
 	while IFS= read -r config; do
 		local profile endpoint_host endpoint_ip endpoint_port latency_ms
+		((SECONDS < selection_deadline)) || break
 
 		[[ -f "$config" ]] || continue
 		profile="$(config_profile "$config")"
@@ -711,7 +715,7 @@ select_best_server() {
 
 		# If another instance already has this profile selected, skip it.
 		if [[ -f "$active_snapshot_temp" ]]; then
-			if awk -v p="$profile" '$1=="P" && $2==p { exit 0 } END { exit 1 }' "$active_snapshot_temp"; then
+			if awk -v profile="$profile" '$1=="P" && $2==profile { found=1 } END { exit !found }' "$active_snapshot_temp"; then
 				log "Skipping $profile because it is currently selected by another instance (active snapshot)"
 				continue
 			fi
@@ -731,33 +735,6 @@ select_best_server() {
 		if [[ -z "$endpoint_host" || -z "$endpoint_port" || -z "$endpoint_ip" ]]; then
 			log "Skipping $profile because its endpoint could not be resolved"
 			continue
-		fi
-
-		# If another instance currently uses the same endpoint IP, skip this profile.
-		if [[ -f "$active_snapshot_temp" ]]; then
-			if awk -v ip="$endpoint_ip" '$1=="E" && $2==ip { exit 0 } END { exit 1 }' "$active_snapshot_temp"; then
-				log "Skipping $profile because its endpoint $endpoint_ip is currently in use by another instance (active snapshot)"
-				continue
-			fi
-		fi
-
-		# If this profile is associated with a known forwarded port, ensure
-		# that port is not already claimed by another instance. If no port
-		# is known, fall back to guarding the endpoint IP so multiple
-		# instances don't pick the same backend server.
-		candidate_port="$(get_profile_forward_port "$profile" || true)"
-		if [[ -n "$candidate_port" ]]; then
-			claimer="$(port_claimed_by "$candidate_port" || true)"
-			if [[ -n "$claimer" && "$claimer" != "$instance_name" ]]; then
-				log "Skipping $profile because forwarded port $candidate_port is claimed by $claimer"
-				continue
-			fi
-		else
-			claimer_ip="$(endpoint_claimed_by "$endpoint_ip" || true)"
-			if [[ -n "$claimer_ip" && "$claimer_ip" != "$instance_name" ]]; then
-				log "Skipping $profile because its endpoint $endpoint_ip is claimed by $claimer_ip"
-				continue
-			fi
 		fi
 
 		latency_ms="$(measure_latency_ms "$endpoint_ip" || true)"
@@ -871,7 +848,7 @@ mark_server_bad() {
 
 	now="$(date +%s)"
 	expiry="$((now + BAD_SERVER_COOLDOWN))"
-	tmp_file="${STATE_DIR}/bad-servers.tmp"
+	tmp_file="$(profile_state_tmp_file "$BAD_SERVER_FILE")"
 
 	awk -F '\t' -v profile="$profile" '$1 != profile {print $0}' "$BAD_SERVER_FILE" 2>/dev/null >"$tmp_file"
 	printf '%s\t%s\t%s\n' "$profile" "$expiry" "$reason" >>"$tmp_file"
@@ -894,30 +871,19 @@ reset_bad_servers() {
 	log "Cleared bad-server cooldown state"
 }
 
+mkdir -p "${SERVER_SELECT_LOCK_FILE%/*}"
+exec 209>"$SERVER_SELECT_LOCK_FILE"
+flock -w "${SERVER_SELECT_LOCK_WAIT_SECONDS:-30}" 209 || { log "ERROR: Server-state lock unavailable"; exit 1; }
+selection_deadline=$((SECONDS + ${SERVER_SELECTION_BUDGET_SECONDS:-20}))
+
 case "${1:-select}" in
 select)
-	# Serialize selection across all instances so two instances never pick
-	# the same pool config (same WireGuard key) concurrently. Best-effort:
-	# if the global lock cannot be opened (e.g. unprivileged test runs), log
-	# and continue rather than failing the selection.
-	if mkdir -p "$(dirname "$SERVER_SELECT_LOCK_FILE")" 2>/dev/null &&
-		exec 209>"$SERVER_SELECT_LOCK_FILE" 2>/dev/null; then
-		flock 209 || true
-	else
-		log "WARNING: could not acquire server-select lock $SERVER_SELECT_LOCK_FILE; proceeding without cross-instance serialization"
-	fi
 	select_best_server "${2:-0}"
 	;;
 current)
 	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
 		cat "$SERVER_SELECTION_FILE"
 	else
-		if mkdir -p "$(dirname "$SERVER_SELECT_LOCK_FILE")" 2>/dev/null &&
-			exec 209>"$SERVER_SELECT_LOCK_FILE" 2>/dev/null; then
-			flock 209 || true
-		else
-			log "WARNING: could not acquire server-select lock $SERVER_SELECT_LOCK_FILE; proceeding without cross-instance serialization"
-		fi
 		select_best_server 0
 	fi
 	;;

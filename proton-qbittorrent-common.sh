@@ -1,5 +1,75 @@
 #!/usr/bin/env bash
 
+docker() {
+	command timeout --foreground --kill-after=5s "${QBT_DOCKER_TIMEOUT_SECONDS:-120}s" docker "$@"
+}
+
+curl() {
+	command curl --connect-timeout 5 --max-time "${QBT_HTTP_TIMEOUT_SECONDS:-15}" "$@"
+}
+
+qbt_container_safe_for_recreate() {
+	local container="$1" allow_absent="${2:-0}"
+	local status listing tasks current persistent="" sample task
+	local samples="${QBT_DSTATE_SAMPLES:-3}" delay="${QBT_DSTATE_DELAY:-1}"
+	[[ "$samples" =~ ^[0-9]+$ && "$delay" =~ ^[0-9]+$ ]] && ((samples >= 2)) || return 1
+	if ! status="$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null)"; then
+		listing="$(docker container ls -a --filter "name=^/${container}$" --format '{{.ID}}')" || return 1
+		[[ -z "$listing" && "$allow_absent" == 1 ]]
+		return $?
+	fi
+	case "$status" in
+	exited | created) return 0 ;;
+	running) ;;
+	*) return 1 ;;
+	esac
+	for ((sample = 1; sample <= samples; sample++)); do
+		tasks="$(docker top "$container" -eLo lwp,stat)" || return 1
+		awk 'NR > 1 && $1 ~ /^[0-9]+$/ && $2 ~ /^[SRIDTZtWX]/ { found=1 } END { exit !found }' <<<"$tasks" || return 1
+		if awk 'NR > 1 && $2 ~ /^Z/ { found=1 } END { exit !found }' <<<"$tasks"; then
+			return 1
+		fi
+		current="$(awk 'NR > 1 && $2 ~ /^D/ { print $1 }' <<<"$tasks")"
+		if ((sample == 1)); then
+			persistent="$current"
+		else
+			listing=""
+			while IFS= read -r task; do
+				if [[ -n "$task" ]] && grep -Fxq "$task" <<<"$current"; then
+					listing+="$task"$'\n'
+				fi
+			done <<<"$persistent"
+			persistent="${listing%$'\n'}"
+		fi
+		[[ -n "$persistent" ]] || return 0
+		((sample == samples)) || sleep "$delay"
+	done
+	return 1
+}
+
+qbt_storage_ready() {
+	local mount_info
+	mount_info="$(timeout 10s findmnt -rn -M "${QBT_DATA_MOUNT:-/mnt/data}" -o FSTYPE,OPTIONS)" || return 1
+	awk '$1 == "cifs" { count=split($2, options, ","); for (option_index=1; option_index<=count; option_index++) { if (options[option_index]=="rw") writable=1; if (options[option_index]=="cache=none") uncached=1 } } END { exit !(writable && uncached) }' <<<"$mount_info"
+}
+
+qbt_fleet_preflight() {
+	local manifest="$1" allow_absent="${2:-0}" instance
+	local lock_file="${QBT_FLEET_LOCK_FILE:-/run/proton/qbt-fleet.lock}"
+	mkdir -p "${lock_file%/*}" || return 1
+	exec {QBT_FLEET_LOCK_FD}>"$lock_file" || return 1
+	flock -w "${QBT_FLEET_LOCK_WAIT_SECONDS:-30}" "$QBT_FLEET_LOCK_FD" || return 1
+	qbt_storage_ready || { printf 'ERROR: Expected writable cache=none CIFS leaf is unavailable.\n' >&2; return 1; }
+	[[ "$(awk -F '\t' '!/^#/ && NF { print $1 }' "$manifest" | sort)" == "$(printf '%s\n' lidarr prowlarr radarr sonarr whisparr | sort)" ]] || return 1
+	while IFS=$'\t' read -r instance _; do
+		[[ -n "$instance" && "$instance" != \#* ]] || continue
+		qbt_container_safe_for_recreate "qbittorrent-$instance" "$allow_absent" || {
+			printf 'ERROR: Unsafe or unknown task state for %s; refusing the entire rollout.\n' "$instance" >&2
+			return 1
+		}
+	done <"$manifest"
+}
+
 qbt_source_env_file() {
 	local env_file="$1"
 	local env_mode env_owner

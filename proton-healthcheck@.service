@@ -2,7 +2,7 @@
 Description=Proton Throughput Healthcheck for %i
 After=proton-wg@%i.service proton-port-forward@%i.service
 Requires=proton-wg@%i.service proton-port-forward@%i.service
-PartOf=proton-wg@%i.service
+PartOf=proton-wg@%i.service proton-port-forward@%i.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

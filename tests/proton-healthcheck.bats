@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+export BATS_TEST_TIMEOUT=15
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
@@ -97,11 +99,20 @@ EOF
   chmod +x "$TMPBIN/sleep"
 }
 
-@test "recent forwarded-port changes suppress low-throughput recovery" {
-  cat > "$TEST_TMPDIR/proton-port.state" <<'EOF'
+write_health_lease() {
+  printf 'fixture-generation\n' > "$TEST_TMPDIR/tunnel-generation"
+  cat > "$TEST_TMPDIR/proton-port.state" <<EOF
 CURRENT_PORT=45678
 CURRENT_IP=10.2.0.2
+LEASE_EXPIRES_AT=$(( $(date +%s) + 600 ))
+LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+LEASE_GENERATION=fixture-generation
+PORT_CHANGED_AT=$(( $(date +%s) - $1 ))
 EOF
+}
+
+@test "recent forwarded-port changes suppress low-throughput recovery" {
+  write_health_lease 0
 
   run env \
     QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
@@ -120,11 +131,7 @@ EOF
 }
 
 @test "stable forwarded-port state still allows low-throughput recovery" {
-  cat > "$TEST_TMPDIR/proton-port.state" <<'EOF'
-CURRENT_PORT=45678
-CURRENT_IP=10.2.0.2
-EOF
-  touch -d '10 minutes ago' "$TEST_TMPDIR/proton-port.state"
+  write_health_lease 600
 
   run env \
     QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
@@ -178,11 +185,7 @@ EOF
 }
 
 @test "successful NAT-PMP refresh resets the recovery ladder instead of escalating to full restart" {
-  cat > "$TEST_TMPDIR/proton-port.state" <<'EOF'
-CURRENT_PORT=45678
-CURRENT_IP=10.2.0.2
-EOF
-  touch -d '10 minutes ago' "$TEST_TMPDIR/proton-port.state"
+  write_health_lease 600
 
   cat > "$TMPBIN/sleep" <<EOF
 #!/usr/bin/env bash
@@ -232,4 +235,26 @@ EOF
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"qBittorrent Web UI unreachable at http://qb.test:8080; retrying later"* ]]
+}
+
+@test "full recovery queues restart instead of waiting for its own service group" {
+  export SYSTEMCTL_LOG="$TEST_TMPDIR/systemctl.log"
+  cat > "$TMPBIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SYSTEMCTL_LOG"
+[[ "$1" == --no-block ]] || exit 99
+exit "${RESTART_RESULT:-0}"
+EOF
+  for result in 0 7; do
+    run env STATE_FILE="$TEST_TMPDIR/missing.state" \
+      RECOVERY_LOCK_FILE="$TEST_TMPDIR/recovery.lock" \
+      SERVER_MANAGER_SCRIPT="$TEST_TMPDIR/missing-selector" \
+      RECOVERY_STAGE=2 MAX_LOW_SPEED_CHECKS=1 MIN_COMBINED_SPEED_BPS=65536 \
+      CHECK_INTERVAL=60 RESTART_RESULT="$result" bash ./proton-healthcheck.sh sonarr
+    [ "$status" -eq 42 ]
+    if [[ "$result" == 7 ]]; then
+      [[ "$output" == *"Recovery action 'healthcheck recovery' failed with exit 7"* ]]
+    fi
+  done
+  grep -Fx -- '--no-block restart proton-wg@sonarr.service proton-port-forward@sonarr.service' "$SYSTEMCTL_LOG"
 }

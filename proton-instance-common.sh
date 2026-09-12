@@ -1,5 +1,46 @@
 #!/usr/bin/env bash
 
+docker() {
+	command timeout --foreground --kill-after=5s "${PROTON_DOCKER_TIMEOUT_SECONDS:-10}s" docker "$@"
+}
+
+proton_docker_ready() {
+	timeout 5s systemctl is-active --quiet docker.service
+}
+
+proton_lease_read() {
+	local file="${1:-$STATE_FILE}" generation current_boot now
+	local key value count=0 octet
+	local -a octets
+	PROTON_LEASE_EXPIRES_AT=""
+	local port="" address="" expires="" boot="" lease_generation=""
+	[[ -r "$file" ]] || return 1
+	while IFS='=' read -r key value; do
+		case "$key" in
+		CURRENT_PORT) port="$value"; count=$((count + 1)) ;;
+		CURRENT_IP) address="$value"; count=$((count + 1)) ;;
+		LEASE_EXPIRES_AT) expires="$value"; count=$((count + 1)) ;;
+		LEASE_BOOT_ID) boot="$value"; count=$((count + 1)) ;;
+		LEASE_GENERATION) lease_generation="$value"; count=$((count + 1)) ;;
+		esac
+	done <"$file"
+	[[ "$count" == 5 && "$port" =~ ^[1-9][0-9]{0,4}$ && "$expires" =~ ^[1-9][0-9]{0,10}$ ]] || return 1
+	((port <= 65535)) || return 1
+	[[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+	IFS=. read -r -a octets <<<"$address"
+	for octet in "${octets[@]}"; do
+		[[ "$octet" =~ ^(0|[1-9][0-9]{0,2})$ ]] && ((octet <= 255)) || return 1
+	done
+	if [[ -n "${WG_TUNNEL_ADDRESS:-}" && "$address" != "${WG_TUNNEL_ADDRESS%%/*}" ]]; then return 1; fi
+	generation="$(cat "${file%/*}/tunnel-generation" 2>/dev/null)" || return 1
+	current_boot="$(cat /proc/sys/kernel/random/boot_id)" || return 1
+	now="$(date +%s)" || return 1
+	[[ -n "$generation" && "$lease_generation" == "$generation" && "$boot" == "$current_boot" ]] || return 1
+	((expires > now)) || return 1
+	export PROTON_LEASE_EXPIRES_AT="$expires"
+	printf '%s\n' "$port"
+}
+
 proton_allowed_instances() {
 	printf '%s\n' lidarr radarr sonarr whisparr prowlarr
 }
@@ -40,8 +81,8 @@ proton_route_lock_acquire() {
 	if [[ "$lock_dir" == "$PROTON_ROUTE_LOCK_FILE" ]]; then
 		lock_dir="."
 	fi
-	mkdir -p "$lock_dir"
-	exec {PROTON_ROUTE_LOCK_FD}>"$PROTON_ROUTE_LOCK_FILE"
+	mkdir -p "$lock_dir" || return 1
+	exec {PROTON_ROUTE_LOCK_FD}>"$PROTON_ROUTE_LOCK_FILE" || return 1
 	if ! flock -w "$wait_seconds" "$PROTON_ROUTE_LOCK_FD"; then
 		printf 'ERROR: Timed out after %s seconds waiting for Proton policy-route lock %s.\n' \
 			"$wait_seconds" "$PROTON_ROUTE_LOCK_FILE" >&2
@@ -67,6 +108,7 @@ proton_route_lock_release() {
 proton_delete_ip_rule_all() {
 	local family="${1:-}"
 	local attempt=0
+	local deletion_error
 	local -a ip_command=(ip)
 	shift || true
 
@@ -84,8 +126,10 @@ proton_delete_ip_rule_all() {
 	fi
 
 	for ((attempt = 0; attempt < 64; attempt++)); do
-		if ! "${ip_command[@]}" rule del "$@" >/dev/null 2>&1; then
-			return 0
+		if ! deletion_error="$(LC_ALL=C "${ip_command[@]}" rule del "$@" 2>&1)"; then
+			if [[ "$deletion_error" == "RTNETLINK answers: No such file or directory" ]]; then return 0; fi
+			printf 'ERROR: Policy-rule deletion failed: %s\n' "$deletion_error" >&2
+			return 1
 		fi
 	done
 
@@ -112,6 +156,32 @@ proton_replace_ip_rule() {
 
 	proton_delete_ip_rule_all "$family" "$@" || return 1
 	"${ip_command[@]}" rule add "$@"
+}
+
+proton_persist_route_state() (
+	local file="$1" value="$2" temporary
+	if [[ -z "$value" ]]; then rm -f "$file"; return; fi
+	umask 077
+	temporary="$(mktemp "${file}.XXXXXX")" || return 1
+	trap 'rm -f "$temporary"' EXIT
+	printf '%s' "$value" >"$temporary" || return 1
+	mv -f "$temporary" "$file"
+)
+
+proton_flush_route_table() {
+	local family="$1" table="$2" failure
+	local -a ip_command=(ip)
+	case "$family" in
+	4) ;;
+	6) ip_command+=(-6) ;;
+	*) return 1 ;;
+	esac
+	if failure="$(LC_ALL=C "${ip_command[@]}" route flush table "$table" 2>&1)"; then return 0; fi
+	case "$failure" in
+	"Error: ipv${family}: FIB table does not exist." | "Error: ipv${family}: FIB table does not exist."$'\nFlush terminated') return 0 ;;
+	esac
+	printf 'ERROR: Route-table flush failed: %s\n' "$failure" >&2
+	return 1
 }
 
 proton_validate_instance_name() {

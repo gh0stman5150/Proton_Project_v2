@@ -35,6 +35,23 @@ MAX_FAILURES="${MAX_FAILURES:-5}"
 PROVEN_TRANSIENT_MAX_KEEPS="${PROVEN_TRANSIENT_MAX_KEEPS:-5}"
 PORT_LEASE_SECONDS="${PORT_LEASE_SECONDS:-60}"
 NATPMP_TIMEOUT_SECONDS="${NATPMP_TIMEOUT_SECONDS:-15}"
+NATPMP_LOCK_WAIT_SECONDS="${NATPMP_LOCK_WAIT_SECONDS:-5}"
+QBT_SYNC_TIMEOUT_SECONDS="${QBT_SYNC_TIMEOUT_SECONDS:-120}"
+NATPMP_KILL_AFTER_SECONDS=2
+LEASE_RENEW_MARGIN_SECONDS=5
+for setting in CHECK_INTERVAL PORT_LEASE_SECONDS NATPMP_TIMEOUT_SECONDS NATPMP_LOCK_WAIT_SECONDS QBT_SYNC_TIMEOUT_SECONDS; do
+	if [[ ! "${!setting}" =~ ^(0|[1-9][0-9]{0,5})$ ]]; then
+		echo "ERROR: $setting must be a non-negative integer." >&2
+		exit 1
+	fi
+done
+RENEW_BUDGET_SECONDS=$((2 * NATPMP_LOCK_WAIT_SECONDS + 2 * (NATPMP_TIMEOUT_SECONDS + NATPMP_KILL_AFTER_SECONDS) + LEASE_RENEW_MARGIN_SECONDS))
+if ((NATPMP_TIMEOUT_SECONDS < 1 || QBT_SYNC_TIMEOUT_SECONDS < 1 || PORT_LEASE_SECONDS <= RENEW_BUDGET_SECONDS)); then
+	echo "ERROR: PORT_LEASE_SECONDS must exceed the NAT-PMP renewal budget ($RENEW_BUDGET_SECONDS seconds)." >&2
+	exit 1
+fi
+RENEW_INTERVAL_SECONDS=$((PORT_LEASE_SECONDS - RENEW_BUDGET_SECONDS))
+if ((CHECK_INTERVAL < RENEW_INTERVAL_SECONDS)); then RENEW_INTERVAL_SECONDS="$CHECK_INTERVAL"; fi
 WG_UP_SCRIPT="${WG_UP_SCRIPT:-/usr/local/bin/proton/proton-wg-up-safe.sh}"
 QBITTORRENT_SYNC_SCRIPT="${QBITTORRENT_SYNC_SCRIPT:-/usr/local/bin/proton/proton-qbittorrent-sync-safe.sh}"
 SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
@@ -58,7 +75,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk chmod cut flock grep ip mkdir natpmpc rm systemd-cat timeout; do
+for cmd in awk cat chmod cut date flock grep ip mkdir mktemp mv natpmpc rm sleep systemd-cat timeout; do
 	require_command "$cmd"
 done
 
@@ -146,42 +163,72 @@ get_ip() {
 }
 
 request_port() {
-	timeout "${NATPMP_TIMEOUT_SECONDS}s" \
-		natpmpc -a 1 0 udp "$PORT_LEASE_SECONDS" -g "$NATPMP_GATEWAY" >/dev/null 2>&1
-	timeout "${NATPMP_TIMEOUT_SECONDS}s" \
-		natpmpc -a 1 0 tcp "$PORT_LEASE_SECONDS" -g "$NATPMP_GATEWAY" 2>/dev/null
+	refresh_port 0
 }
 
-refresh_port() {
+refresh_port() (
 	local port="$1"
-
-	timeout "${NATPMP_TIMEOUT_SECONDS}s" \
-		natpmpc -a 1 0 udp "$PORT_LEASE_SECONDS" -g "$NATPMP_GATEWAY" >/dev/null 2>&1
-	timeout "${NATPMP_TIMEOUT_SECONDS}s" \
-		natpmpc -a 1 "$port" tcp "$PORT_LEASE_SECONDS" -g "$NATPMP_GATEWAY" 2>/dev/null
-}
+	local udp_output tcp_output udp_port tcp_port generation started udp_lifetime tcp_lifetime lifetime
+	exec 203>"${STATE_DIR}/lifecycle.lock" || return 1
+	flock -w "$NATPMP_LOCK_WAIT_SECONDS" 203 || return 1
+	exec 202>"${STATE_DIR}/natpmp.lock" || return 1
+	flock -w "$NATPMP_LOCK_WAIT_SECONDS" 202 || return 1
+	generation="$(cat "${STATE_DIR}/tunnel-generation")" || return 1
+	started="$(date +%s)" || return 1
+	udp_output="$(timeout --kill-after="${NATPMP_KILL_AFTER_SECONDS}s" "${NATPMP_TIMEOUT_SECONDS}s" natpmpc -a 1 "$port" udp "$PORT_LEASE_SECONDS" -g "$NATPMP_GATEWAY")" || return 1
+	udp_port="$(extract_port <<<"$udp_output")"
+	[[ "$udp_port" =~ ^[1-9][0-9]{0,4}$ ]] && ((udp_port <= 65535)) || return 1
+	udp_lifetime="$(extract_lifetime <<<"$udp_output")" || return 1
+	tcp_output="$(timeout --kill-after="${NATPMP_KILL_AFTER_SECONDS}s" "${NATPMP_TIMEOUT_SECONDS}s" natpmpc -a 1 "$udp_port" tcp "$PORT_LEASE_SECONDS" -g "$NATPMP_GATEWAY")" || return 1
+	tcp_port="$(extract_port <<<"$tcp_output")"
+	[[ "$tcp_port" == "$udp_port" && "$generation" == "$(cat "${STATE_DIR}/tunnel-generation")" ]] || return 1
+	tcp_lifetime="$(extract_lifetime <<<"$tcp_output")" || return 1
+	lifetime="$PORT_LEASE_SECONDS"
+	if ((udp_lifetime < lifetime)); then lifetime="$udp_lifetime"; fi
+	if ((tcp_lifetime < lifetime)); then lifetime="$tcp_lifetime"; fi
+	save_state "$tcp_port" "$(get_ip)" "$generation" "$started" "$lifetime" || return 1
+	printf '%s\n' "$tcp_output"
+)
 
 extract_port() {
 	awk '/Mapped public port/ {print $4; exit}' || true
 }
 
+extract_lifetime() {
+	local lifetime
+	lifetime="$(awk '/Mapped public port/ { for (field = 1; field < NF; field++) if ($field == "lifetime") { print $(field + 1); exit } }')" || return 1
+	[[ "$lifetime" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+	printf '%s\n' "$lifetime"
+}
+
 save_state() {
 	local new_port="$1"
 	local new_ip="$2"
-	local current_port current_ip
+	local generation="$3" started="$4" lifetime="$5"
+	local current_port current_ip changed temporary boot now
+
+	now="$(date +%s)" || return 1
+	((started + lifetime > now + LEASE_RENEW_MARGIN_SECONDS)) || return 1
+	[[ -n "$new_ip" && "$new_ip" == "${WG_TUNNEL_ADDRESS%%/*}" ]] || return 1
+	boot="$(cat /proc/sys/kernel/random/boot_id)" || return 1
 
 	current_port="$(load_state_port)"
 	current_ip="$(load_state_ip)"
 
-	if [[ "$current_port" == "$new_port" && "$current_ip" == "$new_ip" ]]; then
-		return 0
-	fi
+	changed="$(awk -F= '$1 == "PORT_CHANGED_AT" { print $2; exit }' "$STATE_FILE" 2>/dev/null || true)"
+	if [[ "$current_port" != "$new_port" || "$current_ip" != "$new_ip" || -z "$changed" ]]; then changed="$started"; fi
 
 	umask 077
+	temporary="$(mktemp "${STATE_FILE}.XXXXXX")" || return 1
 	{
 		echo "CURRENT_PORT=$new_port"
 		echo "CURRENT_IP=$new_ip"
-	} >"$STATE_FILE"
+		echo "LEASE_EXPIRES_AT=$((started + lifetime))"
+		echo "LEASE_BOOT_ID=$boot"
+		echo "LEASE_GENERATION=$generation"
+		echo "PORT_CHANGED_AT=$changed"
+	} >"$temporary" || { rm -f "$temporary"; return 1; }
+	mv -f "$temporary" "$STATE_FILE" || { rm -f "$temporary"; return 1; }
 }
 
 load_state_port() {
@@ -190,10 +237,6 @@ load_state_port() {
 
 load_state_ip() {
 	awk -F= '/^CURRENT_IP=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true
-}
-
-clear_state() {
-	rm -f "$STATE_FILE"
 }
 
 reconnect() {
@@ -213,11 +256,10 @@ reconnect() {
 		fi
 
 		if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
-			"$SERVER_MANAGER_SCRIPT" mark-bad "$failed_profile" "port-forward-failures" >/dev/null 2>&1 || true
+			timeout --kill-after=2s 3s "$SERVER_MANAGER_SCRIPT" mark-bad "$failed_profile" "port-forward-failures" >/dev/null 2>&1 || true
 		fi
 
-		clear_state
-		"$WG_UP_SCRIPT" "$INSTANCE"
+		PROTON_FORCE_RECONNECT=1 timeout --kill-after=5s 120s "$WG_UP_SCRIPT" "$INSTANCE"
 		sleep 5
 	) 200>"$RECOVERY_LOCK_FILE"
 }
@@ -229,7 +271,7 @@ else
 fi
 
 LAST_IP="$(load_state_ip)"
-CURRENT_PORT="$(load_state_port)"
+CURRENT_PORT="$(proton_lease_read || true)"
 FAILURES=0
 TRANSIENT_KEEPS=0
 
@@ -269,9 +311,7 @@ if [[ "$MODE" == "once" ]]; then
 	fi
 
 	log "Got port: $PORT"
-	save_state "$PORT" "$IP"
-
-	if ! "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE"; then
+	if ! timeout --kill-after=2s "${QBT_SYNC_TIMEOUT_SECONDS}s" "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE"; then
 		log "ERROR: qBittorrent port sync failed during one-shot NAT-PMP refresh"
 		exit 1
 	fi
@@ -279,7 +319,19 @@ if [[ "$MODE" == "once" ]]; then
 	exit 0
 fi
 
+SYNC_PID=""
+cleanup_loop() {
+	if [[ -n "$SYNC_PID" ]]; then
+		kill -TERM "$SYNC_PID" 2>/dev/null || true
+		wait "$SYNC_PID" 2>/dev/null || true
+	fi
+}
+trap cleanup_loop EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
 while true; do
+	ITERATION_STARTED="$SECONDS"
 	load_selected_server
 	IP="$(get_ip)"
 
@@ -311,12 +363,13 @@ while true; do
 	if [[ -n "$PORT" ]]; then
 		log "Got port: $PORT"
 		CURRENT_PORT="$PORT"
-		save_state "$PORT" "$IP"
 		if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
-			"$SERVER_MANAGER_SCRIPT" mark-capable "$CURRENT_WG_PROFILE" "$PORT" >/dev/null 2>&1 || true
+			timeout --kill-after=2s 3s "$SERVER_MANAGER_SCRIPT" mark-capable "$CURRENT_WG_PROFILE" "$PORT" >/dev/null 2>&1 || true
 		fi
-		if ! "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE"; then
-			log "WARNING: qBittorrent port sync failed"
+		if [[ -z "$SYNC_PID" ]] || ! kill -0 "$SYNC_PID" 2>/dev/null; then
+			if [[ -n "$SYNC_PID" ]]; then wait "$SYNC_PID" || log "WARNING: qBittorrent port sync failed"; fi
+			timeout --kill-after=2s "${QBT_SYNC_TIMEOUT_SECONDS}s" "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE" &
+			SYNC_PID=$!
 		fi
 		FAILURES=0
 		TRANSIENT_KEEPS=0
@@ -342,7 +395,7 @@ while true; do
 				# stays stable.
 				TRANSIENT_KEEPS=$((TRANSIENT_KEEPS + 1))
 				log "Profile $CURRENT_WG_PROFILE previously forwarded successfully; keeping tunnel and retrying in place (transient NAT-PMP failure ${TRANSIENT_KEEPS}/${PROVEN_TRANSIENT_MAX_KEEPS})"
-				CURRENT_PORT="$(load_state_port)"
+				CURRENT_PORT="$(proton_lease_read || true)"
 				FAILURES=0
 			else
 				if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
@@ -352,7 +405,7 @@ while true; do
 					# strikes (adds it to the incapable list and deletes its
 					# pool config). Proven-good servers are never evicted this
 					# way; the server manager cools them down instead.
-					"$SERVER_MANAGER_SCRIPT" mark-incapable-attempt "$CURRENT_WG_PROFILE" "natpmp-timeout" >/dev/null 2>&1 || true
+					timeout --kill-after=2s 3s "$SERVER_MANAGER_SCRIPT" mark-incapable-attempt "$CURRENT_WG_PROFILE" "natpmp-timeout" >/dev/null 2>&1 || true
 				fi
 				log "Too many failures on ${CURRENT_WG_PROFILE:-$WG_PROFILE} -> reconnecting tunnel"
 				reconnect "$CURRENT_WG_PROFILE"
@@ -363,5 +416,10 @@ while true; do
 		fi
 	fi
 
-	sleep "$CHECK_INTERVAL"
+	RENEW_DELAY=$((ITERATION_STARTED + RENEW_INTERVAL_SECONDS - SECONDS))
+	if proton_lease_read >/dev/null; then
+		LEASE_DELAY=$((PROTON_LEASE_EXPIRES_AT - $(date +%s) - RENEW_BUDGET_SECONDS))
+		if ((LEASE_DELAY < RENEW_DELAY)); then RENEW_DELAY="$LEASE_DELAY"; fi
+	fi
+	if ((RENEW_DELAY > 0)); then sleep "$RENEW_DELAY"; fi
 done

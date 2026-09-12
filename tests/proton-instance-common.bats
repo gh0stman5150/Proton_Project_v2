@@ -119,3 +119,59 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"Invalid WG_ADDRESS_SUBNET"* ]]
 }
+
+@test "lease reader refuses missing truncated expired and previous-generation state" {
+  export STATE_FILE="$TEST_TMPDIR/proton-port.state"
+  printf 'generation-a\n' > "$TEST_TMPDIR/tunnel-generation"
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -ne 0 ]
+  printf 'CURRENT_PORT=45678\n' > "$STATE_FILE"
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -ne 0 ]
+  cat > "$STATE_FILE" <<EOF
+CURRENT_PORT=45678
+CURRENT_IP=10.4.0.2
+LEASE_EXPIRES_AT=$(( $(date +%s) + 60 ))
+LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+LEASE_GENERATION=generation-a
+EOF
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -eq 0 ]
+  [ "$output" = 45678 ]
+  sed -i 's/^LEASE_EXPIRES_AT=.*/LEASE_EXPIRES_AT=1/' "$STATE_FILE"
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -ne 0 ]
+  sed -i "s/^LEASE_EXPIRES_AT=.*/LEASE_EXPIRES_AT=$(( $(date +%s) + 60 ))/" "$STATE_FILE"
+  printf 'generation-b\n' > "$TEST_TMPDIR/tunnel-generation"
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -ne 0 ]
+}
+
+@test "lease reader validates the address boot and unique fields and returns the validated expiry" {
+  export STATE_FILE="$TEST_TMPDIR/proton-port.state"
+  printf 'generation-a\n' > "$TEST_TMPDIR/tunnel-generation"
+  expiry="$(( $(date +%s) + 60 ))"
+  cat > "$TEST_TMPDIR/valid.state" <<EOF
+CURRENT_PORT=45678
+CURRENT_IP=10.4.0.2
+LEASE_EXPIRES_AT=$expiry
+LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+LEASE_GENERATION=generation-a
+EOF
+  for invalid in 'CURRENT_IP=999.4.0.2' 'CURRENT_IP=10.04.0.2' 'LEASE_BOOT_ID=other-boot'; do
+    cp "$TEST_TMPDIR/valid.state" "$STATE_FILE"
+    sed -i "s/^${invalid%%=*}=.*/$invalid/" "$STATE_FILE"
+    run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+    [ "$status" -ne 0 ]
+  done
+  cp "$TEST_TMPDIR/valid.state" "$STATE_FILE"
+  printf 'CURRENT_PORT=45678\n' >> "$STATE_FILE"
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -ne 0 ]
+  cp "$TEST_TMPDIR/valid.state" "$STATE_FILE"
+  run env WG_TUNNEL_ADDRESS=10.3.0.2/32 bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -ne 0 ]
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read; printf "%s\n" "$PROTON_LEASE_EXPIRES_AT"'
+  [ "$status" -eq 0 ]
+  [ "${lines[1]}" = "$expiry" ]
+}

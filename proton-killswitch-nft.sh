@@ -364,7 +364,10 @@ render_docker6_drop_rules() {
 	done
 }
 
-load_selected_server
+if [[ -z "$DOCKER_NETWORK_CIDR" ]]; then
+	log "ERROR: Docker CIDR is required; preserving the existing firewall"
+	exit 1
+fi
 
 require_value "LAN_IF" "$LAN_IF"
 require_value "LAN_CIDR" "$LAN_CIDR"

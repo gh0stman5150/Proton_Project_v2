@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+export BATS_TEST_TIMEOUT=15
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
@@ -9,6 +11,7 @@ setup() {
   export STATE_DIR="$TEST_TMPDIR/state"
   export IP_LOG="$TEST_TMPDIR/ip.log"
   export PROTON_WATCHER_SOURCE_ONLY=1
+  export PROTON_ROUTE_LOCK_FILE="$TEST_TMPDIR/policy-routing.lock"
   mkdir -p "$TMPBIN" "$STATE_DIR" "$PROTON_INSTANCE_ROOT/sonarr" "$PROTON_INSTANCE_ROOT/radarr"
   : > "$IP_LOG"
 
@@ -18,15 +21,21 @@ DOCKER_IPV6_FALLBACK_INSTANCE=sonarr
 DOCKER_FALLBACK_VPN_ROUTING=on
 EOF
 
-  for instance in sonarr radarr; do
-    subnet=4
-    port=8083
-    [[ "$instance" == radarr ]] && { subnet=3; port=8082; }
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    case "$instance" in
+      lidarr) subnet=2; port=8081 ;;
+      prowlarr) subnet=6; port=8082 ;;
+      radarr) subnet=3; port=8083 ;;
+      sonarr) subnet=4; port=8084 ;;
+      whisparr) subnet=5; port=8085 ;;
+    esac
     mkdir -p "$PROTON_INSTANCE_ROOT/$instance"
     cat > "$PROTON_INSTANCE_ROOT/$instance/proton.env" <<EOF
 WG_ADDRESS_SUBNET=$subnet
 VPN_INTERFACE=pv$instance
 STATE_DIR=$STATE_DIR/$instance
+LAST_FILE=$STATE_DIR/$instance/docker-network-watcher.last
+DOCKER_NETWORK_CIDR_STATE_FILE=$STATE_DIR/$instance/docker-network-cidr
 EOF
     cat > "$PROTON_INSTANCE_ROOT/$instance/qbittorrent.env" <<EOF
 QBITTORRENT_URL=http://127.0.0.1:$port
@@ -38,19 +47,34 @@ EOF
 cat > "$TMPBIN/ip" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$IP_LOG"
+if [[ "$*" == *"route replace default"* && "${FAIL_DEFAULT_ROUTE:-0}" == 1 ]]; then
+  exit 1
+fi
+if [[ "$*" == *"-6 rule add from fdca:6c19:2096::17/128"* && "${FAIL_IPV6_RULE:-0}" == 1 ]]; then exit 1; fi
 if [[ "$*" == *"rule del"* || "$*" == *"rule del "* ]]; then
+  printf 'RTNETLINK answers: No such file or directory\n' >&2
   exit 2
 fi
 EOF
   cat > "$TMPBIN/docker" <<'EOF'
 #!/usr/bin/env bash
+if [[ "${DOCKER_INSPECT_FAIL:-0}" == 1 ]]; then exit 1; fi
+if [[ "${WRONG_NETWORK:-0}" == 1 ]]; then printf 'other_network=192.168.96.17\n'; exit 0; fi
 if [[ "$*" == *"GlobalIPv6Address"* ]]; then
+  if [[ "${NO_IPV6:-0}" == 1 ]]; then exit 0; fi
+  [[ "$*" == *"qbittorrent-lidarr"* ]] && printf 'starr_network=fdca:6c19:2096::15\n'
+  [[ "$*" == *"qbittorrent-prowlarr"* ]] && printf 'starr_network=fdca:6c19:2096::19\n'
+  [[ "$*" == *"qbittorrent-whisparr"* ]] && printf 'starr_network=fdca:6c19:2096::18\n'
   [[ "$*" == *"qbittorrent-sonarr"* ]] && printf 'starr_network=fdca:6c19:2096::17\n'
   [[ "$*" == *"qbittorrent-radarr"* ]] && printf 'starr_network=fdca:6c19:2096::16\n'
 elif [[ "$1" == inspect ]]; then
+  [[ "$*" == *"qbittorrent-lidarr"* ]] && printf 'starr_network=192.168.96.15\n'
+  [[ "$*" == *"qbittorrent-prowlarr"* ]] && printf 'starr_network=192.168.96.19\n'
+  [[ "$*" == *"qbittorrent-whisparr"* ]] && printf 'starr_network=192.168.96.18\n'
   [[ "$*" == *"qbittorrent-sonarr"* ]] && printf 'starr_network=192.168.96.17\n'
   [[ "$*" == *"qbittorrent-radarr"* ]] && printf 'starr_network=192.168.96.16\n'
 fi
+exit 0
 EOF
   cat > "$TMPBIN/systemd-cat" <<'EOF'
 #!/usr/bin/env bash
@@ -60,7 +84,7 @@ EOF
 }
 
 @test "IPv6 fallback owner receives ULA fallback and qBittorrent owner rules" {
-  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes 192.168.96.0/20 fdca:6c19:2096::/64'
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
 
   [ "$status" -eq 0 ]
   grep -F -- '-6 rule add from fdca:6c19:2096::/64 to fdca:6c19:2096::/64 lookup main priority 108' "$IP_LOG"
@@ -69,9 +93,60 @@ EOF
 }
 
 @test "non-owner receives only its qBittorrent IPv6 rule" {
-  run bash -c 'source ./proton-docker-network-watcher.sh radarr; reapply_routes 192.168.96.0/20 fdca:6c19:2096::/64'
+  run bash -c 'source ./proton-docker-network-watcher.sh radarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
 
   [ "$status" -eq 0 ]
   grep -F -- '-6 rule add from fdca:6c19:2096::16/128 lookup 51803 priority 113' "$IP_LOG"
   ! grep -F -- '-6 rule add from fdca:6c19:2096::/64 lookup 51803 priority 130' "$IP_LOG"
+}
+
+@test "reconciliation reasserts both defaults before source rules" {
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
+  [ "$status" -eq 0 ]
+  grep -Fx -- 'route replace default dev pvsonarr table 51804' "$IP_LOG"
+  grep -Fx -- '-6 route replace default dev pvsonarr table 51804' "$IP_LOG"
+}
+
+@test "failed default route prevents source mutation and success cache publication" {
+  run env FAIL_DEFAULT_ROUTE=1 bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
+  [ "$status" -ne 0 ]
+  run grep -F -- 'rule add' "$IP_LOG"
+  [ "$status" -eq 1 ]
+  [ ! -f "$STATE_DIR/sonarr/qbt-container-ip" ]
+}
+
+@test "missing or wrong-network snapshots cause no routing mutation" {
+  for failure in DOCKER_INSPECT_FAIL WRONG_NETWORK NO_IPV6; do
+    : > "$IP_LOG"
+    run env "$failure=1" bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
+    [ "$status" -ne 0 ]
+    [ ! -s "$IP_LOG" ]
+  done
+}
+
+@test "a late IPv6 failure preserves the previous routing caches" {
+  mkdir -p "$STATE_DIR/sonarr"
+  printf 'previous\n' > "$STATE_DIR/sonarr/qbt-container-ip"
+  run env FAIL_IPV6_RULE=1 bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
+  [ "$status" -ne 0 ]
+  [ "$(cat "$STATE_DIR/sonarr/qbt-container-ip")" = previous ]
+  [ ! -s "$STATE_DIR/sonarr/docker-network-watcher.last" ]
+}
+
+@test "all five instances reconcile isolated defaults and owner rules" {
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    case "$instance" in
+      lidarr) subnet=2; host=15 ;;
+      prowlarr) subnet=6; host=19 ;;
+      radarr) subnet=3; host=16 ;;
+      sonarr) subnet=4; host=17 ;;
+      whisparr) subnet=5; host=18 ;;
+    esac
+    : > "$IP_LOG"
+    run bash -c 'source ./proton-docker-network-watcher.sh "$1"; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64' fixture "$instance"
+    [ "$status" -eq 0 ]
+    grep -Fx "route replace default dev pv$instance table $((51800 + subnet))" "$IP_LOG"
+    grep -Fx "rule add from 192.168.96.$host/32 lookup $((51800 + subnet)) priority $((110 + subnet))" "$IP_LOG"
+    [ "$(cat "$STATE_DIR/$instance/qbt-container-ip")" = "192.168.96.$host" ]
+  done
 }

@@ -48,7 +48,6 @@ QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
 DOCKER_IPV6_FALLBACK_INSTANCE="${DOCKER_IPV6_FALLBACK_INSTANCE:-sonarr}"
-DOCKER_DEST_MAIN_RULE_PRIORITY="${DOCKER_DEST_MAIN_RULE_PRIORITY:-98}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
 PREVIOUS_WG_PROFILE="$WG_PROFILE"
@@ -71,7 +70,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk cat chmod cut ip mkdir mktemp mv rm systemd-cat wg-quick; do
+for cmd in awk cat chmod cut flock ip mkdir mktemp mv rm rmdir sha256sum systemd-cat timeout wg wg-quick; do
 	require_command "$cmd"
 done
 
@@ -92,6 +91,26 @@ ensure_directory() {
 
 ensure_directory "$STATE_DIR" 700
 ensure_directory "$WG_RUNTIME_DIR" 700
+exec 205>"${STATE_DIR}/lifecycle.lock"
+flock -w "${PROTON_LIFECYCLE_WAIT_SECONDS:-30}" 205
+OLD_RUNTIME_HASH="$(sha256sum "$FILTERED_CONFIG_PATH" 2>/dev/null | awk '{print $1}' || true)"
+LIFECYCLE_CHANGED=0
+PREPARED_CONFIG_DIR=""
+cleanup_start() {
+	local result=$?
+	proton_route_lock_release
+	if ((result != 0 && LIFECYCLE_CHANGED)); then
+		PROTON_LIFECYCLE_LOCK_FD=205 timeout --kill-after=5s 55s bash "${SCRIPT_DIR}/proton-wg-down-safe.sh" "$INSTANCE" || log "ERROR: Partial-start cleanup failed for $INSTANCE"
+	fi
+	if [[ -n "$PREPARED_CONFIG_DIR" ]]; then
+		rm -f "${PREPARED_CONFIG_DIR}/${WG_PROFILE}.conf"
+		rmdir "$PREPARED_CONFIG_DIR"
+	fi
+	return "$result"
+}
+trap cleanup_start EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 runtime_wg_config_path() {
 	local target="${1:-}"
@@ -143,7 +162,7 @@ run_wg_quick() {
 
 	stderr_file="$(mktemp)"
 
-	if wg-quick "$action" "$target" 2>"$stderr_file"; then
+	if timeout --kill-after=5s 45s wg-quick "$action" "$target" 2>"$stderr_file"; then
 		rc=0
 	else
 		rc=$?
@@ -298,6 +317,8 @@ docker_fallback_vpn_routing_enabled() {
 }
 
 resolve_qbt_container_ip() {
+	if [[ "${QBT_SNAPSHOT_READY:-0}" == 1 ]]; then printf '%s\n' "$QBT_IP_SNAPSHOT"; return; fi
+	proton_docker_ready || return 1
 	local networks=""
 	local ip=""
 
@@ -320,6 +341,8 @@ resolve_qbt_container_ip() {
 }
 
 resolve_qbt_container_ipv6() {
+	if [[ "${QBT_SNAPSHOT_READY:-0}" == 1 ]]; then printf '%s\n' "$QBT_IP6_SNAPSHOT"; return; fi
+	proton_docker_ready || return 1
 	local networks=""
 	local ip=""
 
@@ -348,12 +371,7 @@ read_cached_qbt_container_ipv6() {
 persist_qbt_container_ipv6() {
 	local value="${1:-}"
 
-	if [[ -n "$value" ]]; then
-		umask 077
-		printf '%s' "$value" >"$QBT_CONTAINER_IP6_STATE_FILE"
-	else
-		rm -f "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
-	fi
+	proton_persist_route_state "$QBT_CONTAINER_IP6_STATE_FILE" "$value"
 }
 
 docker_ipv6_fallback_enabled() {
@@ -368,12 +386,7 @@ read_cached_qbt_container_ip() {
 persist_qbt_container_ip() {
 	local value="${1:-}"
 
-	if [[ -n "$value" ]]; then
-		umask 077
-		printf '%s' "$value" >"$QBT_CONTAINER_IP_STATE_FILE"
-	else
-		rm -f "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
-	fi
+	proton_persist_route_state "$QBT_CONTAINER_IP_STATE_FILE" "$value"
 }
 
 detect_lan_cidr() {
@@ -693,19 +706,14 @@ validate_runtime_ipv6() {
 }
 
 persist_docker_network_cidr() {
-	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-		umask 077
-		printf '%s' "$DOCKER_NETWORK_CIDR" >"$DOCKER_NETWORK_CIDR_STATE_FILE"
-	else
-		rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
-	fi
+	proton_persist_route_state "$DOCKER_NETWORK_CIDR_STATE_FILE" "$DOCKER_NETWORK_CIDR"
 }
 
 resolve_docker_network_cidr() {
 	local candidate=""
 	local subnet=""
 
-	if [[ -z "$DOCKER_NETWORK_CIDR" ]] && command -v docker >/dev/null 2>&1; then
+	if [[ -z "$DOCKER_NETWORK_CIDR" ]] && proton_docker_ready && command -v docker >/dev/null 2>&1; then
 		candidate=$(docker network ls --format '{{.Name}}' | grep -i starr | head -n1 || true)
 		if [[ -n "$candidate" ]]; then
 			subnet=$(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$candidate" 2>/dev/null || true)
@@ -720,11 +728,13 @@ resolve_docker_network_cidr() {
 		DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
 	fi
 
-	persist_docker_network_cidr
 	export DOCKER_NETWORK_CIDR
 }
 
 load_selected_server
+ACTIVE_CONFIG_PATH="$FILTERED_CONFIG_PATH"
+PREPARED_CONFIG_DIR="$(mktemp -d "${WG_RUNTIME_DIR}/.prepare.XXXXXX")"
+FILTERED_CONFIG_PATH="${PREPARED_CONFIG_DIR}/${WG_PROFILE}.conf"
 prepare_wg_config "$WG_CONFIG"
 apply_tunnel_addressing
 validate_runtime_ipv6
@@ -734,16 +744,30 @@ resolve_docker_network_cidr
 
 log "Bringing up WireGuard profile $WG_PROFILE..."
 
-teardown_resolved_dns "$PREVIOUS_VPN_INTERFACE"
-
-if [[ -n "$PREVIOUS_WG_CONFIG" && -f "$PREVIOUS_WG_CONFIG" ]]; then
-	wg-quick down "$PREVIOUS_WG_CONFIG" 2>/dev/null || true
-else
-	wg-quick down "$PREVIOUS_WG_PROFILE" 2>/dev/null || true
+NEW_RUNTIME_HASH="$(sha256sum "$WG_CONFIG_TO_USE" | awk '{print $1}')"
+WIREGUARD_INTERFACES="$(timeout --kill-after=2s 5s wg show interfaces)"
+KEEP_TUNNEL=0
+if [[ "${PROTON_FORCE_RECONNECT:-0}" != 1 && -n "$OLD_RUNTIME_HASH" && "$OLD_RUNTIME_HASH" == "$NEW_RUNTIME_HASH" && -s "${STATE_DIR}/tunnel-generation" ]] &&
+	timeout --kill-after=2s 5s wg show "$VPN_INTERFACE" latest-handshakes 2>/dev/null | awk -v now="$(date +%s)" '$2 > now - 180 && $2 <= now { fresh=1 } END { exit !fresh }'; then
+	KEEP_TUNNEL=1
 fi
 
+if (( ! KEEP_TUNNEL )); then
+LIFECYCLE_CHANGED=1
+rm -f "$STATE_FILE" "${STATE_DIR}/tunnel-generation"
+if [[ " $WIREGUARD_INTERFACES " == *" $PREVIOUS_VPN_INTERFACE "* ]]; then
+	teardown_resolved_dns "$PREVIOUS_VPN_INTERFACE"
+	if [[ -n "$PREVIOUS_WG_CONFIG" && -f "$PREVIOUS_WG_CONFIG" ]]; then
+		run_wg_quick down "$PREVIOUS_WG_CONFIG"
+	else
+		run_wg_quick down "$PREVIOUS_WG_PROFILE"
+	fi
+fi
+
+mv -f "$WG_CONFIG_TO_USE" "$ACTIVE_CONFIG_PATH"
+WG_CONFIG_TO_USE="$ACTIVE_CONFIG_PATH"
 if [[ -x "$KILLSWITCH_SCRIPT" ]]; then
-	"$KILLSWITCH_SCRIPT"
+	timeout --kill-after=5s 35s "$KILLSWITCH_SCRIPT"
 fi
 
 run_wg_quick up "$WG_CONFIG_TO_USE"
@@ -751,33 +775,24 @@ run_wg_quick up "$WG_CONFIG_TO_USE"
 if uses_nftables_backend && [[ -x "$KILLSWITCH_SCRIPT" ]]; then
 	# The initial pre-up apply prevents leaks during interface bring-up. Re-run
 	# after the interface exists so nft postrouting masquerade is guaranteed.
-	"$KILLSWITCH_SCRIPT"
+	timeout --kill-after=5s 35s "$KILLSWITCH_SCRIPT"
 fi
 
 configure_resolved_dns "$VPN_INTERFACE" "$DNS_SERVERS_CSV"
+fi
 
 inject_routes() {
-	ip route del "$NATPMP_GATEWAY" 2>/dev/null || true
-
-	# Clean stale rules first (avoid duplicates and remove old host-wide rules).
-	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-		cidr="$(trim_field "$cidr")"
-		[[ -n "$cidr" ]] || continue
-		ip rule del to "$cidr" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY" 2>/dev/null || true
-	done
-	ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
-	ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
-	ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
+	proton_delete_ip_rule_all 4 fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+	proton_delete_ip_rule_all 4 not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
 	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	if ipv6_enabled; then
 		ip -6 route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
-		ip -6 rule del oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip -6 rule add oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
+		proton_replace_ip_rule 6 oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 	fi
 	# NATPMP gateway must be reachable inside the tunnel table too.
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	# Keep the direct host route in the main table for natpmpc.
-	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" 2>/dev/null || true
+	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE"
 
 	# Keep Docker<->Docker and Docker<->LAN traffic on the main table, while
 	# qBittorrent container traffic is forced into this instance's VPN table.
@@ -789,20 +804,20 @@ inject_routes() {
 		local cached_qbt_container_ip=""
 		local cached_qbt_rule_source=""
 
-		qbt_container_ip="$(resolve_qbt_container_ip || true)"
+		qbt_container_ip="$QBT_IP_SNAPSHOT"
 		cached_qbt_container_ip="$(read_cached_qbt_container_ip || true)"
 
 		if [[ -n "$cached_qbt_container_ip" ]]; then
 			cached_qbt_rule_source="$(normalize_ipv4_rule_source "$cached_qbt_container_ip" || true)"
 			if [[ -n "$cached_qbt_rule_source" ]]; then
-				ip rule del from "$cached_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+				proton_delete_ip_rule_all 4 from "$cached_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 			fi
 		fi
 
 		if [[ -n "$qbt_container_ip" ]]; then
 			qbt_rule_source="$(normalize_ipv4_rule_source "$qbt_container_ip" || true)"
 			if [[ -n "$qbt_rule_source" ]]; then
-				ip rule del from "$qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+				proton_delete_ip_rule_all 4 from "$qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 			fi
 		fi
 
@@ -816,24 +831,17 @@ inject_routes() {
 				proton_replace_ip_rule 4 from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
 			fi
 
-			# Remove the legacy singleton Docker->VPN rule. With multiple
-			# instance tables it has a lower priority number than the qBittorrent
-			# /32 rules, so leaving it in place would still collapse every
-			# container onto table 51820.
-			ip rule del from "$cidr" lookup 51820 priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-			ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-			ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+			proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
+			proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 			if docker_fallback_vpn_routing_enabled; then
-				ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+				ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 			fi
 		done
 
 		if [[ -n "$qbt_rule_source" ]]; then
 			ip rule add from "$qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
-			persist_qbt_container_ip "$qbt_container_ip"
 			log "qBittorrent policy routing: source $qbt_rule_source -> table $VPN_TABLE via $VPN_INTERFACE"
 		else
-			persist_qbt_container_ip ""
 			if [[ -n "$QBT_CONTAINER_NAME" ]]; then
 				log "WARNING: Could not resolve an IPv4 address for $QBT_CONTAINER_NAME; qBittorrent will use Docker fallback routing until the watcher reconciles it"
 			fi
@@ -855,23 +863,23 @@ inject_routes() {
 		local cached_qbt_container_ipv6=""
 		local cached_qbt_ipv6_rule_source=""
 
-		qbt_container_ipv6="$(resolve_qbt_container_ipv6 || true)"
+		qbt_container_ipv6="$QBT_IP6_SNAPSHOT"
 		cached_qbt_container_ipv6="$(read_cached_qbt_container_ipv6 || true)"
 		qbt_ipv6_rule_source="$(normalize_ipv6_rule_source "$qbt_container_ipv6" || true)"
 		cached_qbt_ipv6_rule_source="$(normalize_ipv6_rule_source "$cached_qbt_container_ipv6" || true)"
 
 		if [[ -n "$cached_qbt_ipv6_rule_source" ]]; then
-			ip -6 rule del from "$cached_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+			proton_delete_ip_rule_all 6 from "$cached_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 		fi
 		if [[ -n "$qbt_ipv6_rule_source" ]]; then
-			ip -6 rule del from "$qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+			proton_delete_ip_rule_all 6 from "$qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 		fi
 
 		for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
 			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
 			proton_replace_ip_rule 6 from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
-			ip -6 rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+			proton_delete_ip_rule_all 6 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 			if docker_ipv6_fallback_enabled; then
 				ip -6 rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 			fi
@@ -879,10 +887,8 @@ inject_routes() {
 
 		if [[ -n "$qbt_ipv6_rule_source" ]]; then
 			ip -6 rule add from "$qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
-			persist_qbt_container_ipv6 "$qbt_container_ipv6"
 			log "qBittorrent IPv6 policy routing: source $qbt_ipv6_rule_source -> table $VPN_TABLE via $VPN_INTERFACE"
 		else
-			persist_qbt_container_ipv6 ""
 			log "WARNING: Could not resolve an IPv6 address for $QBT_CONTAINER_NAME; IPv6 remains unavailable until the watcher reconciles it"
 		fi
 
@@ -894,6 +900,11 @@ inject_routes() {
 	ensure_vpn_tcp_mss_clamp_rules
 }
 
+QBT_IP_SNAPSHOT="$(resolve_qbt_container_ip || true)"
+QBT_IP6_SNAPSHOT="$(resolve_qbt_container_ipv6 || true)"
+if [[ -z "$QBT_IP_SNAPSHOT" ]]; then QBT_IP_SNAPSHOT="$(read_cached_qbt_container_ip || true)"; fi
+if [[ -z "$QBT_IP6_SNAPSHOT" ]]; then QBT_IP6_SNAPSHOT="$(read_cached_qbt_container_ipv6 || true)"; fi
+QBT_SNAPSHOT_READY=1
 if ! proton_route_lock_acquire; then
 	log "ERROR: Could not acquire the shared policy-route lock for $INSTANCE"
 	exit 1
@@ -915,9 +926,19 @@ for _i in $(seq 1 "$WG_UP_WAIT_SECONDS"); do
 	sleep 1
 done
 
-if [[ -z "$IP" ]]; then
-	log "ERROR: $VPN_INTERFACE came up without an IPv4 address"
+if [[ -z "$IP" || ( -n "${WG_TUNNEL_ADDRESS:-}" && "$IP" != "${WG_TUNNEL_ADDRESS%%/*}" ) ]]; then
+	log "ERROR: $VPN_INTERFACE did not come up with its expected IPv4 address"
 	exit 1
 fi
 
 log "WireGuard up on $VPN_INTERFACE with IP: $IP"
+persist_docker_network_cidr
+persist_qbt_container_ip "$QBT_IP_SNAPSHOT"
+if ipv6_enabled; then persist_qbt_container_ipv6 "$QBT_IP6_SNAPSHOT"; fi
+if (( ! KEEP_TUNNEL )); then
+	umask 077
+	GENERATION_TEMP="$(mktemp "${STATE_DIR}/.generation.XXXXXX")"
+	cat /proc/sys/kernel/random/uuid >"$GENERATION_TEMP"
+	mv -f "$GENERATION_TEMP" "${STATE_DIR}/tunnel-generation"
+fi
+LIFECYCLE_CHANGED=0

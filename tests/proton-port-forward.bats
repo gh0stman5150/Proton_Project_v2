@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+export BATS_TEST_TIMEOUT=15
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
@@ -25,6 +27,7 @@ setup() {
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_POOL_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$PROTON_COMMON_ENV"
   : > "$PROTON_PORT_FORWARD_ENV"
+  printf 'fixture-generation\n' > "$STATE_DIR/tunnel-generation"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
 STATE_DIR=$STATE_DIR
@@ -32,6 +35,7 @@ STATE_FILE=$STATE_FILE
 SERVER_SELECTION_FILE=$SERVER_SELECTION_FILE
 RECOVERY_LOCK_FILE=$RECOVERY_LOCK_FILE
 WG_POOL_DIR=$WG_POOL_DIR
+WG_ADDRESS_SUBNET=2
 EOF
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
@@ -61,7 +65,7 @@ EOF
   cat > "$TMPBIN/ip" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == "-4" && "$2" == "addr" && "$3" == "show" ]]; then
-  printf '3: %s    inet 10.2.0.2/32 scope global %s\n' "$4" "$4"
+  printf '3: %s\n    inet 10.2.0.2/32 scope global %s\n' "$4" "$4"
   exit 0
 fi
 exit 1
@@ -84,8 +88,9 @@ EOF
 
   cat > "$TMPBIN/timeout" <<'EOF'
 #!/usr/bin/env bash
+while [[ "$1" == --* ]]; do shift; done
 shift
-"$@"
+exec "$@"
 EOF
   chmod +x "$TMPBIN/timeout"
 
@@ -120,13 +125,14 @@ n=0
 n=$((n + 1))
 echo "$n" > "$count_file"
 # Fail the first NAT-PMP window (udp+tcp), then forward successfully.
-if (( n <= 2 )); then
+if (( n <= 1 )); then
   exit 1
 fi
 if [[ "${4:-}" == "udp" ]]; then
+  printf 'Mapped public port 45678 protocol udp lifetime 60\n'
   exit 0
 fi
-printf 'Mapped public port 45678 protocol tcp\n'
+printf 'Mapped public port 45678 protocol tcp lifetime 60\n'
 exit 0
 EOF
   chmod +x "$TMPBIN/natpmpc"
@@ -229,10 +235,11 @@ EOF
 #!/usr/bin/env bash
 if [[ -f "${RECONNECTED_MARKER:-}" ]]; then
   if [[ "${4:-}" == "udp" ]]; then
+    printf 'Mapped public port 45678 protocol udp lifetime 60\n'
     exit 0
   fi
   if [[ "${4:-}" == "tcp" ]]; then
-    printf 'Mapped public port 45678 protocol tcp\n'
+    printf 'Mapped public port 45678 protocol tcp lifetime 60\n'
     exit 0
   fi
 fi
@@ -286,4 +293,223 @@ EOF
   grep -F 'mark-capable wg-new 45678' "$SERVER_MANAGER_LOG"
   run grep -F 'mark-capable wg-old 45678' "$SERVER_MANAGER_LOG"
   [ "$status" -ne 0 ]
+}
+
+@test "lease duration must leave time for both bounded renewal requests" {
+  run env PORT_LEASE_SECONDS=10 bash ./proton-port-forward-safe.sh sonarr once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"renewal budget"* ]]
+  [ ! -f "$STATE_FILE" ]
+}
+
+@test "loop schedules the next attempt within the default lease renewal budget" {
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+printf 'Mapped public port 45678 protocol %s lifetime 60\n' "$4"
+EOF
+  cat > "$TMPBIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$1" > "$STATE_DIR/delay"
+exit 42
+EOF
+  chmod +x "$TMPBIN/sleep"
+  run env NATPMP_TIMEOUT_SECONDS=15 bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(cat "$STATE_DIR/delay")" -le 16 ]
+  [ -f "$STATE_FILE" ]
+}
+
+@test "one-shot publication requires matching protocols and a usable granted lifetime" {
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$4" >> "$STATE_DIR/requests"
+if [[ "$4" == udp && "${REPLY_CASE:-}" == udp-failure ]]; then exit 1; fi
+port=45678
+lifetime=60
+if [[ "$4" == tcp ]]; then
+  case "${REPLY_CASE:-}" in
+    mismatch) port=45679 ;;
+    expired) lifetime=1 ;;
+    malformed) lifetime=invalid ;;
+    generation) printf 'new-generation\n' > "$STATE_DIR/tunnel-generation" ;;
+    shorter) lifetime=30 ;;
+  esac
+fi
+printf 'Mapped public port %s protocol %s to local port 1 lifetime %s\n' "$port" "$4" "$lifetime"
+EOF
+  cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+touch "$STATE_DIR/synced"
+EOF
+  for reply in udp-failure mismatch expired malformed generation; do
+    printf 'previous-state\n' > "$STATE_FILE"
+    : > "$STATE_DIR/requests"
+    run env REPLY_CASE="$reply" bash ./proton-port-forward-safe.sh sonarr once
+    [ "$status" -eq 1 ]
+    [ "$(cat "$STATE_FILE")" = previous-state ]
+    [ ! -f "$STATE_DIR/synced" ]
+    if [[ "$reply" == udp-failure ]]; then
+      [ "$(cat "$STATE_DIR/requests")" = udp ]
+    fi
+  done
+  before="$(date +%s)"
+  run env REPLY_CASE=shorter bash ./proton-port-forward-safe.sh sonarr once
+  [ "$status" -eq 0 ]
+  expiry="$(awk -F= '$1 == "LEASE_EXPIRES_AT" {print $2}' "$STATE_FILE")"
+  [ "$expiry" -ge "$((before + 30))" ]
+  [ "$expiry" -le "$(( $(date +%s) + 30 ))" ]
+  [ "$(stat -c %a "$STATE_FILE")" = 600 ]
+  [ -f "$STATE_DIR/synced" ]
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -eq 0 ]
+  [ "$output" = 45678 ]
+}
+
+@test "a busy lifecycle or NAT-PMP writer lock prevents publication" {
+  rm "$TMPBIN/flock"
+  for lock in lifecycle natpmp; do
+    exec {lock_fd}>"$STATE_DIR/$lock.lock"
+    flock "$lock_fd"
+    run env NATPMP_LOCK_WAIT_SECONDS=0 bash ./proton-port-forward-safe.sh sonarr once
+    [ "$status" -eq 1 ]
+    [ ! -f "$STATE_FILE" ]
+    flock -u "$lock_fd"
+    exec {lock_fd}>&-
+  done
+}
+
+@test "renewals continue during slow sync and shutdown terminates the owned sync group" {
+  rm "$TMPBIN/timeout" "$TMPBIN/flock"
+  mkfifo "$STATE_DIR/ready" "$STATE_DIR/blocked"
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$4" >> "$STATE_DIR/requests"
+printf 'Mapped public port 45678 protocol %s lifetime 60\n' "$4"
+EOF
+  cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+printf 'sync\n' >> "$STATE_DIR/sync-count"
+trap 'touch "$STATE_DIR/terminated"; exit 0' TERM
+exec 7<>"$STATE_DIR/blocked"
+printf 'ready\n' > "$STATE_DIR/ready"
+read -r -t 10 -u 7 ignored
+EOF
+  cat > "$TMPBIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+if [[ ! -f "$STATE_DIR/started" ]]; then
+  read -r ready < "$STATE_DIR/ready"
+  touch "$STATE_DIR/started"
+fi
+count="$(wc -l < "$STATE_DIR/requests")"
+if ((count >= 6)); then exit 42; fi
+EOF
+  chmod +x "$TMPBIN/sleep"
+  run bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$STATE_DIR/sync-count")" -eq 1 ]
+  [ -f "$STATE_DIR/terminated" ]
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -eq 0 ]
+}
+
+@test "allocator queues startup and requires a fresh lease from an active producer" {
+  cat > "$TMPBIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STATE_DIR/systemctl.log"
+case "$1" in
+  --no-block) exit "${START_RESULT:-0}" ;;
+  is-active) exit "${ACTIVE_RESULT:-0}" ;;
+  *) exit 0 ;;
+esac
+EOF
+  cat > "$TMPBIN/journalctl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+touch "$STATE_DIR/synced"
+EOF
+  chmod +x "$TMPBIN/systemctl" "$TMPBIN/journalctl"
+  export WAIT_TRIES=2 WAIT_INTERVAL_SECONDS=0
+  run bash ./proton-qbt-allocate-and-sync.sh sonarr
+  [ "$status" -eq 1 ]
+  [ ! -f "$STATE_DIR/synced" ]
+  cat > "$STATE_FILE" <<EOF
+CURRENT_PORT=45678
+CURRENT_IP=10.2.0.2
+LEASE_EXPIRES_AT=1
+LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+LEASE_GENERATION=fixture-generation
+EOF
+  run bash ./proton-qbt-allocate-and-sync.sh sonarr
+  [ "$status" -eq 1 ]
+  [ ! -f "$STATE_DIR/synced" ]
+  sed -i "s/^LEASE_EXPIRES_AT=.*/LEASE_EXPIRES_AT=$(( $(date +%s) + 60 ))/" "$STATE_FILE"
+  run env ACTIVE_RESULT=1 bash ./proton-qbt-allocate-and-sync.sh sonarr
+  [ "$status" -eq 1 ]
+  [ ! -f "$STATE_DIR/synced" ]
+  run env START_RESULT=1 bash ./proton-qbt-allocate-and-sync.sh sonarr
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not canceled"* ]]
+  [ ! -f "$STATE_DIR/synced" ]
+  run bash ./proton-qbt-allocate-and-sync.sh sonarr
+  [ "$status" -eq 0 ]
+  [ -f "$STATE_DIR/synced" ]
+  grep -Fx -- '--no-block start proton-port-forward@sonarr.service' "$STATE_DIR/systemctl.log"
+}
+
+@test "allocator enforces its overall deadline even when the systemctl client stalls" {
+  rm "$TMPBIN/timeout"
+  mkfifo "$STATE_DIR/blocked"
+  cat > "$TMPBIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+exec 7<>"$STATE_DIR/blocked"
+read -r -t 10 -u 7 ignored
+EOF
+  chmod +x "$TMPBIN/systemctl"
+  before="$SECONDS"
+  run env ALLOCATION_TIMEOUT_SECONDS=1 bash ./proton-qbt-allocate-and-sync.sh sonarr
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not canceled"* ]]
+  [ "$((SECONDS - before))" -lt 5 ]
+}
+
+@test "elapsed replies and failed atomic rename never publish partial lease state" {
+  export REAL_DATE
+  REAL_DATE="$(command -v date)"
+  cat > "$TMPBIN/date" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == +%s ]]; then cat "$STATE_DIR/clock"; else exec "$REAL_DATE" "$@"; fi
+EOF
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$4" == tcp && "${EXPIRE_DURING_REQUEST:-0}" == 1 ]]; then
+  printf '170\n' > "$STATE_DIR/clock"
+fi
+printf 'Mapped public port 45678 protocol %s lifetime 60\n' "$4"
+EOF
+  cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+touch "$STATE_DIR/synced"
+EOF
+  chmod +x "$TMPBIN/date"
+  printf '100\n' > "$STATE_DIR/clock"
+  printf 'previous-state\n' > "$STATE_FILE"
+  run env EXPIRE_DURING_REQUEST=1 bash ./proton-port-forward-safe.sh sonarr once
+  [ "$status" -eq 1 ]
+  [ "$(cat "$STATE_FILE")" = previous-state ]
+  [ ! -f "$STATE_DIR/synced" ]
+  cat > "$TMPBIN/mv" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$TMPBIN/mv"
+  printf '100\n' > "$STATE_DIR/clock"
+  run bash ./proton-port-forward-safe.sh sonarr once
+  [ "$status" -eq 1 ]
+  [ "$(cat "$STATE_FILE")" = previous-state ]
+  [ ! -f "$STATE_DIR/synced" ]
+  run compgen -G "$STATE_FILE.*"
+  [ "$status" -eq 1 ]
 }

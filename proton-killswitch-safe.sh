@@ -49,7 +49,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk cat chmod flock ip iptables mkdir systemd-cat tr; do
+for cmd in awk cat chmod flock ip iptables iptables-save iptables-restore mkdir mktemp systemd-cat tr wg; do
 	require_command "$cmd"
 done
 
@@ -83,6 +83,11 @@ fi
 
 if [[ -n "$DOCKER_NETWORK_CIDR6" ]]; then
 	log "ERROR: Docker IPv6 requires KILLSWITCH_BACKEND=nftables; the iptables backend refuses to continue"
+	exit 1
+fi
+
+if [[ -z "$DOCKER_NETWORK_CIDR" ]]; then
+	log "ERROR: Docker CIDR is required; preserving the existing firewall"
 	exit 1
 fi
 
@@ -168,11 +173,14 @@ add_lan_to_docker_rules() {
 
 add_vpn_to_docker_rules() {
 	local cidr
+	local interface
 
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
-		iptables -A "$DOCKER_FORWARD_CHAIN" -i "$VPN_IF" -d "$cidr" -j ACCEPT
+		for interface in $VPN_INTERFACES; do
+			iptables -A "$DOCKER_FORWARD_CHAIN" -i "$interface" -d "$cidr" -j ACCEPT
+		done
 	done
 }
 
@@ -190,11 +198,14 @@ add_docker_to_lan_rules() {
 
 add_docker_to_vpn_rules() {
 	local cidr
+	local interface
 
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
-		iptables -A "$DOCKER_FORWARD_CHAIN" -s "$cidr" -o "$VPN_IF" -j ACCEPT
+		for interface in $VPN_INTERFACES; do
+			iptables -A "$DOCKER_FORWARD_CHAIN" -s "$cidr" -o "$interface" -j ACCEPT
+		done
 	done
 }
 
@@ -231,30 +242,37 @@ ensure_nat_chain() {
 	iptables -t nat -I POSTROUTING 1 -j "$NAT_CHAIN"
 }
 
-load_selected_server
-
 require_value "LAN_IF" "$LAN_IF"
 require_value "LAN_CIDR" "$LAN_CIDR"
 
-ensure_chain "$DOCKER_FORWARD_CHAIN"
-ensure_nat_chain
-ensure_jump_rule FORWARD "$DOCKER_FORWARD_CHAIN"
-
-iptables -A "$DOCKER_FORWARD_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
-if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
+VPN_INTERFACES="$(printf '%s\n' "$VPN_IF" 'pvlidarr pvprowlarr pvradarr pvsonarr pvwhisparr' "$(wg show interfaces)" | tr ' ' '\n' | sort -u)"
+FILTER_SNAPSHOT="$(iptables-save -t filter)"
+NAT_SNAPSHOT="$(iptables-save -t nat)"
+BATCH="$(mktemp)"
+trap 'rm -f "$BATCH"' EXIT
+iptables() { printf '%s\n' "$*"; }
+{
+	printf '*filter\n:%s - [0:0]\n-F %s\n' "$DOCKER_FORWARD_CHAIN" "$DOCKER_FORWARD_CHAIN"
+	awk -v chain="$DOCKER_FORWARD_CHAIN" '$0 == "-A FORWARD -j " chain { print "-D FORWARD -j " chain }' <<<"$FILTER_SNAPSHOT"
+	printf '%s\n' "-I FORWARD 1 -j $DOCKER_FORWARD_CHAIN"
+	iptables -A "$DOCKER_FORWARD_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 	add_docker_local_rules
 	add_lan_to_docker_rules
 	add_vpn_to_docker_rules
 	add_docker_to_lan_rules
 	add_docker_to_vpn_rules
 	add_docker_drop_rules
-else
-	log "WARNING: DOCKER_NETWORK_CIDR is empty; Docker leak-prevention rules were not installed"
-fi
-
-iptables -A "$DOCKER_FORWARD_CHAIN" -j RETURN
-iptables -A "$NAT_CHAIN" -o "$VPN_IF" -j MASQUERADE
+	iptables -A "$DOCKER_FORWARD_CHAIN" -j RETURN
+	printf 'COMMIT\n*nat\n:%s - [0:0]\n-F %s\n' "$NAT_CHAIN" "$NAT_CHAIN"
+	awk -v chain="$NAT_CHAIN" '$0 == "-A POSTROUTING -j " chain { print "-D POSTROUTING -j " chain }' <<<"$NAT_SNAPSHOT"
+	printf '%s\n' "-I POSTROUTING 1 -j $NAT_CHAIN"
+	for interface in $VPN_INTERFACES; do
+		iptables -A "$NAT_CHAIN" -o "$interface" -j MASQUERADE
+	done
+	printf 'COMMIT\n'
+} >"$BATCH"
+iptables-restore --wait 30 --noflush --test <"$BATCH"
+iptables-restore --wait 30 --noflush <"$BATCH"
 
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 	log "iptables Docker kill switch applied for [$DOCKER_NETWORK_CIDR] on $LAN_IF -> $VPN_IF; DNS to LAN is blocked and non-Docker host traffic is untouched"

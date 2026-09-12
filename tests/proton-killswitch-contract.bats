@@ -63,6 +63,16 @@ exit 0
 EOF
   chmod +x "$TMPBIN/iptables"
 
+  cat > "$TMPBIN/iptables-save" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  cat > "$TMPBIN/iptables-restore" <<'EOF'
+#!/usr/bin/env bash
+cat >> "$IPTABLES_LOG"
+EOF
+  chmod +x "$TMPBIN/iptables-save" "$TMPBIN/iptables-restore"
+
   cat > "$TMPBIN/nft" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == '-f' ]]; then
@@ -166,4 +176,24 @@ EOF
   [ "$status" -ne 0 ]
   grep -F 'Docker IPv6 requires KILLSWITCH_BACKEND=nftables' "$SYSTEMD_LOG"
   [ ! -s "$IPTABLES_LOG" ]
+}
+
+@test "iptables replacement covers all five interfaces without live chain flushes" {
+  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
+  [ "$status" -eq 0 ]
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    grep -F -- "-o pv$instance -j ACCEPT" "$IPTABLES_LOG"
+    grep -F -- "-o pv$instance -j MASQUERADE" "$IPTABLES_LOG"
+  done
+  grep -Fx '*filter' "$IPTABLES_LOG"
+  grep -Fx '*nat' "$IPTABLES_LOG"
+}
+
+@test "both backends refuse an unknown Docker network scope" {
+  for backend in safe nft; do
+    run env DOCKER_NETWORK_CIDR= SERVER_POOL_ENABLED=off bash "./proton-killswitch-$backend.sh"
+    [ "$status" -ne 0 ]
+  done
+  [ ! -s "$IPTABLES_LOG" ]
+  [ ! -s "$NFT_LOG" ]
 }

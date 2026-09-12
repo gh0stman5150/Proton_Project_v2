@@ -9,6 +9,7 @@ if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
 fi
 # shellcheck disable=SC1090
 source "$INSTANCE_COMMON_SCRIPT"
+REQUESTED_FORCE_RECREATE="${QBT_FORCE_RECREATE:-}"
 proton_instance_init "${1:-}"
 
 ENV_FILE="${QBITTORRENT_ENV_FILE}"
@@ -68,6 +69,7 @@ fi
 # shellcheck disable=SC1090
 source "$QBT_COMMON_SCRIPT"
 qbt_source_env_file "$ENV_FILE"
+if [[ -n "$REQUESTED_FORCE_RECREATE" ]]; then QBT_FORCE_RECREATE="$REQUESTED_FORCE_RECREATE"; fi
 
 QBT_INTERNAL_PORT="${QBT_INTERNAL_PORT:-6881}"
 QBT_PORT_APPLY_MODE="${QBT_PORT_APPLY_MODE:-compose-recreate}"
@@ -84,6 +86,11 @@ QBT_FORCE_RECREATE="${QBT_FORCE_RECREATE:-0}"
 QBT_SYNC_LOCK_WAIT_SECONDS="${QBT_SYNC_LOCK_WAIT_SECONDS:-30}"
 QBT_DSTATE_SAMPLES="${QBT_DSTATE_SAMPLES:-3}"
 QBT_DSTATE_DELAY="${QBT_DSTATE_DELAY:-1}"
+QBT_ROUTE_RECONCILE_SCRIPT="${QBT_ROUTE_RECONCILE_SCRIPT:-${SCRIPT_DIR}/proton-docker-network-watcher.sh}"
+
+reconcile_container_routes() {
+	timeout --foreground --kill-after=5s 60s bash "$QBT_ROUTE_RECONCILE_SCRIPT" "$INSTANCE" --once
+}
 
 case "$QBT_PORT_APPLY_MODE" in
 compose-recreate | legacy-dnat) ;;
@@ -148,12 +155,7 @@ acquire_sync_lock() {
 
 acquire_sync_lock
 
-PORT="$(awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
-
-if [[ -z "$PORT" ]]; then
-	log "No port found, skipping"
-	exit 0
-fi
+PORT="$(proton_lease_read)" || { log "ERROR: Missing, stale, or invalid Proton lease"; exit 1; }
 
 if [[ ! "$PORT" =~ ^[0-9]+$ ]] || ((PORT < 1 || PORT > 65535)); then
 	log "ERROR: Invalid port value: $PORT"
@@ -491,6 +493,10 @@ compose_container_is_wedged_for_recreate() {
 	local status
 	local ports
 
+	if ! qbt_container_safe_for_recreate "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}" 1; then
+		log "ERROR: Unsafe or unknown container task state; refusing recreation. Follow the wedge-recovery runbook."
+		return 0
+	fi
 	container_ref="$(compose_container_ref_all)" || return 1
 	status="$(docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true)"
 	[[ "$status" == "running" ]] || return 1
@@ -512,7 +518,7 @@ compose_container_is_wedged_for_recreate() {
 		return 1
 	fi
 
-	log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with no published ports; refusing Compose self-heal recreate to avoid Docker name-conflict orphan loop. Stop proton services and clear the stuck container cgroup/shim before recreating."
+	log "ERROR: Running container has no published ports; refusing self-heal. Capture evidence and follow the wedge-recovery runbook."
 	return 0
 }
 
@@ -577,13 +583,24 @@ run_compose_recreate() {
 	local exit_code=0
 	local output_file
 
+	qbt_storage_ready || { log "ERROR: Required writable CIFS leaf is unavailable; refusing recreation"; return 1; }
 	output_file="$(mktemp)"
 	while ((attempt <= QBT_COMPOSE_RECREATE_RETRIES)); do
+		[[ "$(proton_lease_read)" == "$target_port" ]] || { rm -f "$output_file"; return 1; }
 		(
 			cd "$QBT_COMPOSE_PROJECT_DIR"
 			QBT_PUBLISHED_PORT="$target_port" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose stop "$QBT_COMPOSE_SERVICE"
-		) >/dev/null 2>&1 || true
-		clean_stale_qbt_lock
+		) >/dev/null 2>&1 || { rm -f "$output_file"; return 1; }
+		local stopped_status
+		stopped_status="$(docker inspect -f '{{.State.Status}}' "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}" 2>/dev/null)" || {
+			qbt_container_safe_for_recreate "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}" 1 || { rm -f "$output_file"; return 1; }
+			stopped_status=absent
+		}
+		case "$stopped_status" in
+		exited | created | absent) ;;
+		*) rm -f "$output_file"; return 1 ;;
+		esac
+		clean_stale_qbt_lock || { rm -f "$output_file"; return 1; }
 		if (
 			cd "$QBT_COMPOSE_PROJECT_DIR"
 			DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
@@ -630,6 +647,7 @@ recreate_qbt_service_compose() {
 	if ! run_compose_recreate "$target_port"; then
 		return 1
 	fi
+	reconcile_container_routes || return 1
 
 	if ! qbt_wait_for_webui 12 5; then
 		log "ERROR: qBittorrent Web UI did not become reachable after recreating $QBT_COMPOSE_SERVICE"
@@ -759,6 +777,10 @@ refresh_qbt_dnat_legacy() {
 	log "Updated qBittorrent DNAT: public port $PORT -> ${CONTAINER_IP}:${QBT_INTERNAL_PORT}"
 }
 
+if [[ "$(compose_container_status || true)" == running ]]; then
+	reconcile_container_routes || exit 1
+fi
+
 if ! qbt_login "$COOKIE_JAR"; then
 	if skip_sync_for_manual_stop; then
 		exit 0
@@ -834,11 +856,7 @@ compose-recreate)
 			if [[ -n "$rollback_port" ]]; then
 				log "Restoring qBittorrent published port artifact -> $rollback_port"
 				write_published_port_value "$rollback_port"
-				if recreate_qbt_service_compose "$rollback_port"; then
-					log "Restored qBittorrent service on previous published port $rollback_port after failed recreate for $PORT"
-				else
-					log "ERROR: Failed to restore qBittorrent service on previous published port $rollback_port"
-				fi
+				log "Previous artifact retained as last-applied metadata only; refusing recreation on a historical lease"
 			else
 				log "Removing qBittorrent published port artifact after failed recreate for $PORT"
 				rm -f "$QBT_PORT_ENV_FILE"
@@ -856,6 +874,7 @@ compose-recreate)
 	;;
 legacy-dnat)
 	if ((LISTEN_PORT_CHANGED)); then
+		qbt_container_safe_for_recreate "$QBT_CONTAINER_NAME" || exit 1
 		restart_qbt_container_legacy || exit 1
 	fi
 	refresh_qbt_dnat_legacy || exit 1
