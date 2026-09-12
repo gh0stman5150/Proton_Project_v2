@@ -41,6 +41,68 @@ proton_lease_read() {
 	printf '%s\n' "$port"
 }
 
+proton_with_firewall_lock() (
+	local lock_file="${KILLSWITCH_LOCK_FILE:-/run/proton/killswitch.lock}"
+	local wait_seconds="${PROTON_FIREWALL_LOCK_WAIT_SECONDS:-30}"
+	[[ "$wait_seconds" =~ ^[0-9]+$ ]] || return 1
+	mkdir -p "$(dirname "$lock_file")" || return 1
+	exec 9>"$lock_file" || return 1
+	flock -w "$wait_seconds" 9 || return 1
+	"$@"
+)
+
+proton_iptables_rule_locked() {
+	local action="$1" table="$2" chain="$3" error status attempt
+	shift 3
+	for ((attempt = 0; attempt < 64; attempt++)); do
+		if error="$(LC_ALL=C timeout --kill-after=2s 10s iptables --wait 5 -t "$table" -C "$chain" "$@" 2>&1)"; then
+			timeout --kill-after=2s 10s iptables --wait 5 -t "$table" -D "$chain" "$@" || return 1
+		else
+			status=$?
+			if [[ "$status" != 1 || "$error" != *'Bad rule (does a matching rule exist in that chain?).'* ]]; then
+				printf 'ERROR: Firewall rule inspection failed: %s\n' "$error" >&2
+				return 1
+			fi
+			if [[ "$action" == ensure ]]; then
+				timeout --kill-after=2s 10s iptables --wait 5 -t "$table" -I "$chain" 1 "$@" || return 1
+			fi
+			return 0
+		fi
+	done
+	return 1
+}
+
+proton_iptables_rule() {
+	[[ "$1" == ensure || "$1" == remove ]] || return 1
+	proton_with_firewall_lock proton_iptables_rule_locked "$@"
+}
+
+proton_nft_chain_snapshot() {
+	local family="$1" table="$2" chain="$3" tables table_rules
+	export PROTON_NFT_TABLE_EXISTS=0
+	export PROTON_NFT_CHAIN_EXISTS=0
+	export PROTON_NFT_RULES=""
+	tables="$(nft list tables)" || return 1
+	if ! grep -Fxq "table $family $table" <<<"$tables"; then return 0; fi
+	PROTON_NFT_TABLE_EXISTS=1
+	table_rules="$(nft list table "$family" "$table")" || return 1
+	if ! awk -v chain="$chain" '$1 == "chain" && $2 == chain && $3 == "{" {found=1} END {exit !found}' <<<"$table_rules"; then return 0; fi
+	PROTON_NFT_CHAIN_EXISTS=1
+	PROTON_NFT_RULES="$(nft -a list chain "$family" "$table" "$chain")" || return 1
+}
+
+proton_nft_delete_comment_rules() {
+	local family="$1" table="$2" chain="$3" comment="$4" rules="$5"
+	awk -v family="$family" -v table="$table" -v chain="$chain" -v comment="$comment" '
+        index($0, "comment \"" comment "\"") {
+            for (field=1; field<=NF; field++) {
+                if ($field == "handle" && $(field+1) ~ /^[0-9]+$/)
+                    printf "delete rule %s %s %s handle %s\n", family, table, chain, $(field+1)
+            }
+        }
+    ' <<<"$rules"
+}
+
 proton_allowed_instances() {
 	printf '%s\n' lidarr radarr sonarr whisparr prowlarr
 }

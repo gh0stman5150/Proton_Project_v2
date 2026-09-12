@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 setup() {
+  export BATS_TEST_TIMEOUT=20
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
   export STATE_DIR="$TEST_TMPDIR/state"
@@ -71,6 +72,85 @@ printf 'PING %s (%s) 56(84) bytes of data.\n' "$target" "$target"
 printf 'rtt min/avg/max/mdev = %s/%s/%s/0.000 ms\n' "$avg" "$avg" "$avg"
 EOF
   chmod +x "$TMPBIN/ping"
+}
+
+@test "claim rename failure preserves selection and existing claims" {
+  write_pool_config wg-a host-a
+  printf 'SELECTED_WG_PROFILE=wg-old\n' > "$SERVER_SELECTION_FILE"
+  printf 'wg-other\t%s\t40000\tother\n' "$(date +%s)" > "$PF_CLAIMS_FILE"
+  cp "$PF_CLAIMS_FILE" "$TEST_TMPDIR/claims-before"
+  cat > "$TMPBIN/mv" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${@: -1}" == "$PF_CLAIMS_FILE" ]]; then exit 1; fi
+exec /usr/bin/mv "$@"
+EOF
+  chmod +x "$TMPBIN/mv"
+  run bash ./proton-server-manager.sh select
+  [ "$status" -ne 0 ]
+  grep -Fx 'SELECTED_WG_PROFILE=wg-old' "$SERVER_SELECTION_FILE"
+  cmp "$PF_CLAIMS_FILE" "$TEST_TMPDIR/claims-before"
+  [ -z "$(find "$TEST_TMPDIR" -name '.pf-claims.tsv.*')" ]
+}
+
+@test "failed profile read does not replace existing metadata" {
+  printf 'wg-a\t1\ttimeout\n' > "$PF_INCAPABLE_PROFILES_FILE"
+  printf 'wg-other\t1\t40000\n' > "$PF_CAPABLE_PROFILES_FILE"
+  cp "$PF_CAPABLE_PROFILES_FILE" "$TEST_TMPDIR/capable-before"
+  cat > "$TMPBIN/awk" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${@: -1}" == "$PF_CAPABLE_PROFILES_FILE" ]]; then exit 1; fi
+exec /usr/bin/awk "$@"
+EOF
+  chmod +x "$TMPBIN/awk"
+  run bash ./proton-server-manager.sh mark-capable wg-a 50000
+  [ "$status" -ne 0 ]
+  cmp "$PF_CAPABLE_PROFILES_FILE" "$TEST_TMPDIR/capable-before"
+  grep -F 'wg-a' "$PF_INCAPABLE_PROFILES_FILE"
+  [ -z "$(find "$TEST_TMPDIR" -name '.pf-capable.tsv.*')" ]
+}
+
+@test "five concurrent selectors reserve distinct profiles sharing endpoint and port" {
+  local instance profile child
+  local -a children=()
+  for profile in wg-a wg-b wg-c wg-d wg-e; do
+    write_pool_config "$profile" host-a
+    printf '%s\t1\t40000\n' "$profile" >> "$PF_CAPABLE_PROFILES_FILE"
+  done
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    env STATE_DIR="$PROTON_RUNTIME_ROOT/$instance" \
+      SERVER_SELECTION_FILE="$PROTON_RUNTIME_ROOT/$instance/current-server.env" \
+      BAD_SERVER_FILE="$PROTON_RUNTIME_ROOT/$instance/bad.tsv" \
+      SERVER_RESELECT_FILE="$PROTON_RUNTIME_ROOT/$instance/reselect" \
+      bash ./proton-server-manager.sh select > "$TEST_TMPDIR/$instance.out" &
+    children+=("$!")
+  done
+  for child in "${children[@]}"; do wait "$child"; done
+  [ "$(awk -F '\t' '{print $1}' "$PF_CLAIMS_FILE" | sort -u | wc -l)" -eq 5 ]
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    profile="$(awk -F = '/^SELECTED_WG_PROFILE=/ {print $2}' "$PROTON_RUNTIME_ROOT/$instance/current-server.env")"
+    awk -F '\t' -v profile="$profile" -v instance="$instance" '$1 == profile && $4 == instance {found=1} END {exit !found}' "$PF_CLAIMS_FILE"
+  done
+}
+
+@test "interrupted selection publication retains old selection and releases shared lock" {
+  write_pool_config wg-a host-a
+  printf 'SELECTED_WG_PROFILE=wg-old\n' > "$SERVER_SELECTION_FILE"
+  cat > "$TMPBIN/mv" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${@: -1}" == "$SERVER_SELECTION_FILE" ]]; then
+  kill -TERM "$PPID"
+  exit 1
+fi
+exec /usr/bin/mv "$@"
+EOF
+  chmod +x "$TMPBIN/mv"
+  run bash ./proton-server-manager.sh select
+  [ "$status" -ne 0 ]
+  grep -Fx 'SELECTED_WG_PROFILE=wg-old' "$SERVER_SELECTION_FILE"
+  grep -F 'wg-a' "$PF_CLAIMS_FILE"
+  [ -z "$(find "$STATE_DIR" -name '.current-server.env.*' -o -name '.active-selections.*')" ]
+  run flock -n "$SERVER_SELECT_LOCK_FILE" true
+  [ "$status" -eq 0 ]
 }
 
 write_pool_config() {

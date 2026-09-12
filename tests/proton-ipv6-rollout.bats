@@ -78,7 +78,7 @@ EOF
 
   chmod +x "$TMPBIN/docker" "$TMPBIN/ip" "$TMPBIN/nft" "$TMPBIN/systemctl" "$TMPBIN/tar" "$TMPBIN/sysctl"
 
-  for script in proton-killswitch-nft.sh proton-killswitch-safe.sh proton-killswitch-reset.sh \
+  for script in proton-instance-common.sh proton-killswitch-nft.sh proton-killswitch-safe.sh proton-killswitch-reset.sh \
     proton-wg-up-safe.sh proton-wg-down-safe.sh proton-docker-network-watcher.sh; do
     printf '#!/usr/bin/env bash\n' > "$PROTON_PROJECT_DIR/$script"
     cp "$PROTON_PROJECT_DIR/$script" "$PROTON_LIVE_DIR/$script"

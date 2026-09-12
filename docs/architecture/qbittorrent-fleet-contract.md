@@ -345,7 +345,7 @@ restarts through `PartOf=`. A queued restart is not proof of completed recovery.
 
 Source status, 2026-09-11: these routing/lifecycle changes are tested in isolated
 fixtures but have not been installed or validated against live host routing.
-Firewall ownership follow-up and the final deployment gates remain separate work.
+Final deployment gates remain separate work.
 
 ### Shared kill-switch lock
 
@@ -355,7 +355,68 @@ Both nftables and iptables backends use:
 /run/proton/killswitch.lock
 ```
 
-The rulesets are host-wide, so per-instance kill-switch locks would not provide mutual exclusion. The kill-switch must be called outside the policy-route critical section to avoid lock-order coupling.
+The rulesets are host-wide, so per-instance kill-switch locks would not provide
+mutual exclusion. The same lock covers legacy DNAT refresh/cleanup, maintenance
+reset, and raw return-path/MSS-clamp changes. Lock waits are bounded; failure
+does not authorize mutation or lock-file deletion.
+
+When locks are nested, the order is instance lifecycle, global policy route,
+then global firewall. Raw/mangle helpers may take the firewall lock under the
+route lock; they do not call routing or selector code. Full kill-switch applies
+run outside the route critical section. Legacy DNAT resolves Docker state before
+taking the firewall lock and does not recursively invoke the cleanup executable
+while holding it. Raw-rule reconciliation restores the exact ACCEPT rule ahead
+of Docker drops; unexpected inspection/deletion/insertion errors propagate.
+
+Both backends cover `pvlidarr`, `pvprowlarr`, `pvradarr`, `pvsonarr`, and
+`pvwhisparr`, plus an explicitly configured legacy interface. They do not discover
+or authorize unrelated WireGuard interfaces. Empty or separator-only Docker CIDR
+scope is a failure. Bring-up requires a successful kill-switch apply before
+tunnel mutation, including a healthy repeated start. A watcher firewall failure
+does not queue allocation for that attempt.
+
+The nft backend replaces its `inet proton` filter table and its exact-comment
+masquerade rules in one transaction. Shared NAT tables and foreign rules remain.
+The iptables backend validates an `iptables-restore --noflush` batch before apply;
+it replaces owned chains under the lock, with one commit per table, not a
+cross-table transaction. Raw/mangle changes are serialized command sequences,
+not atomic with route updates or the full firewall apply. Docker and unrelated
+administrators do not participate in this project lock.
+
+Legacy DNAT uses the owning VPN interface, destination port, and exact
+`qbt-dnat-<instance>` comment. TCP/UDP replacement is one nft transaction, so
+equal numeric ports on different tunnels remain isolated. Cleanup deletes only
+handles with that exact comment. A successful table/chain snapshot establishes
+absence; a failed read is never interpreted as absence. The manual kill-switch
+reset removes Proton filter protection and owned masquerade rules, but preserves
+shared NAT tables, DNAT, unrelated rules, and host default policies. It is still
+a disruptive fleet operation requiring separate authorization, not routine
+per-instance recovery.
+
+### Shared selector state
+
+All selector commands serialize through `/run/proton/server-select.lock`, with
+a bounded wait. Profile claims are published before selection files; the old
+claim is released only after publication and only when owned by the selecting
+instance. Profiles remain exclusive, but shared endpoints and equal numeric
+ports are allowed. Active selection snapshots also exclude another instance's
+profile after its ephemeral claim expires.
+
+State files use same-directory temporary files and rename. Read/write failures
+are reported, not treated as empty state or successful publication. Interrupted
+publication retains the prior selection; a conservative new reservation may
+remain until retry or claim expiry. This is not a multi-file transaction. Failed
+promotion to capable state retains the quarantine record. Repeated failures of
+an unproven profile quarantine it without deleting pool configuration; transient
+failures of proven profiles trigger cooldown instead. Trappable exits remove
+owned temporary files; SIGKILL cannot guarantee temporary-file cleanup.
+
+Source status, 2026-09-11: selector and firewall changes passed fixture tests and
+real nft/iptables apply, repeatability, all-five concurrency, and reset tests in
+disposable unprivileged network namespaces. These tests did not change host
+networking. No installation, live traffic/leak test, or systemd activation was
+performed. The shared instance helper must be deployed with its callers; the
+legacy IPv6 copy/rollback bundle and parity preflight now include it.
 
 ### Per-instance locks
 

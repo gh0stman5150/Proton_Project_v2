@@ -12,6 +12,7 @@ setup() {
   export IP_LOG="$TEST_TMPDIR/ip.log"
   export PROTON_WATCHER_SOURCE_ONLY=1
   export PROTON_ROUTE_LOCK_FILE="$TEST_TMPDIR/policy-routing.lock"
+  export KILLSWITCH_LOCK_FILE="$TEST_TMPDIR/killswitch.lock"
   mkdir -p "$TMPBIN" "$STATE_DIR" "$PROTON_INSTANCE_ROOT/sonarr" "$PROTON_INSTANCE_ROOT/radarr"
   : > "$IP_LOG"
 
@@ -80,7 +81,31 @@ EOF
 #!/usr/bin/env bash
 cat - >/dev/null
 EOF
-  chmod +x "$TMPBIN/ip" "$TMPBIN/docker" "$TMPBIN/systemd-cat"
+  cat > "$TMPBIN/iptables" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${FAIL_FIREWALL_READ:-0}" == 1 ]]; then printf 'Permission denied\n' >&2; exit 1; fi
+if [[ "$*" == *' -C '* ]]; then
+  printf 'Bad rule (does a matching rule exist in that chain?).\n' >&2
+  exit 1
+fi
+exit 0
+EOF
+  chmod +x "$TMPBIN/ip" "$TMPBIN/docker" "$TMPBIN/systemd-cat" "$TMPBIN/iptables"
+}
+
+@test "firewall read failure prevents routing success cache publication" {
+  run env FAIL_FIREWALL_READ=1 bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
+  [ "$status" -ne 0 ]
+  [ ! -s "$STATE_DIR/sonarr/docker-network-watcher.last" ]
+}
+
+@test "watcher refuses missing or failed kill-switch application" {
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; KILLSWITCH_SCRIPT="$STATE_DIR/missing"; reapply_killswitch'
+  [ "$status" -ne 0 ]
+  printf '#!/usr/bin/env bash\nexit 42\n' > "$TEST_TMPDIR/failing-firewall"
+  chmod +x "$TEST_TMPDIR/failing-firewall"
+  run env KILLSWITCH_SCRIPT="$TEST_TMPDIR/failing-firewall" bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_killswitch'
+  [ "$status" -ne 0 ]
 }
 
 @test "IPv6 fallback owner receives ULA fallback and qBittorrent owner rules" {

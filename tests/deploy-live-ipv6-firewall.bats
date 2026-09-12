@@ -7,7 +7,7 @@ setup() {
   BACKUPS="$TEST_TMPDIR/backups"
   mkdir -p "$PROJECT" "$LIVE"
 
-  for script in proton-killswitch-nft.sh proton-killswitch-safe.sh proton-killswitch-reset.sh \
+  for script in proton-instance-common.sh proton-killswitch-nft.sh proton-killswitch-safe.sh proton-killswitch-reset.sh \
     proton-wg-up-safe.sh proton-wg-down-safe.sh proton-docker-network-watcher.sh; do
     printf '#!/usr/bin/env bash\necho new-%s\n' "$script" > "$PROJECT/$script"
     printf '#!/usr/bin/env bash\necho old-%s\n' "$script" > "$LIVE/$script"

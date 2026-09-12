@@ -29,10 +29,7 @@ PF_INCAPABLE_PROFILES_FILE="${PF_INCAPABLE_PROFILES_FILE:-/etc/proton/pf-incapab
 PF_CLAIMS_FILE="${PF_CLAIMS_FILE:-/run/proton/pf-claims.tsv}"
 # Default claim TTL (seconds) - increase to reduce race windows between concurrent selects
 CLAIM_TTL="${CLAIM_TTL:-3600}"
-# Consecutive port-forward incapability strikes tolerated before a server is
-# evicted from the pool (added to the incapable list and its pool config
-# deleted). Strikes are tracked globally and reset the instant a server proves
-# it can forward a port, so only genuinely PF-incapable servers are removed.
+# Consecutive failures quarantine an unproven profile without deleting its config.
 PF_INCAPABLE_STRIKES_FILE="${PF_INCAPABLE_STRIKES_FILE:-/run/proton/pf-incapable-strikes.tsv}"
 PF_INCAPABLE_STRIKE_THRESHOLD="${PF_INCAPABLE_STRIKE_THRESHOLD:-3}"
 # Global lock serializing server selection across instances. Two instances must
@@ -103,7 +100,7 @@ profile_state_tmp_file() {
 	local file="$1"
 
 	ensure_parent_directory "$file"
-	mktemp "${file%/*}/.${file##*/}.XXXXXX"
+	mktemp "$(parent_dir "$file")/.${file##*/}.XXXXXX"
 }
 
 port_forward_required() {
@@ -133,20 +130,23 @@ profile_state_count() {
 	awk 'NF > 0 { count++ } END { print count + 0 }' "$file"
 }
 
-remove_profile_record() {
+remove_profile_record() (
 	local file="$1"
 	local profile="$2"
 	local tmp_file
 
 	ensure_parent_directory "$file"
 	tmp_file="$(profile_state_tmp_file "$file")"
+	trap 'rm -f "$tmp_file"' EXIT
 
-	awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$file" 2>/dev/null >"$tmp_file" || true
+	if [[ -e "$file" ]]; then
+		awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$file" >"$tmp_file"
+	fi
 	mv "$tmp_file" "$file"
 	chmod 600 "$file"
-}
+)
 
-write_profile_record() {
+write_profile_record() (
 	local file="$1"
 	local profile="$2"
 	local detail="${3:-}"
@@ -155,8 +155,11 @@ write_profile_record() {
 
 	ensure_parent_directory "$file"
 	tmp_file="$(profile_state_tmp_file "$file")"
+	trap 'rm -f "$tmp_file"' EXIT
 
-	awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$file" 2>/dev/null >"$tmp_file" || true
+	if [[ -e "$file" ]]; then
+		awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$file" >"$tmp_file"
+	fi
 	{
 		printf '%s\t%s' "$profile" "$(date +%s)"
 		if [[ -n "$detail" ]]; then
@@ -169,7 +172,7 @@ write_profile_record() {
 	} >>"$tmp_file"
 	mv "$tmp_file" "$file"
 	chmod 600 "$file"
-}
+)
 
 port_forward_allowlist_active() {
 	port_forward_required || return 1
@@ -236,20 +239,19 @@ profile_passes_port_forward_filter() {
 	return 0
 }
 
-# Claim management: avoid selecting profiles that would forward the same
-# external port already claimed by another instance. Claims are ephemeral
-# and expire after $CLAIM_TTL seconds.
-cleanup_claims() {
+# Claims reserve profiles; equal numeric ports and shared endpoints are allowed.
+cleanup_claims() (
 	local now tmp_file
 	now="$(date +%s)"
 	tmp_file="$(profile_state_tmp_file "$PF_CLAIMS_FILE")"
+	trap 'rm -f "$tmp_file"' EXIT
 
-	if [[ -f "$PF_CLAIMS_FILE" ]]; then
-		awk -F '\t' -v now="$now" -v ttl="$CLAIM_TTL" 'NF>=3 && ($2 + ttl) > now { print $0 }' "$PF_CLAIMS_FILE" >"$tmp_file" || true
+	if [[ -e "$PF_CLAIMS_FILE" ]]; then
+		awk -F '\t' -v now="$now" -v ttl="$CLAIM_TTL" 'NF>=3 && ($2 + ttl) > now { print $0 }' "$PF_CLAIMS_FILE" >"$tmp_file"
 		mv -f "$tmp_file" "$PF_CLAIMS_FILE"
 		chmod 600 "$PF_CLAIMS_FILE"
 	fi
-}
+)
 
 get_profile_forward_port() {
 	local profile="$1"
@@ -442,8 +444,8 @@ mark_profile_capable() {
 		exit 1
 	fi
 
-	remove_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile"
 	write_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile" "${port:-unknown}"
+	remove_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile"
 	reset_incapable_strikes "$profile"
 	log "Marked server $profile port-forward capable${port:+ on port $port}"
 }
@@ -461,8 +463,8 @@ mark_profile_incapable() {
 		exit 1
 	fi
 
-	remove_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile"
 	write_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile" "$reason"
+	remove_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile"
 	: >"$SERVER_RESELECT_FILE"
 	chmod 600 "$SERVER_RESELECT_FILE"
 	log "Marked server $profile port-forward incapable ($reason)"
@@ -479,19 +481,22 @@ incapable_strike_count() {
 	awk -F '\t' -v profile="$profile" '$1 == profile { count = $2 } END { print count + 0 }' "$PF_INCAPABLE_STRIKES_FILE"
 }
 
-set_incapable_strike_count() {
+set_incapable_strike_count() (
 	local profile="$1"
 	local count="$2"
 	local tmp_file
 
 	ensure_parent_directory "$PF_INCAPABLE_STRIKES_FILE"
 	tmp_file="$(profile_state_tmp_file "$PF_INCAPABLE_STRIKES_FILE")"
+	trap 'rm -f "$tmp_file"' EXIT
 
-	awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$PF_INCAPABLE_STRIKES_FILE" 2>/dev/null >"$tmp_file" || true
+	if [[ -e "$PF_INCAPABLE_STRIKES_FILE" ]]; then
+		awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$PF_INCAPABLE_STRIKES_FILE" >"$tmp_file"
+	fi
 	printf '%s\t%s\t%s\n' "$profile" "$count" "$(date +%s)" >>"$tmp_file"
 	mv "$tmp_file" "$PF_INCAPABLE_STRIKES_FILE"
 	chmod 600 "$PF_INCAPABLE_STRIKES_FILE"
-}
+)
 
 reset_incapable_strikes() {
 	local profile="$1"
@@ -500,21 +505,6 @@ reset_incapable_strikes() {
 	remove_profile_record "$PF_INCAPABLE_STRIKES_FILE" "$profile"
 }
 
-delete_pool_config() {
-	local profile="$1"
-	local config="$WG_POOL_DIR/$profile.conf"
-
-	if [[ -f "$config" ]]; then
-		rm -f "$config"
-		log "Removed port-forward incapable pool config $config"
-	fi
-}
-
-# Record one port-forward incapability strike for a profile. After
-# PF_INCAPABLE_STRIKE_THRESHOLD consecutive strikes the profile is evicted from
-# the pool: written to the incapable list and its pool config deleted. A profile
-# that has already proven it can forward ports is never evicted this way -- its
-# streak is cleared and it is only cooled down.
 mark_incapable_attempt() {
 	local profile="${1:-}"
 	local reason="${2:-natpmp-timeout}"
@@ -540,10 +530,10 @@ mark_incapable_attempt() {
 	strikes=$((strikes + 1))
 
 	if ((strikes >= PF_INCAPABLE_STRIKE_THRESHOLD)); then
-		reset_incapable_strikes "$profile"
-		remove_claim_for_profile "$profile" || true
-		remove_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile"
 		write_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile" "$reason" "strikes=${PF_INCAPABLE_STRIKE_THRESHOLD}"
+		reset_incapable_strikes "$profile"
+		remove_claim_for_profile "$profile"
+		remove_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile"
 		: >"$SERVER_RESELECT_FILE"
 		chmod 600 "$SERVER_RESELECT_FILE"
 		log "Quarantined server $profile after ${PF_INCAPABLE_STRIKE_THRESHOLD} consecutive port-forward failures ($reason); pool config retained"
@@ -581,20 +571,18 @@ resolve_endpoint_ip() {
 	timeout 5s getent ahostsv4 "$host" | awk 'NR == 1 {print $1}'
 }
 
-cleanup_bad_servers() {
+cleanup_bad_servers() (
 	local now tmp_file
 	now="$(date +%s)"
 	tmp_file="$(profile_state_tmp_file "$BAD_SERVER_FILE")"
+	trap 'rm -f "$tmp_file"' EXIT
 
-	if [[ -f "$BAD_SERVER_FILE" ]]; then
+	if [[ -e "$BAD_SERVER_FILE" ]]; then
 		awk -F '\t' -v now="$now" 'NF >= 2 && $2 > now {print $0}' "$BAD_SERVER_FILE" >"$tmp_file"
-		mv "$tmp_file" "$BAD_SERVER_FILE"
-	else
-		: >"$BAD_SERVER_FILE"
 	fi
-
+	mv "$tmp_file" "$BAD_SERVER_FILE"
 	chmod 600 "$BAD_SERVER_FILE"
-}
+)
 
 server_is_bad() {
 	local profile="$1"
@@ -623,7 +611,7 @@ measure_latency_ms() {
         '
 }
 
-save_selection() {
+save_selection() (
 	local profile="$1"
 	local config="$2"
 	local endpoint_host="$3"
@@ -634,6 +622,7 @@ save_selection() {
 
 	umask 077
 	temporary="$(profile_state_tmp_file "$SERVER_SELECTION_FILE")"
+	trap 'rm -f "$temporary"' EXIT
 	{
 		echo "SELECTED_WG_PROFILE=$profile"
 		echo "SELECTED_VPN_INTERFACE=$profile"
@@ -645,9 +634,9 @@ save_selection() {
 		echo "SELECTED_AT=$(date +%s)"
 	} >"$temporary"
 	mv -f "$temporary" "$SERVER_SELECTION_FILE"
-}
+)
 
-select_best_server() {
+select_best_server() (
 	local allow_bad="${1:-0}"
 	local allow_unproven="${2:-0}"
 	local best_profile=""
@@ -667,7 +656,7 @@ select_best_server() {
 	require_selection_tools
 	cleanup_bad_servers
 	# Remove expired port claims before choosing a server.
-	cleanup_claims || true
+	cleanup_claims
 	instance_name="$(basename "$STATE_DIR" || true)"
 	if [[ -z "$instance_name" ]]; then
 		instance_name="global"
@@ -676,14 +665,15 @@ select_best_server() {
 	# Build a short-lived snapshot of active selections from other instances so
 	# the selector will avoid choosing a profile or endpoint already in use.
 	active_snapshot_temp="$(profile_state_tmp_file "${STATE_DIR}/active-selections")"
+	trap 'rm -f "$active_snapshot_temp"' EXIT
 	: >"$active_snapshot_temp"
 	for sel in "${PROTON_RUNTIME_ROOT:-/run/proton}"/*/current-server.env; do
 		[[ -f "$sel" ]] || continue
 		sel_inst="$(basename "$(dirname "$sel")")"
 		# skip our own instance selection file
 		[[ "$sel_inst" == "$instance_name" ]] && continue
-		sel_profile="$(awk -F '=' '/^SELECTED_WG_PROFILE=/ {print $2; exit}' "$sel" 2>/dev/null || true)"
-		sel_epip="$(awk -F '=' '/^SELECTED_ENDPOINT_IP=/ {print $2; exit}' "$sel" 2>/dev/null || true)"
+		sel_profile="$(awk -F '=' '/^SELECTED_WG_PROFILE=/ {print $2; exit}' "$sel")"
+		sel_epip="$(awk -F '=' '/^SELECTED_ENDPOINT_IP=/ {print $2; exit}' "$sel")"
 		if [[ -n "$sel_profile" ]]; then
 			printf 'P\t%s\t%s\n' "$sel_profile" "$sel_inst" >>"$active_snapshot_temp"
 		fi
@@ -722,7 +712,7 @@ select_best_server() {
 		fi
 
 		# If the profile is explicitly claimed by another instance, skip it.
-		claimer_profile="$(profile_claimed_by "$profile" || true)"
+		claimer_profile="$(profile_claimed_by "$profile")"
 		if [[ -n "$claimer_profile" && "$claimer_profile" != "$instance_name" ]]; then
 			log "Skipping $profile because it is claimed by $claimer_profile"
 			continue
@@ -795,6 +785,9 @@ select_best_server() {
 		fi
 	fi
 
+	candidate_port="$(get_profile_forward_port "$best_profile")"
+	claim_profile_port "$best_profile" "${candidate_port:-unknown}"
+
 	save_selection \
 		"$best_profile" \
 		"$best_config" \
@@ -805,26 +798,15 @@ select_best_server() {
 
 	# Remove any previous claim held by this instance for a different profile
 	if [[ -n "$current_profile_name" && "$current_profile_name" != "$best_profile" ]]; then
-		remove_claim_for_profile "$current_profile_name" || true
-	fi
-
-	# Claim the forwarded port (if known) so other instances avoid selecting
-	# profiles that would forward the same external port.
-	candidate_port="$(get_profile_forward_port "$best_profile" || true)"
-	if [[ -n "$candidate_port" ]]; then
-		claim_profile_port "$best_profile" "$candidate_port" || true
-	else
-		# No forwarded port known; claim the endpoint IP instead to prevent
-		# other instances from selecting the same backend server.
-		claim_profile_port "$best_profile" "$best_endpoint_ip" || true
+		if [[ "$(profile_claimed_by "$current_profile_name")" == "$instance_name" ]]; then
+			remove_claim_for_profile "$current_profile_name"
+		fi
 	fi
 
 	rm -f "$SERVER_RESELECT_FILE"
 	log "Selected server $best_profile (${best_endpoint_host}/${best_endpoint_ip}) with latency ${best_latency_ms}ms"
 	cat "$SERVER_SELECTION_FILE"
-	# Cleanup active snapshot
-	rm -f "$active_snapshot_temp" 2>/dev/null || true
-}
+)
 
 current_profile() {
 	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
@@ -835,7 +817,7 @@ current_profile() {
 	echo "$WG_PROFILE"
 }
 
-mark_server_bad() {
+mark_server_bad() (
 	local profile="${1:-}"
 	local reason="${2:-manual}"
 	local expiry now tmp_file
@@ -849,6 +831,7 @@ mark_server_bad() {
 	now="$(date +%s)"
 	expiry="$((now + BAD_SERVER_COOLDOWN))"
 	tmp_file="$(profile_state_tmp_file "$BAD_SERVER_FILE")"
+	trap 'rm -f "$tmp_file"' EXIT
 
 	awk -F '\t' -v profile="$profile" '$1 != profile {print $0}' "$BAD_SERVER_FILE" 2>/dev/null >"$tmp_file"
 	printf '%s\t%s\t%s\n' "$profile" "$expiry" "$reason" >>"$tmp_file"
@@ -858,7 +841,7 @@ mark_server_bad() {
 	chmod 600 "$SERVER_RESELECT_FILE"
 
 	log "Marked server $profile bad for ${BAD_SERVER_COOLDOWN}s ($reason)"
-}
+)
 
 show_bad_servers() {
 	cleanup_bad_servers
