@@ -69,6 +69,12 @@ granted lifetimes. Missing, malformed, expired, wrong-address, wrong-boot, or
 wrong-generation leases are not usable. The generation must match the sibling
 `tunnel-generation` file created by successful WireGuard bring-up.
 
+Readers require each of the five lease fields exactly once and reject unknown
+fields, duplicate assignments, and malformed trailing data. `PORT_CHANGED_AT`
+is optional for readers; when present, it must be a single positive Unix
+timestamp. The writer always includes it. A rejected read clears the exported
+validated expiry so callers cannot reuse a previous successful read's deadline.
+
 Publication takes the per-instance `lifecycle.lock` followed by `natpmp.lock`,
 with bounded waits, so teardown and other writers cannot overlap publication.
 Stopping just the producer leaves an unexpired lease to age out; its exit trap

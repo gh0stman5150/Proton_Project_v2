@@ -192,3 +192,31 @@ EOF
   [ "$status" -eq 0 ]
   [ "${lines[1]}" = "$expiry" ]
 }
+
+@test "lease reader rejects unknown duplicate and malformed trailing fields" {
+  export STATE_FILE="$TEST_TMPDIR/proton-port.state"
+  printf 'generation-a\n' > "$TEST_TMPDIR/tunnel-generation"
+  cat > "$TEST_TMPDIR/valid.state" <<EOF
+CURRENT_PORT=45678
+CURRENT_IP=10.4.0.2
+LEASE_EXPIRES_AT=$(( $(date +%s) + 60 ))
+LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+LEASE_GENERATION=generation-a
+PORT_CHANGED_AT=$(date +%s)
+EOF
+  for trailing in 'UNKNOWN=value' 'CURRENT_PORT=45679' 'PORT_CHANGED_AT=1' 'malformed'; do
+    cp "$TEST_TMPDIR/valid.state" "$STATE_FILE"
+    printf '%s' "$trailing" >> "$STATE_FILE"
+    run bash -c 'source ./proton-instance-common.sh; PROTON_LEASE_EXPIRES_AT=stale; if proton_lease_read; then exit 0; else test -z "$PROTON_LEASE_EXPIRES_AT" || exit 2; exit 1; fi'
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+  done
+  cp "$TEST_TMPDIR/valid.state" "$STATE_FILE"
+  sed -i 's/^PORT_CHANGED_AT=.*/PORT_CHANGED_AT=invalid/' "$STATE_FILE"
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -ne 0 ]
+  cp "$TEST_TMPDIR/valid.state" "$STATE_FILE"
+  run bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -eq 0 ]
+  [ "$output" = 45678 ]
+}

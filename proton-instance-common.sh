@@ -10,12 +10,12 @@ proton_docker_ready() {
 
 proton_lease_read() {
 	local file="${1:-$STATE_FILE}" generation current_boot now
-	local key value count=0 octet
+	local key value count=0 octet seen="|"
 	local -a octets
 	PROTON_LEASE_EXPIRES_AT=""
 	local port="" address="" expires="" boot="" lease_generation=""
 	[[ -r "$file" ]] || return 1
-	while IFS='=' read -r key value; do
+	while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
 		case "$key" in
 		CURRENT_PORT)
 			port="$value"
@@ -37,7 +37,13 @@ proton_lease_read() {
 			lease_generation="$value"
 			count=$((count + 1))
 			;;
+		PORT_CHANGED_AT)
+			[[ "$value" =~ ^[1-9][0-9]{0,10}$ ]] || return 1
+			;;
+		*) return 1 ;;
 		esac
+		[[ "$seen" != *"|$key|"* ]] || return 1
+		seen+="$key|"
 	done <"$file"
 	[[ "$count" == 5 && "$port" =~ ^[1-9][0-9]{0,4}$ && "$expires" =~ ^[1-9][0-9]{0,10}$ ]] || return 1
 	((port <= 65535)) || return 1
