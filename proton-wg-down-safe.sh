@@ -37,9 +37,16 @@ DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
 DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
 QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
-DOCKER_DEST_MAIN_RULE_PRIORITY="${DOCKER_DEST_MAIN_RULE_PRIORITY:-98}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
+
+mkdir -p "$STATE_DIR"
+if [[ "${PROTON_LIFECYCLE_LOCK_FD:-}" != 205 || ! /proc/self/fd/205 -ef "${STATE_DIR}/lifecycle.lock" ]]; then
+	exec 205>"${STATE_DIR}/lifecycle.lock"
+fi
+flock -w "${PROTON_LIFECYCLE_WAIT_SECONDS:-30}" 205
+rm -f "$STATE_FILE" "${STATE_DIR}/tunnel-generation"
+trap proton_route_lock_release EXIT
 
 log() {
 	local message
@@ -99,6 +106,7 @@ ipv6_enabled() {
 }
 
 resolve_qbt_container_ip() {
+	proton_docker_ready || return 1
 	local networks=""
 	local ip=""
 
@@ -121,6 +129,7 @@ resolve_qbt_container_ip() {
 }
 
 resolve_qbt_container_ipv6() {
+	proton_docker_ready || return 1
 	local networks=""
 	local ip=""
 
@@ -170,8 +179,8 @@ teardown_resolved_dns() {
 	resolved_dns_enabled || return 0
 	[[ -n "$ifname" ]] || return 0
 
-	resolvectl revert "$ifname" >/dev/null 2>&1 || true
-	resolvectl flush-caches >/dev/null 2>&1 || true
+	timeout --kill-after=2s 5s resolvectl revert "$ifname" >/dev/null 2>&1 || return 1
+	timeout --kill-after=2s 5s resolvectl flush-caches >/dev/null 2>&1
 }
 
 detect_lan_cidr() {
@@ -188,7 +197,7 @@ detect_lan_cidr() {
 	fi
 }
 
-for cmd in cat chmod ip mktemp rm wg-quick; do
+for cmd in cat chmod flock ip mktemp rm timeout wg wg-quick; do
 	require_command "$cmd"
 done
 
@@ -238,7 +247,7 @@ run_wg_quick() {
 	secure_runtime_wg_config "$target"
 	stderr_file="$(mktemp)"
 
-	if wg-quick "$action" "$target" 2>"$stderr_file"; then
+	if timeout --kill-after=5s 90s wg-quick "$action" "$target" 2>"$stderr_file"; then
 		rc=0
 	else
 		rc=$?
@@ -267,51 +276,44 @@ fi
 # forwarded container traffic cannot fall back to stale routes. Shared
 # Docker<->Docker and Docker<->LAN main-table rules are intentionally left in
 # place because other Proton instances may still be active on the same bridge.
+QBT_CONTAINER_IP="$(resolve_qbt_container_ip || true)"
+QBT_CONTAINER_IPV6="$(resolve_qbt_container_ipv6 || true)"
 if ! proton_route_lock_acquire; then
 	log "ERROR: Could not acquire the shared policy-route lock for $INSTANCE"
 	exit 1
 fi
-QBT_CONTAINER_IP="$(resolve_qbt_container_ip || true)"
 CACHED_QBT_CONTAINER_IP="$(read_cached_qbt_container_ip || true)"
 for source_ip in "$QBT_CONTAINER_IP" "$CACHED_QBT_CONTAINER_IP"; do
 	source_rule="$(normalize_ipv4_rule_source "$source_ip" || true)"
 	[[ -n "$source_rule" ]] || continue
-	ip rule del from "$source_rule" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+	proton_delete_ip_rule_all 4 from "$source_rule" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 done
 
-for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-	cidr="$(trim_field "$cidr")"
-	[[ -n "$cidr" ]] || continue
-	ip rule del to "$cidr" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY" 2>/dev/null || true
-done
-ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
-ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
-ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
-ip route flush table "$VPN_TABLE" 2>/dev/null || true
+proton_delete_ip_rule_all 4 fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+proton_delete_ip_rule_all 4 not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+proton_flush_route_table 4 "$VPN_TABLE"
 if ipv6_enabled; then
-	QBT_CONTAINER_IPV6="$(resolve_qbt_container_ipv6 || true)"
 	CACHED_QBT_CONTAINER_IPV6="$(read_cached_qbt_container_ipv6 || true)"
 	for source_ip in "$QBT_CONTAINER_IPV6" "$CACHED_QBT_CONTAINER_IPV6"; do
 		source_rule="$(normalize_ipv6_rule_source "$source_ip" || true)"
 		[[ -n "$source_rule" ]] || continue
-		ip -6 rule del from "$source_rule" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 6 from "$source_rule" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 	done
 	for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
 		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
-		ip -6 rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 6 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 	done
-	ip -6 rule del oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
-	ip -6 route flush table "$VPN_TABLE" 2>/dev/null || true
+	proton_delete_ip_rule_all 6 oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
+	proton_flush_route_table 6 "$VPN_TABLE"
 fi
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 	detect_lan_cidr
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
-		ip rule del from "$cidr" lookup 51820 priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
+		proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 
 		if command -v iptables >/dev/null 2>&1; then
 			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT 2>/dev/null || true
@@ -324,17 +326,17 @@ if command -v iptables >/dev/null 2>&1; then
 	iptables -t mangle -D FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 fi
 
-rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
-rm -f "$QBT_CONTAINER_IP_STATE_FILE"
-rm -f "$QBT_CONTAINER_IP6_STATE_FILE"
 proton_route_lock_release
 
-teardown_resolved_dns "$VPN_INTERFACE"
-
-if [[ -f "$FILTERED_CONFIG_PATH" ]]; then
-	run_wg_quick down "$FILTERED_CONFIG_PATH" || true
-elif [[ -f "$WG_CONFIG" ]]; then
-	run_wg_quick down "$WG_CONFIG" || true
-else
-	run_wg_quick down "$WG_PROFILE" || true
+interfaces="$(timeout --kill-after=2s 5s wg show interfaces)"
+if [[ " $interfaces " == *" $VPN_INTERFACE "* ]]; then
+	teardown_resolved_dns "$VPN_INTERFACE"
+	if [[ -f "$FILTERED_CONFIG_PATH" ]]; then
+		run_wg_quick down "$FILTERED_CONFIG_PATH"
+	elif [[ -f "$WG_CONFIG" ]]; then
+		run_wg_quick down "$WG_CONFIG"
+	else
+		run_wg_quick down "$WG_PROFILE"
+	fi
 fi
+rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE" "$QBT_CONTAINER_IP_STATE_FILE" "$QBT_CONTAINER_IP6_STATE_FILE"

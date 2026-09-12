@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+export BATS_TEST_TIMEOUT=20
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
@@ -13,6 +15,7 @@ setup() {
   export WG_CONFIG="$TEST_TMPDIR/$WG_PROFILE.conf"
   export DOCKER_NETWORK_CIDR="192.168.96.0/20"
   export IP_LOG="$TEST_TMPDIR/ip.log"
+  export WG_LOG="$TEST_TMPDIR/wg.log"
   export LAN_IF="enp86s0"
   export LAN_CIDR="192.168.1.0/24"
   export SERVER_POOL_ENABLED="off"
@@ -22,6 +25,12 @@ setup() {
 
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_RUNTIME_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$PROTON_COMMON_ENV"
+
+  cat > "$TMPBIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+exit "${TEST_DOCKER_INACTIVE:-0}"
+EOF
+  chmod +x "$TMPBIN/systemctl"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
 STATE_DIR=$STATE_DIR
@@ -52,15 +61,35 @@ EOF
 
   cat > "$TMPBIN/wg-quick" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$WG_LOG"
 if [[ "$1" == "up" ]]; then
+  touch "$WG_LOG.present"
+  if [[ "${INTERRUPT_UP:-0}" == 1 ]]; then kill -TERM "$TEST_UP_PID"; fi
+  if [[ "${FAIL_WG_UP:-0}" == 1 ]]; then exit 42; fi
   printf '%s\n' 'stat: cannot read table of mounted file systems: Permission denied' >&2
   printf '%s\n' '/usr/bin/wg-quick: line 47: ((: ( &  & 0007) == 0: syntax error: operand expected (error token is "&  & 0007) == 0")' >&2
   printf "Warning: \`%s' is world accessible\n" "$2" >&2
   printf '[#] ip link add %s type wireguard\n' "${WG_PROFILE:-wg-test}" >&2
 fi
+if [[ "$1" == down ]]; then
+  if [[ -f "$2" ]]; then cp "$2" "$WG_LOG.down-config"; fi
+  rm -f "$WG_LOG.present"
+fi
 exit 0
 EOF
   chmod +x "$TMPBIN/wg-quick"
+
+  cat > "$TMPBIN/wg" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == 'show interfaces' ]]; then
+  if [[ -f "$WG_LOG.present" ]]; then printf '%s\n' "$VPN_INTERFACE"; fi
+elif [[ "$*" == *latest-handshakes* && -f "$WG_LOG.present" ]]; then
+  printf 'fixture-peer\t%s\n' "$(date +%s)"
+else
+  exit 1
+fi
+EOF
+  chmod +x "$TMPBIN/wg"
 
   cat > "$TMPBIN/ip" <<'EOF'
 #!/usr/bin/env bash
@@ -70,7 +99,9 @@ if [[ "$1" == "-4" && "$2" == "addr" && "$3" == "show" ]]; then
   exit 0
 fi
 printf '%s\n' "$*" >> "$IP_LOG"
+if [[ "$*" == *"rule add from 192.168.96.44/32"* && "${FAIL_OWNER_RULE:-0}" == 1 ]]; then exit 1; fi
 if [[ "$*" == *"rule del"* || "$*" == *"rule del "* ]]; then
+  printf 'RTNETLINK answers: No such file or directory\n' >&2
   exit 2
 fi
 exit 0
@@ -130,6 +161,58 @@ EOF
   grep -F 'route replace default dev wg-test table 51804' "$IP_LOG"
   grep -F 'rule add from 192.168.96.44/32 lookup 51804 priority 114' "$IP_LOG"
   grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
+}
+
+@test "repeated healthy bring-up preserves the tunnel generation and lease" {
+  run bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  generation="$(cat "$STATE_DIR/tunnel-generation")"
+  printf 'existing-lease\n' > "$STATE_DIR/proton-port.state"
+  run bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^up ' "$WG_LOG")" -eq 1 ]
+  run grep -q '^down ' "$WG_LOG"
+  [ "$status" -eq 1 ]
+  [ "$(cat "$STATE_DIR/tunnel-generation")" = "$generation" ]
+  [ "$(cat "$STATE_DIR/proton-port.state")" = existing-lease ]
+}
+
+@test "changed configuration tears down using the old runtime config" {
+  run bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  cp "$WG_RUNTIME_DIR/$WG_PROFILE.conf" "$TEST_TMPDIR/previous.conf"
+  printf 'Endpoint = 198.51.100.10:51820\n' >> "$WG_CONFIG"
+  run bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  cmp "$TEST_TMPDIR/previous.conf" "$WG_LOG.down-config"
+  grep -F 'Endpoint = 198.51.100.10:51820' "$WG_RUNTIME_DIR/$WG_PROFILE.conf"
+}
+
+@test "partial interface creation is cleaned up without publishing a generation" {
+  run env FAIL_WG_UP=1 bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 42 ]
+  [ ! -f "$WG_LOG.present" ]
+  [ ! -f "$STATE_DIR/tunnel-generation" ]
+  grep -q '^down ' "$WG_LOG"
+  run compgen -G "$WG_RUNTIME_DIR/.prepare.*"
+  [ "$status" -eq 1 ]
+}
+
+@test "failed owner route rolls back a new tunnel and never deletes shared legacy rules" {
+  run env FAIL_OWNER_RULE=1 bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -ne 0 ]
+  [ ! -f "$STATE_DIR/tunnel-generation" ]
+  [ ! -f "$WG_LOG.present" ]
+  ! grep -E 'rule del.*priority (98|99)$|rule del.*lookup 51820' "$IP_LOG"
+}
+
+@test "interrupted bring-up cleans the interface and releases lifecycle ownership" {
+  run env INTERRUPT_UP=1 bash -c 'export TEST_UP_PID=$$; exec bash ./proton-wg-up-safe.sh sonarr'
+  [ "$status" -eq 143 ]
+  [ ! -f "$WG_LOG.present" ]
+  [ ! -f "$STATE_DIR/tunnel-generation" ]
+  run flock -n "$STATE_DIR/lifecycle.lock" true
+  [ "$status" -eq 0 ]
 }
 
 @test "wg up injects PersistentKeepalive into the filtered runtime config" {
@@ -253,4 +336,15 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"IPv6 mode requires a Proton-assigned IPv6 interface address"* ]]
   ! grep -Fq 'route replace default' "$IP_LOG"
+}
+
+@test "cold boot never queries Docker before the daemon is active" {
+  cat > "$TMPBIN/docker" <<'EOF'
+#!/usr/bin/env bash
+printf 'unexpected Docker query\n' >> "$IP_LOG"
+exit 99
+EOF
+  run env TEST_DOCKER_INACTIVE=1 bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  ! grep -q 'unexpected Docker query' "$IP_LOG"
 }

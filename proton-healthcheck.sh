@@ -44,7 +44,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk curl date flock grep mktemp rm stat systemctl tr; do
+for cmd in awk curl date flock grep mktemp rm stat systemctl timeout tr; do
 	require_command "$cmd"
 done
 
@@ -105,15 +105,7 @@ combined_speed_bps() {
 }
 
 has_current_port_state() {
-	[[ -f "$STATE_FILE" ]] || return 1
-
-	awk -F= '
-        /^CURRENT_PORT=/ {
-            found = ($2 != "")
-            exit
-        }
-        END { exit found ? 0 : 1 }
-    ' "$STATE_FILE"
+	proton_lease_read >/dev/null
 }
 
 current_port_state_age_seconds() {
@@ -121,7 +113,7 @@ current_port_state_age_seconds() {
 
 	[[ -f "$STATE_FILE" ]] || return 1
 
-	mtime="$(stat -c '%Y' "$STATE_FILE" 2>/dev/null || true)"
+	mtime="$(awk -F= '$1 == "PORT_CHANGED_AT" {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
 	[[ -n "$mtime" ]] || return 1
 
 	now="$(date +%s)"
@@ -159,7 +151,7 @@ perform_qb_sync_refresh() {
 	fi
 
 	log "Throughput stayed below threshold at ${speed} B/s; refreshing qBittorrent port state"
-	"$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE"
+	timeout --kill-after=5s 120s "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE"
 }
 
 perform_natpmp_refresh() {
@@ -171,7 +163,7 @@ perform_natpmp_refresh() {
 	fi
 
 	log "Throughput stayed below threshold at ${speed} B/s; forcing a one-shot NAT-PMP refresh"
-	"$PORT_FORWARD_SCRIPT" "$INSTANCE" once
+	timeout --kill-after=5s 180s "$PORT_FORWARD_SCRIPT" "$INSTANCE" once
 }
 
 perform_full_recovery() {
@@ -180,10 +172,10 @@ perform_full_recovery() {
 	log "Throughput stayed below threshold at ${speed} B/s after staged recovery; restarting Proton services"
 
 	if [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
-		"$SERVER_MANAGER_SCRIPT" mark-bad "" "low-throughput-${speed}" >/dev/null 2>&1 || true
+		timeout --kill-after=2s 10s "$SERVER_MANAGER_SCRIPT" mark-bad "" "low-throughput-${speed}" >/dev/null 2>&1 || true
 	fi
 
-	systemctl restart "proton-wg@${INSTANCE}.service" "proton-port-forward@${INSTANCE}.service"
+	timeout --kill-after=2s 10s systemctl --no-block restart "proton-wg@${INSTANCE}.service" "proton-port-forward@${INSTANCE}.service"
 }
 
 recover() {

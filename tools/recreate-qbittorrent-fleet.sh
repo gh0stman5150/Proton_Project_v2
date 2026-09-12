@@ -82,13 +82,18 @@ fi
 # shellcheck disable=SC1090
 source "$INSTANCE_COMMON_SCRIPT"
 
+QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-${BIN_DIR}/proton-qbittorrent-common.sh}"
+# shellcheck disable=SC1090
+source "$QBT_COMMON_SCRIPT"
+qbt_fleet_preflight "$MANIFEST_FILE" 1
+
 instances=()
 while IFS=$'\t' read -r instance _; do
 	[[ -n "$instance" && "$instance" != \#* ]] || continue
 	instances+=("$instance")
 done <"$MANIFEST_FILE"
 
-recreate_instance() {
+recreate_instance() (
 	local instance="$1"
 	local container
 	local port_env
@@ -97,7 +102,7 @@ recreate_instance() {
 	local health=""
 	local attempt
 
-	proton_instance_init "$instance"
+	proton_instance_init "$instance" || return 1
 	port_env="$QBITTORRENT_ENV_FILE"
 	# shellcheck disable=SC2153 # STATE_FILE is populated by the sourced instance helper.
 	state_file="$STATE_FILE"
@@ -112,15 +117,17 @@ recreate_instance() {
 		return 1
 	fi
 
-	override_env="$(mktemp)"
-	chmod 0600 "$override_env"
-	trap 'rm -f "$override_env"' RETURN
+	override_env="$(mktemp)" || return 1
+	trap 'rm -f "$override_env"' EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	chmod 0600 "$override_env" || return 1
 	awk '
 		$0 ~ /^[[:space:]]*QBT_RESPECT_MANUAL_STOP=/ { next }
 		$0 ~ /^[[:space:]]*QBT_FORCE_RECREATE=/ { next }
 		{ print }
-	' "$port_env" >"$override_env"
-	printf '%s\n' 'QBT_RESPECT_MANUAL_STOP=0' 'QBT_FORCE_RECREATE=1' >>"$override_env"
+	' "$port_env" >"$override_env" || return 1
+	printf '%s\n' 'QBT_RESPECT_MANUAL_STOP=0' 'QBT_FORCE_RECREATE=1' >>"$override_env" || return 1
 
 	echo "=== Recreating $container from its current Proton lease ==="
 	echo "Starting proton-port-forward@${instance}.service (timeout ${START_TIMEOUT}s)..."
@@ -136,16 +143,16 @@ recreate_instance() {
 	fi
 	echo "Waiting for the live Proton port state..."
 	for ((attempt = 1; attempt <= PORT_TRIES; attempt++)); do
-		[[ -f "$state_file" ]] && break
+		proton_lease_read "$state_file" >/dev/null && break
 		sleep "$PORT_DELAY"
 	done
-	if [[ ! -f "$state_file" ]]; then
+	if ! proton_lease_read "$state_file" >/dev/null; then
 		echo "ERROR: Proton port state did not appear for $instance: $state_file" >&2
 		return 1
 	fi
 
 	echo "Invoking the qBittorrent synchronizer..."
-	QBITTORRENT_ENV_FILE="$override_env" "$SYNC_SCRIPT" "$instance"
+	QBITTORRENT_ENV_FILE="$override_env" "$SYNC_SCRIPT" "$instance" || return 1
 	for ((attempt = 1; attempt <= HEALTH_TRIES; attempt++)); do
 		health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
 		[[ "$health" == healthy ]] && break
@@ -155,7 +162,7 @@ recreate_instance() {
 		echo "ERROR: $container did not become healthy (health=${health:-unknown})." >&2
 		return 1
 	fi
-}
+)
 
 for instance in "${instances[@]}"; do
 	recreate_instance "$instance" || exit 1

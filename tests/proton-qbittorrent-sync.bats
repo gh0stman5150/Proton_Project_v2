@@ -18,9 +18,17 @@ setup() {
   export NFT_LOG="$TEST_TMPDIR/nft.log"
   export CURL_LOG="$TEST_TMPDIR/curl.log"
   export PROJECT_DIR="$TEST_TMPDIR/project"
+  export QBT_ROUTE_RECONCILE_SCRIPT="$TEST_TMPDIR/routes.sh"
   export DOCKER_CONFIG_DIR="$TEST_TMPDIR/docker-config"
   mkdir -p "$PROJECT_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$PROTON_COMMON_ENV"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$QBT_ROUTE_RECONCILE_SCRIPT"
+
+  cat > "$TMPBIN/findmnt" <<'EOF'
+#!/usr/bin/env bash
+printf 'cifs rw,cache=none\n'
+EOF
+  chmod +x "$TMPBIN/findmnt"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<EOF
 STATE_FILE=$STATE_FILE
@@ -135,6 +143,8 @@ if [[ "$1" == 'compose' ]]; then
     exit 0
   fi
   if [[ "$2" == 'stop' ]]; then
+	if [[ "${QBT_TEST_STOP_FAIL:-}" == 1 ]]; then exit 1; fi
+	printf 'exited' > "${DOCKER_LOG}.status"
     exit 0
   fi
 
@@ -164,6 +174,7 @@ if [[ "$1" == 'compose' ]]; then
   if [[ -n "${DOCKER_PORT_FILE:-}" && -n "${QBT_PUBLISHED_PORT:-}" ]]; then
     printf '%s' "$QBT_PUBLISHED_PORT" > "$DOCKER_PORT_FILE"
   fi
+	printf 'running' > "${DOCKER_LOG}.status"
   exit 0
 fi
 if [[ "$1" == 'restart' ]]; then
@@ -171,6 +182,7 @@ if [[ "$1" == 'restart' ]]; then
 fi
 if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
   if [[ "$3" == '{{.State.Status}}' ]]; then
+	if [[ -f "${DOCKER_LOG}.status" ]]; then cat "${DOCKER_LOG}.status"; exit 0; fi
     echo "${QBT_TEST_CONTAINER_STATUS:-running}"
     exit 0
   fi
@@ -201,6 +213,7 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
   exit 0
 fi
 if [[ "$1" == 'top' ]]; then
+  if [[ "${QBT_TEST_TOP_FAIL:-}" == 1 ]]; then exit 1; fi
   if [[ "${QBT_TEST_DOCKER_DSTATE:-}" == "1" ]]; then
     printf 'LWP STAT\n'
     printf '22 Dsl\n'
@@ -254,6 +267,17 @@ EOF
   chmod +x "$TMPBIN/nft"
 }
 
+write_lease() {
+  printf 'fixture-generation\n' > "${STATE_FILE%/*}/tunnel-generation"
+  cat > "$STATE_FILE" <<EOF
+CURRENT_PORT=$1
+CURRENT_IP=10.4.0.2
+LEASE_EXPIRES_AT=$(( $(date +%s) + 600 ))
+LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+LEASE_GENERATION=fixture-generation
+EOF
+}
+
 write_qbt_env() {
   local mode="$1"
   cat > "$ENV_FILE" <<EOF
@@ -272,7 +296,7 @@ EOF
 
 @test "compose-recreate mode skips docker compose when forwarded port is unchanged" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+  write_lease 40000
   echo 'QBT_PUBLISHED_PORT=40000' > "$PORT_ENV_FILE"
   printf '40000' > "$CURL_STATE"
 
@@ -284,7 +308,7 @@ EOF
 
 @test "compose-recreate mode collapses a legacy two-key port artifact without restarting" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+  write_lease 40000
   cat > "$PORT_ENV_FILE" <<'EOF'
 QBT_PUBLISHED_PORT=40000
 QBT_FORWARDED_PORT=40000
@@ -303,7 +327,7 @@ EOF
 @test "compose-recreate mode refuses the project static .env as its dynamic port artifact" {
   write_qbt_env compose-recreate
   echo "QBT_PORT_ENV_FILE=$PROJECT_DIR/.env" >> "$ENV_FILE"
-  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+  write_lease 40000
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -ne 0 ]
@@ -315,7 +339,7 @@ EOF
   touch "$PROJECT_DIR/.env"
   ln -s "$PROJECT_DIR/.env" "$TEST_TMPDIR/port-alias.env"
   echo "QBT_PORT_ENV_FILE=$TEST_TMPDIR/port-alias.env" >> "$ENV_FILE"
-  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+  write_lease 40000
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -ne 0 ]
@@ -324,7 +348,7 @@ EOF
 
 @test "compose-recreate mode can force a rolling fleet configuration refresh when the port is unchanged" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+  write_lease 40000
   echo 'QBT_PUBLISHED_PORT=40000' > "$PORT_ENV_FILE"
   printf '40000' > "$CURL_STATE"
   printf '40000' > "$DOCKER_PORT_FILE"
@@ -337,7 +361,7 @@ EOF
 
 @test "failed forced same-port recreation preserves the published-port artifact and cache" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=40001' > "$PORT_ENV_FILE"
   printf '40001' > "$CACHE_FILE"
   printf '40001' > "$CURL_STATE"
@@ -351,7 +375,7 @@ EOF
 
 @test "compose-recreate mode recreates when artifact matches but Docker still publishes the old port" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=40001' > "$PORT_ENV_FILE"
   printf '40001' > "$CURL_STATE"
   printf '30000' > "$DOCKER_PORT_FILE"
@@ -365,7 +389,7 @@ EOF
 
 @test "compose-recreate mode updates the published-port artifact and recreates the service on port change" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -382,7 +406,7 @@ EOF
 
 @test "compose-recreate mode skips self-heal when qBittorrent is manually stopped" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -394,7 +418,7 @@ EOF
 
 @test "compose-recreate mode skips self-heal when qBittorrent stop is still in progress" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -406,7 +430,7 @@ EOF
 
 @test "compose-recreate mode still self-heals a running container with unreachable Web UI" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -417,7 +441,7 @@ EOF
 
 @test "compose-recreate mode refuses self-heal when running container has no published ports" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -429,7 +453,7 @@ EOF
 
 @test "forced fleet recreation repairs a safe running container with no published ports" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -441,7 +465,7 @@ EOF
 
 @test "compose-recreate mode refuses self-heal when running container has zombie process" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -453,7 +477,7 @@ EOF
 
 @test "compose-recreate mode identifies kernel D-state as a host recovery boundary" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -465,7 +489,7 @@ EOF
 
 @test "compose-recreate mode allows a transient D-state I/O wait to clear" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -476,7 +500,7 @@ EOF
 
 @test "compose-recreate mode retries a busy host port before succeeding" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -486,22 +510,22 @@ EOF
   grep -F 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
 }
 
-@test "compose-recreate mode restores the previous published port after repeated bind failures" {
+@test "failed recreation retains metadata but never recreates using a historical lease" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=always QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
-  grep -F 'QBT_PUBLISHED_PORT=30000' "$DOCKER_LOG"
-  [[ "$(cat "$CURL_STATE")" == "30000" ]]
+  ! grep -F 'QBT_PUBLISHED_PORT=30000 CMD=compose up' "$DOCKER_LOG"
+  [[ "$(cat "$CURL_STATE")" == "40001" ]]
 }
 
 @test "compose-recreate mode skips when another sync instance already holds the lock" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -513,7 +537,7 @@ EOF
 
 @test "forced recreation fails when another sync instance keeps the lock" {
   write_qbt_env compose-recreate
-  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  write_lease 40001
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
@@ -525,7 +549,7 @@ EOF
 
 @test "legacy-dnat mode refreshes nft DNAT rules without invoking docker compose" {
   write_qbt_env legacy-dnat
-  echo 'CURRENT_PORT=45000' > "$STATE_FILE"
+  write_lease 45000
   printf '45000' > "$CURL_STATE"
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
@@ -533,4 +557,19 @@ EOF
   grep -F 'add rule ip proton_nat prerouting tcp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat-sonarr' "$NFT_LOG"
   grep -F 'add rule ip proton_nat prerouting udp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat-sonarr' "$NFT_LOG"
   ! grep -F 'CMD=compose ' "$DOCKER_LOG"
+}
+
+@test "failed task inspection or stop prevents recreation and lock removal" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+  mkdir -p "$PROJECT_DIR/config/qBittorrent"
+  touch "$PROJECT_DIR/config/qBittorrent/lockfile"
+  for failure in QBT_TEST_TOP_FAIL QBT_TEST_STOP_FAIL; do
+    run env "$failure=1" QBITTORRENT_ENV_FILE="$ENV_FILE" QBT_COMMON_SCRIPT=./proton-qbittorrent-common.sh bash ./proton-qbittorrent-sync-safe.sh sonarr
+    [ "$status" -ne 0 ]
+    [ -f "$PROJECT_DIR/config/qBittorrent/lockfile" ]
+    ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  done
 }

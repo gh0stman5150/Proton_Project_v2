@@ -56,9 +56,53 @@ Expected data:
 ```dotenv
 CURRENT_PORT=<active-port>
 CURRENT_IP=<tunnel-ip>
+LEASE_EXPIRES_AT=<unix-expiry-seconds>
+LEASE_BOOT_ID=<current-kernel-boot-id>
+LEASE_GENERATION=<current-tunnel-generation>
+PORT_CHANGED_AT=<unix-seconds-of-last-port-or-address-change>
 ```
 
-This is volatile. It disappears or becomes invalid across a reboot/reconnect until NAT-PMP succeeds again.
+The writer publishes this file atomically with mode `0600` only after successful
+UDP and TCP mappings return the same valid port. Expiry is measured conservatively
+from the start of the request pair using the shortest of the requested and both
+granted lifetimes. Missing, malformed, expired, wrong-address, wrong-boot, or
+wrong-generation leases are not usable. The generation must match the sibling
+`tunnel-generation` file created by successful WireGuard bring-up.
+
+Publication takes the per-instance `lifecycle.lock` followed by `natpmp.lock`,
+with bounded waits, so teardown and other writers cannot overlap publication.
+Stopping just the producer leaves an unexpired lease to age out; its exit trap
+must not delete a newer one-shot writer's state. Tunnel teardown invalidates the
+lease and generation. A lock pathname is never removed to release a lock.
+
+Source status, 2026-09-11: these lease changes have not been installed or live
+validated as part of this work. Existing two-field state is rejected. Deployment
+requires separately authorized sequential activation and verification across all
+five instances; a running legacy tunnel needs a generation from the updated
+lifecycle before the updated producer can publish. Do not manufacture generation
+files or copy another instance's lease to bypass this gate.
+
+### Renewal and allocation budgets
+
+`CHECK_INTERVAL` is a maximum start-to-start renewal interval, not a sleep after
+all work. With the defaults (60-second lease, two 15-second NAT-PMP limits,
+two 2-second termination allowances, two 5-second lock waits, and a 5-second
+margin), the next attempt is due no later than 11 seconds after the previous
+attempt started. Work time is subtracted from that delay; a shorter granted
+lifetime can bring renewal forward further. Expired state is rejected even if
+renewal or host scheduling fails to meet the budget.
+
+The loop keeps at most one sync child running. Sync has a default 120-second
+limit (`QBT_SYNC_TIMEOUT_SECONDS`) plus a 2-second forced-termination allowance;
+slow recreation does not block lease renewal. Loop shutdown signals its owned
+sync process group through the timeout monitor. These deadlines cannot repair
+kernel-blocked tasks and do not override the host recovery boundary.
+
+The allocator queues `systemctl --no-block start` and requires both an active
+producer and a fresh lease before syncing. Lock acquisition, startup, polling,
+diagnostics, and sync share `ALLOCATION_TIMEOUT_SECONDS` (default and maximum
+150 seconds), below the unit's 180-second start limit. A client timeout or
+allocator failure does **not** cancel an already queued systemd job.
 
 ### Last applied Docker port
 
@@ -100,10 +144,10 @@ It defines identity, credentials, Compose project/service, network, apply mode, 
 
 1. `proton-wg@<instance>` establishes that instance's tunnel.
 2. `proton-port-forward@<instance>` requests or refreshes a NAT-PMP lease through that instance's derived gateway.
-3. The port-forward loop writes `CURRENT_PORT` and `CURRENT_IP` in `/run/proton/<instance>`.
-4. It invokes `proton-qbittorrent-sync-safe.sh <instance>`.
+3. The port-forward loop atomically publishes the validated lease and freshness metadata in `/run/proton/<instance>`.
+4. It starts at most one bounded `proton-qbittorrent-sync-safe.sh <instance>` child while renewal continues independently.
 5. The synchronizer acquires `/run/proton/<instance>/qbt-sync.lock`; ordinary lease sync skips if busy, while forced fleet sync waits and fails on timeout.
-6. It rejects missing, nonnumeric, zero, or greater-than-65535 ports.
+6. It rejects invalid ports, expired leases, and state from a different boot, tunnel address, or generation.
 7. It rejects `QBT_PORT_ENV_FILE` if it points to the Compose project's static `.env`.
 8. It honors an intentional manual stop.
 9. It refuses normal Compose work for zombie, no-port, or persistent same-LWP kernel `D`-state wedges after allowing transient CIFS waits to clear.
@@ -119,6 +163,34 @@ It defines identity, credentials, Compose project/service, network, apply mode, 
 19. It commits the per-instance cache and reports success.
 
 An unchanged lease does not normally recreate the container when the artifact and both Docker mappings match. Stale mappings or an unreachable Web UI can trigger guarded recreation. Forced fleet sync can repair absent port mappings after lifecycle checks, but never bypasses zombie or persistent `D`-state refusal. If the artifact is in the legacy two-key format, the script canonicalizes it to one key without an unnecessary restart.
+
+### Routing and lifecycle recovery
+
+The watcher reconciles routes after Docker events and at the end of each bounded
+event window, including recreation performed outside the synchronizer. Its
+`--once` path only reconciles routes; it does not recursively invoke allocation.
+It requires the configured network's container addresses, restores default and
+owner routes, and publishes caches only after routing succeeds. A failed
+reconciliation must not queue allocation as though routing were repaired.
+
+Repeated healthy tunnel bring-up retains the lease and generation when the
+runtime config matches and the handshake is recent. Changed starts stage the new
+config, stop using the previous runtime config, and publish a generation only
+after routes and the expected address are established. Failed or interrupted
+starts attempt bounded cleanup of that instance. Teardown failure is not success:
+retain diagnostics and retry caches, and do not proceed with container recreation.
+
+Per-instance start/stop never deletes shared main-table or legacy singleton
+rules. Review any legacy rules as a fleet migration before deployment; do not
+remove broad priorities as an ad hoc recovery command. Do not delete lock files.
+The detailed ownership and interruption limits are in the
+[routing concurrency model](../architecture/qbittorrent-fleet-contract.md#routing-concurrency-model).
+
+Healthcheck recovery uses bounded child calls and nonblocking restart requests
+to avoid waiting on its own service group. A producer restart also restarts its
+healthcheck. After any authorized restart, verify service completion, fresh
+leases, and all-five runtime parity rather than accepting the queued request's
+exit status as evidence of recovery. These source changes remain undeployed.
 
 ## Preflight
 

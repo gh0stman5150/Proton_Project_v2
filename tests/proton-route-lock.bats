@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+export BATS_TEST_TIMEOUT=15
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   export ROUTE_LOCK_FILE="$TEST_TMPDIR/policy-routing.lock"
@@ -56,6 +58,7 @@ if [[ "$1" == "rule" && "$2" == "del" ]]; then
     exit 0
   fi
   sleep 0.03
+  printf 'RTNETLINK answers: No such file or directory\n' >&2
   exit 2
 fi
 if [[ "$1" == "rule" && "$2" == "add" ]]; then
@@ -74,6 +77,7 @@ EOF
   pids=()
   for instance in lidarr prowlarr radarr sonarr whisparr; do
     (
+      export INSTANCE="$instance"
       export PATH="$fake_bin:$PATH"
       export IP_RULE_STATE="$rule_state"
       export IP_ERROR_LOG="$ip_errors"
@@ -105,4 +109,40 @@ EOF
   grep -Fq 'reapply_routes_serialized' proton-docker-network-watcher.sh
   grep -Fq 'proton_replace_ip_rule 4' proton-wg-up-safe.sh
   grep -Fq 'proton_replace_ip_rule 4' proton-docker-network-watcher.sh
+}
+
+@test "rule deletion distinguishes absence from permission or unexplained failure" {
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/ip" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' "${DELETE_ERROR:-}" >&2
+exit 2
+EOF
+  chmod +x "$TEST_TMPDIR/bin/ip"
+  run env PATH="$TEST_TMPDIR/bin:$PATH" DELETE_ERROR='RTNETLINK answers: No such file or directory' bash -c 'source ./proton-instance-common.sh; proton_delete_ip_rule_all 4 from 192.168.96.17/32 lookup 51804 priority 114'
+  [ "$status" -eq 0 ]
+  for message in 'RTNETLINK answers: Operation not permitted' ''; do
+    run env PATH="$TEST_TMPDIR/bin:$PATH" DELETE_ERROR="$message" bash -c 'source ./proton-instance-common.sh; proton_delete_ip_rule_all 4 from 192.168.96.17/32 lookup 51804 priority 114'
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "a terminated route-lock holder releases ownership without unlinking the lock" {
+  mkfifo "$TEST_TMPDIR/ready" "$TEST_TMPDIR/blocked"
+  env PROTON_ROUTE_LOCK_FILE="$ROUTE_LOCK_FILE" TEST_ROOT="$TEST_TMPDIR" bash -c '
+    source ./proton-instance-common.sh
+    proton_route_lock_acquire || exit
+    exec 7<>"$TEST_ROOT/blocked"
+    printf "ready\n" > "$TEST_ROOT/ready"
+    read -r -t 10 -u 7 ignored
+  ' &
+  holder_pid=$!
+  read -r ready < "$TEST_TMPDIR/ready"
+  [ "$ready" = ready ]
+  inode="$(stat -c %i "$ROUTE_LOCK_FILE")"
+  kill -KILL "$holder_pid"
+  wait "$holder_pid" || true
+  run env PROTON_ROUTE_LOCK_FILE="$ROUTE_LOCK_FILE" PROTON_ROUTE_LOCK_WAIT_SECONDS=0 bash -c 'source ./proton-instance-common.sh; proton_route_lock_acquire'
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %i "$ROUTE_LOCK_FILE")" = "$inode" ]
 }

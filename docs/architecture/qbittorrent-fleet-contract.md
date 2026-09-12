@@ -128,9 +128,28 @@ Its relevant values are:
 ```dotenv
 CURRENT_PORT=<active NAT-PMP port>
 CURRENT_IP=<active tunnel address>
+LEASE_EXPIRES_AT=<unix-expiry-seconds>
+LEASE_BOOT_ID=<current-kernel-boot-id>
+LEASE_GENERATION=<current-tunnel-generation>
+PORT_CHANGED_AT=<unix-seconds-of-last-port-or-address-change>
 ```
 
 `/run` is not persistent. An old persistent artifact must not be treated as a renewed lease after reboot. The port-forward service must obtain or refresh NAT-PMP state first.
+
+Both protocol requests must succeed on the same port. The mode-0600 state is
+published by atomic rename, with expiry bounded by the shorter granted lifetime
+and measured from the start of the request pair. Consumers validate expiry,
+boot, tunnel address, and the sibling `tunnel-generation` before accepting it.
+The writer holds the per-instance lifecycle lock before the NAT-PMP lock;
+teardown cannot change the generation during publication. Producer exit leaves
+valid state to expire rather than deleting another writer's lease.
+
+Renewal is scheduled from attempt start and reserves request and lock time.
+A single bounded asynchronous sync child cannot delay subsequent renewals.
+Allocation uses one overall deadline and verifies an active producer and fresh
+lease after queued startup. The timing defaults, migration requirements, and
+source-only deployment status are maintained in the
+[port synchronization runbook](../runbooks/qbittorrent-port-sync.md#renewal-and-allocation-budgets).
 
 ### Last successfully applied Docker port
 
@@ -282,6 +301,51 @@ It is global and must not derive from per-instance `STATE_DIR`. It covers:
 - related raw/mangle rule changes and route-state persistence.
 
 WireGuard setup and teardown treat lock timeout as fatal before route mutation. The long-running watcher logs and skips one reconciliation if it cannot acquire the lock; it remains alive for the next event.
+
+The per-instance `lifecycle.lock` precedes the global route lock. Watcher address
+snapshots are collected before taking the route lock; WireGuard boot paths do not
+query Docker until its daemon is active. A configured Docker network must supply
+the watcher's container address: another attached network is not a substitute.
+Missing required IPv4 or IPv6 snapshots refuse reconciliation before mutation.
+
+Reconciliation restores the instance table's default routes before owner source
+rules. Rule replacement removes exact duplicates; only an explicit absent-rule
+response is treated as idempotent success. Permission and other netlink errors
+propagate. Cache files are individually written by mode-0600 temporary file and
+rename after route work succeeds; they are not a multi-file transaction or proof
+of current kernel state. Reconciliation reasserts routes even when caches match.
+
+Per-instance teardown removes only rules referring to that instance's table or
+interface. It leaves shared main-table destination/local/LAN rules and legacy
+singleton rules untouched. Old shared rules require a separately reviewed fleet
+migration, not deletion during one member's start or stop. Failed teardown keeps
+address caches available for retry and reports failure rather than claiming the
+interface stopped. A successful WireGuard interface query must establish absence
+before repeated teardown skips `wg-quick down`.
+
+### Repeatable tunnel lifecycle
+
+Bring-up stages and validates a replacement config without overwriting the active
+runtime config. An unchanged config, existing generation, and recent handshake
+keep the current tunnel and lease while routes are reconciled. Otherwise, the old
+runtime config is used for teardown before the new config is promoted. Explicit
+force reconnect bypasses the keep decision.
+
+A changed start publishes a generation only after route injection and expected
+IPv4 address validation. Failure or TERM/INT after mutation invokes bounded
+instance teardown while retaining the lifecycle lock, preventing a new producer
+or watcher from racing cleanup. SIGKILL and kernel-blocked tasks cannot guarantee
+trap cleanup; generation validation, kill-switch enforcement, and subsequent
+reconciliation remain necessary. Lock ownership is descriptor-based and no lock
+path is unlinked to recover it.
+
+Health recovery bounds sync and NAT-PMP child commands and queues full restarts
+with `systemctl --no-block`. The healthcheck follows both WireGuard and producer
+restarts through `PartOf=`. A queued restart is not proof of completed recovery.
+
+Source status, 2026-09-11: these routing/lifecycle changes are tested in isolated
+fixtures but have not been installed or validated against live host routing.
+Firewall ownership follow-up and the final deployment gates remain separate work.
 
 ### Shared kill-switch lock
 

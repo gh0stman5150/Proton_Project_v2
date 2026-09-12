@@ -17,6 +17,11 @@ else
 	DEFAULT_QBT_COMMON_SCRIPT="${PROJECT_DIR}/proton-qbittorrent-common.sh"
 fi
 QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-$DEFAULT_QBT_COMMON_SCRIPT}"
+# shellcheck disable=SC1090
+source "$QBT_COMMON_SCRIPT" || exit 1
+INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${QBT_COMMON_SCRIPT%/*}/proton-instance-common.sh}"
+# shellcheck disable=SC1090
+source "$INSTANCE_COMMON_SCRIPT" || exit 1
 CHECK_CONFIG=0
 CHECK_RUNTIME=0
 ERRORS=0
@@ -110,7 +115,10 @@ runtime_qbt_listen_port() {
 
 if [[ ! -r "$MANIFEST_FILE" ]]; then
 	fail "instance manifest is missing or unreadable: $MANIFEST_FILE"
+	exit 1
 fi
+[[ "$(awk -F '\t' '!/^#/ && NF {print $1}' "$MANIFEST_FILE" | sort)" == "$(printf '%s\n' lidarr prowlarr radarr sonarr whisparr | sort)" ]] || { fail "manifest must contain each managed instance exactly once"; exit 1; }
+command -v docker >/dev/null 2>&1 || { fail "Docker Compose is required for verification"; exit 1; }
 if [[ ! -r "$COMMON_COMPOSE_FILE" ]]; then
 	fail "shared Compose policy is missing or unreadable: $COMMON_COMPOSE_FILE"
 fi
@@ -135,6 +143,7 @@ instance_count=0
 while IFS=$'\t' read -r instance webui _legacy_port bind_ip vpn_interface subnet vpn_table rule_priority; do
 	[[ -n "$instance" && "$instance" != \#* ]] || continue
 	instance_count=$((instance_count + 1))
+	instance_errors="$ERRORS"
 
 	project_dir="${COMPOSE_ROOT}/qbittorrent-${instance}"
 	compose_file="${project_dir}/docker-compose.yml"
@@ -204,6 +213,7 @@ while IFS=$'\t' read -r instance webui _legacy_port bind_ip vpn_interface subnet
 			if [[ ! -r "$protected_file" ]]; then
 				fail "$instance: root-owned config is missing or unreadable: $protected_file (run as root)"
 			fi
+			[[ "$(stat -c '%u:%a' "$protected_file" 2>/dev/null)" == 0:600 ]] || fail "$instance: protected configuration must be root-owned mode 600"
 		done
 
 		if [[ -r "$proton_env" ]]; then
@@ -241,6 +251,11 @@ while IFS=$'\t' read -r instance webui _legacy_port bind_ip vpn_interface subnet
 
 		if ((CHECK_RUNTIME)) && [[ -n "$published_port" ]]; then
 			state_file="${RUNTIME_ROOT}/${instance}/proton-port.state"
+			if ! WG_TUNNEL_ADDRESS="$bind_ip/32" proton_lease_read "$state_file" >/dev/null; then
+				fail "$instance: lease is missing, expired, or from a previous tunnel generation"
+			fi
+			default_route="$(ip -4 route show table "$vpn_table" default 2>/dev/null)"
+			awk -v interface="$vpn_interface" '$1 == "default" { for (field=1;field<NF;field++) if ($field=="dev" && $(field+1)==interface) found++ } END { exit found != 1 }' <<<"$default_route" || fail "$instance: VPN table lacks its expected default interface"
 			if [[ ! -r "$state_file" ]]; then
 				fail "$instance: runtime state is missing or unreadable: $state_file"
 			else
@@ -269,7 +284,7 @@ while IFS=$'\t' read -r instance webui _legacy_port bind_ip vpn_interface subnet
 				container_source_ip="$(docker inspect -f '{{with index .NetworkSettings.Networks "starr_network"}}{{.IPAddress}}{{end}}' "$service" 2>/dev/null || true)"
 				if [[ -z "$container_source_ip" ]]; then
 					fail "$instance: could not resolve the container IPv4 address on starr_network"
-				elif ! ip -4 rule show 2>/dev/null | awk -v source="$container_source_ip" -v table="$vpn_table" '
+				elif ! ip -4 rule show 2>/dev/null | awk -v source="$container_source_ip" -v table="$vpn_table" -v priority="$rule_priority:" '
 					{
 						from_match = 0
 						table_match = 0
@@ -281,9 +296,9 @@ while IFS=$'\t' read -r instance webui _legacy_port bind_ip vpn_interface subnet
 							}
 							if (($i == "lookup" || $i == "table") && i < NF && $(i + 1) == table) table_match = 1
 						}
-						if (from_match && table_match) found = 1
+						if (from_match && table_match && $1 == priority) found++
 					}
-					END { exit found ? 0 : 1 }
+					END { exit found == 1 ? 0 : 1 }
 				'; then
 					fail "$instance: source $container_source_ip does not have a policy rule to VPN table $vpn_table"
 				fi
@@ -308,7 +323,7 @@ while IFS=$'\t' read -r instance webui _legacy_port bind_ip vpn_interface subnet
 		fi
 	fi
 
-	pass "$instance fleet contract"
+	((ERRORS == instance_errors)) && pass "$instance fleet contract"
 done <"$MANIFEST_FILE"
 
 if [[ "$instance_count" -ne 5 ]]; then

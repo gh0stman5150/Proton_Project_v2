@@ -76,11 +76,10 @@ find_network_cidr() {
 
 	# If a specific network name is configured, prefer it
 	if [[ -n "${QBT_NETWORK_NAME:-}" && -n "$(command -v docker 2>/dev/null)" ]]; then
-		cidr=$(docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' "$QBT_NETWORK_NAME" 2>/dev/null | awk '!/:/ {print; exit}' || true)
-		[[ -n "$cidr" ]] && {
-			echo "$cidr"
-			return 0
-		}
+		cidr=$(docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' "$QBT_NETWORK_NAME" 2>/dev/null | awk '!/:/ {print; exit}') || return 1
+		[[ -n "$cidr" ]] || return 1
+		printf '%s\n' "$cidr"
+		return 0
 	fi
 
 	# If docker CLI not available, nothing to do
@@ -203,11 +202,12 @@ resolve_qbt_container_ip() {
 	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
 	command -v docker >/dev/null 2>&1 || return 1
 
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null)" || return 1
 	[[ -n "$networks" ]] || return 1
 
 	if [[ -n "$QBT_NETWORK_NAME" ]]; then
 		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
+		[[ -n "$ip" ]] || return 1
 	fi
 
 	if [[ -z "$ip" ]]; then
@@ -224,12 +224,12 @@ resolve_qbt_container_ipv6() {
 
 	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
 	command -v docker >/dev/null 2>&1 || return 1
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null)" || return 1
 	[[ -n "$networks" ]] || return 1
 	if [[ -n "$QBT_NETWORK_NAME" ]]; then
 		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
 	fi
-	[[ -n "$ip" ]] || ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
+	if [[ -z "$QBT_NETWORK_NAME" ]]; then ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"; fi
 	[[ -n "$ip" ]] || return 1
 	printf '%s\n' "$ip"
 }
@@ -242,12 +242,7 @@ read_cached_qbt_container_ip() {
 persist_qbt_container_ip() {
 	local value="${1:-}"
 
-	if [[ -n "$value" ]]; then
-		umask 077
-		printf '%s' "$value" >"$QBT_CONTAINER_IP_STATE_FILE" || true
-	else
-		rm -f "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
-	fi
+	proton_persist_route_state "$QBT_CONTAINER_IP_STATE_FILE" "$value"
 }
 
 read_cached_qbt_container_ipv6() {
@@ -257,12 +252,7 @@ read_cached_qbt_container_ipv6() {
 
 persist_qbt_container_ipv6() {
 	local value="${1:-}"
-	if [[ -n "$value" ]]; then
-		umask 077
-		printf '%s' "$value" >"$QBT_CONTAINER_IP6_STATE_FILE" || true
-	else
-		rm -f "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
-	fi
+	proton_persist_route_state "$QBT_CONTAINER_IP6_STATE_FILE" "$value"
 }
 
 docker_ipv6_fallback_enabled() {
@@ -288,12 +278,12 @@ reapply_routes() {
 		old_cidr="$(cat "$LAST_FILE" 2>/dev/null || true)"
 	fi
 	old_qbt_ip="$(read_cached_qbt_container_ip || true)"
-	new_qbt_ip="$(resolve_qbt_container_ip || true)"
+	new_qbt_ip="${QBT_IP_SNAPSHOT:-}"
 	new_qbt_rule_source="$(normalize_ipv4_rule_source "$new_qbt_ip" || true)"
 	old_qbt_rule_source="$(normalize_ipv4_rule_source "$old_qbt_ip" || true)"
 	[[ -f "$LAST6_FILE" ]] && old_cidr6="$(cat "$LAST6_FILE" 2>/dev/null || true)"
 	old_qbt_ipv6="$(read_cached_qbt_container_ipv6 || true)"
-	new_qbt_ipv6="$(resolve_qbt_container_ipv6 || true)"
+	new_qbt_ipv6="${QBT_IP6_SNAPSHOT:-}"
 	new_qbt_ipv6_rule_source="$(normalize_ipv6_rule_source "$new_qbt_ipv6" || true)"
 	old_qbt_ipv6_rule_source="$(normalize_ipv6_rule_source "$old_qbt_ipv6" || true)"
 
@@ -301,14 +291,15 @@ reapply_routes() {
 		detect_lan_cidr
 	fi
 
+	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE" || return 1
+	if [[ -n "$new_cidr6" ]]; then
+		ip -6 route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE" || return 1
+	fi
+
 	if [[ -n "$old_cidr" && "$old_cidr" != "$new_cidr" ]]; then
 		log "Removing old Docker policy rules for $old_cidr"
-		proton_delete_ip_rule_all 4 from "$old_cidr" to "$old_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
-		if [[ -n "$LAN_CIDR" ]]; then
-			proton_delete_ip_rule_all 4 from "$old_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
-		fi
-		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 4 from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" || return 1
+		proton_delete_ip_rule_all 4 from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		if command -v iptables >/dev/null 2>&1; then
 			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$old_cidr" -j ACCEPT 2>/dev/null || true
 		fi
@@ -316,15 +307,14 @@ reapply_routes() {
 
 	if [[ -n "$new_cidr" ]]; then
 		log "Applying Docker policy routing for $INSTANCE on $new_cidr via table $VPN_TABLE and $VPN_INTERFACE"
-		proton_replace_ip_rule 4 from "$new_cidr" to "$new_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
+		proton_replace_ip_rule 4 from "$new_cidr" to "$new_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" || return 1
 		if [[ -n "$LAN_CIDR" ]]; then
-			proton_replace_ip_rule 4 from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
+			proton_replace_ip_rule 4 from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" || return 1
 		fi
-		ip rule del from "$new_cidr" lookup 51820 priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip rule del from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip rule del from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 4 from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" || return 1
+		proton_delete_ip_rule_all 4 from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		if docker_fallback_vpn_routing_enabled; then
-			ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+			ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		fi
 		if command -v iptables >/dev/null 2>&1; then
 			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
@@ -335,56 +325,55 @@ reapply_routes() {
 	fi
 
 	if [[ -n "$old_qbt_rule_source" ]]; then
-		ip rule del from "$old_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 4 from "$old_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" || return 1
 	fi
 
 	if [[ -n "$new_qbt_rule_source" ]]; then
-		ip rule del from "$new_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip rule add from "$new_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
-		persist_qbt_container_ip "$new_qbt_ip"
+		proton_replace_ip_rule 4 from "$new_qbt_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" || return 1
 		log "qBittorrent policy routing refreshed: source $new_qbt_rule_source -> table $VPN_TABLE via $VPN_INTERFACE"
 	else
-		persist_qbt_container_ip ""
 		if [[ -n "$QBT_CONTAINER_NAME" ]]; then
 			log "WARNING: Could not resolve an IPv4 address for $QBT_CONTAINER_NAME; qBittorrent remains on Docker fallback routing"
 		fi
 	fi
 
 	if [[ -n "$old_qbt_ipv6_rule_source" ]]; then
-		ip -6 rule del from "$old_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 6 from "$old_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" || return 1
 	fi
 	if [[ -n "$old_cidr6" && "$old_cidr6" != "$new_cidr6" ]]; then
-		proton_delete_ip_rule_all 6 from "$old_cidr6" to "$old_cidr6" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
-		ip -6 rule del from "$old_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 6 from "$old_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 	fi
 	if [[ -n "$new_cidr6" ]]; then
-		proton_replace_ip_rule 6 from "$new_cidr6" to "$new_cidr6" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
-		ip -6 rule del from "$new_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+		proton_replace_ip_rule 6 from "$new_cidr6" to "$new_cidr6" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" || return 1
+		proton_delete_ip_rule_all 6 from "$new_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		if docker_ipv6_fallback_enabled; then
-			ip -6 rule add from "$new_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
+			ip -6 rule add from "$new_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		fi
 	fi
 	if [[ -n "$new_qbt_ipv6_rule_source" ]]; then
-		ip -6 rule del from "$new_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip -6 rule add from "$new_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
-		persist_qbt_container_ipv6 "$new_qbt_ipv6"
+		proton_replace_ip_rule 6 from "$new_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" || return 1
 		log "qBittorrent IPv6 policy routing refreshed: source $new_qbt_ipv6_rule_source -> table $VPN_TABLE via $VPN_INTERFACE"
-	else
-		persist_qbt_container_ipv6 ""
 	fi
 
-	printf "%s" "$new_cidr" >"$LAST_FILE" || true
-	if [[ -n "$new_cidr" ]]; then
-		umask 077
-		printf "%s" "$new_cidr" >"$DOCKER_NETWORK_CIDR_STATE_FILE" || true
-	else
-		rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true
-	fi
-	printf "%s" "$new_cidr6" >"$LAST6_FILE" || true
+	persist_qbt_container_ip "$new_qbt_ip" || return 1
+	persist_qbt_container_ipv6 "$new_qbt_ipv6" || return 1
+	proton_persist_route_state "$DOCKER_NETWORK_CIDR_STATE_FILE" "$new_cidr" || return 1
+	proton_persist_route_state "$LAST6_FILE" "$new_cidr6" || return 1
+	proton_persist_route_state "$LAST_FILE" "$new_cidr"
 }
 
-reapply_routes_serialized() {
+reapply_routes_serialized() (
 	local rc=0
+	exec 205>"${STATE_DIR}/lifecycle.lock" || return 1
+	flock -w "${PROTON_LIFECYCLE_WAIT_SECONDS:-30}" 205 || return 1
+	QBT_IP_SNAPSHOT="$(resolve_qbt_container_ip)" || return 1
+	QBT_IP6_SNAPSHOT="$(resolve_qbt_container_ipv6 || true)"
+	normalize_ipv4_rule_source "$QBT_IP_SNAPSHOT" >/dev/null || return 1
+	normalize_ipv4_rule_source "$1" >/dev/null || return 1
+	if [[ -n "${2:-}" ]]; then normalize_ipv6_rule_source "$QBT_IP6_SNAPSHOT" >/dev/null || return 1; fi
+	case "${WG_IPV6_ENABLED:-off}" in
+	1 | true | yes | on) [[ -n "${2:-}" && -n "$QBT_IP6_SNAPSHOT" ]] || return 1 ;;
+	esac
 
 	if ! proton_route_lock_acquire; then
 		log "ERROR: Could not acquire the shared policy-route lock for $INSTANCE"
@@ -394,38 +383,19 @@ reapply_routes_serialized() {
 	reapply_routes "$@" || rc=$?
 	proton_route_lock_release
 	return "$rc"
-}
+)
 
 reapply_killswitch() {
 	if [[ -x "$KILLSWITCH_SCRIPT" ]]; then
 		log "Reapplying Docker kill-switch state via $KILLSWITCH_SCRIPT"
-		"$KILLSWITCH_SCRIPT" || log "Warning: kill-switch script exited with non-zero status"
+		"$KILLSWITCH_SCRIPT" || return 1
 	else
 		log "Kill-switch script not found at $KILLSWITCH_SCRIPT; skipping firewall reconciliation"
 	fi
 }
 
 refresh_qb_state() {
-	# Prefer triggering the systemd allocator which serializes port allocation
-	if command -v systemctl >/dev/null 2>&1; then
-		log "Triggering systemd allocator: proton-qbt-allocate@${INSTANCE}"
-		if ! systemctl start "proton-qbt-allocate@${INSTANCE}"; then
-			log "Warning: systemd allocator failed for ${INSTANCE}; falling back to direct sync"
-			if [[ -x "$QBT_SYNC_SCRIPT" ]]; then
-				log "Refreshing qBittorrent state via $QBT_SYNC_SCRIPT"
-				"$QBT_SYNC_SCRIPT" "$INSTANCE" || log "Warning: qB sync script exited with non-zero status"
-			else
-				log "qB sync script not found at $QBT_SYNC_SCRIPT; skipping qBittorrent reconciliation"
-			fi
-		fi
-	else
-		if [[ -x "$QBT_SYNC_SCRIPT" ]]; then
-			log "Refreshing qBittorrent state via $QBT_SYNC_SCRIPT"
-			"$QBT_SYNC_SCRIPT" "$INSTANCE" || log "Warning: qB sync script exited with non-zero status"
-		else
-			log "qB sync script not found at $QBT_SYNC_SCRIPT; skipping qBittorrent reconciliation"
-		fi
-	fi
+	timeout 10s systemctl --no-block start "proton-qbt-allocate@${INSTANCE}.service"
 }
 
 graceful_shutdown() {
@@ -439,8 +409,10 @@ main() {
 	cidr=$(find_network_cidr)
 	cidr6=$(find_network_cidr6)
 	if ! reapply_routes_serialized "$cidr" "$cidr6"; then
-		log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
+		log "ERROR: Policy-route reconciliation failed"
+		return 1
 	fi
+	[[ "${2:-}" == "--once" ]] && return 0
 	reapply_killswitch
 	refresh_qb_state
 
@@ -448,7 +420,7 @@ main() {
 		log "Starting docker events watch (debounce ${DEBOUNCE_SECONDS}s)"
 		while true; do
 			# Listen to network/container events and debounce updates
-			docker events \
+			command timeout --foreground "${POLL_INTERVAL}s" docker events \
 				--filter 'type=network' --filter 'type=container' \
 				--format '{{.Type}}:{{.Action}}:{{.Actor.Attributes.name}}' 2>/dev/null |
 				while IFS= read -r ev; do
@@ -460,15 +432,21 @@ main() {
 						cidr6=$(find_network_cidr6)
 						if ! reapply_routes_serialized "$cidr" "$cidr6"; then
 							log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
+							continue
 						fi
 						reapply_killswitch
 						refresh_qb_state
 						;;
 					*) ;;
 					esac
-				done
+				done || true
 
-			log "docker events stream exited; retrying in 5s"
+			cidr=$(find_network_cidr)
+			cidr6=$(find_network_cidr6)
+			if reapply_routes_serialized "$cidr" "$cidr6"; then
+				reapply_killswitch && refresh_qb_state
+			fi
+			log "docker events window ended; reconciling again in 5s"
 			sleep 5
 		done
 	else
@@ -479,6 +457,7 @@ main() {
 			cidr6=$(find_network_cidr6)
 			if ! reapply_routes_serialized "$cidr" "$cidr6"; then
 				log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
+				continue
 			fi
 			reapply_killswitch
 			refresh_qb_state
@@ -487,5 +466,5 @@ main() {
 }
 
 if [[ "${PROTON_WATCHER_SOURCE_ONLY:-0}" != 1 ]]; then
-	main
+	main "$@"
 fi

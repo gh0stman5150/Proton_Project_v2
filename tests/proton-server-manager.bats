@@ -4,6 +4,9 @@ setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
   export STATE_DIR="$TEST_TMPDIR/state"
+  export SERVER_SELECT_LOCK_FILE="$TEST_TMPDIR/server-select.lock"
+  export PF_CLAIMS_FILE="$TEST_TMPDIR/pf-claims.tsv"
+  export PROTON_RUNTIME_ROOT="$TEST_TMPDIR/runtime"
   export WG_POOL_DIR="$TEST_TMPDIR/pool"
   export SERVER_SELECTION_FILE="$STATE_DIR/current-server.env"
   export BAD_SERVER_FILE="$STATE_DIR/bad-servers.tsv"
@@ -310,7 +313,7 @@ EOF
   [ "$status" -ne 0 ]
 }
 
-@test "mark-incapable-attempt evicts a profile and deletes its pool config after threshold strikes" {
+@test "mark-incapable-attempt quarantines a profile without deleting its pool config" {
   printf '[Interface]\n' > "$WG_POOL_DIR/wg-c.conf"
 
   for _ in 1 2 3; do
@@ -329,7 +332,7 @@ EOF
   done
 
   grep -F $'wg-c\t' "$PF_INCAPABLE_PROFILES_FILE"
-  [ ! -f "$WG_POOL_DIR/wg-c.conf" ]
+  [ -f "$WG_POOL_DIR/wg-c.conf" ]
   [ -f "$SERVER_RESELECT_FILE" ]
   run grep -F 'wg-c' "$PF_INCAPABLE_STRIKES_FILE"
   [ "$status" -ne 0 ]
@@ -377,4 +380,24 @@ EOF
   grep -F $'wg-e\t' "$PF_CAPABLE_PROFILES_FILE"
   run grep -F 'wg-e' "$PF_INCAPABLE_STRIKES_FILE"
   [ "$status" -ne 0 ]
+}
+
+@test "active selection excludes its profile after claims expire but permits a shared endpoint" {
+  write_pool_config wg-a host-a
+  write_pool_config wg-b host-a
+  mkdir -p "$PROTON_RUNTIME_ROOT/lidarr"
+  printf 'SELECTED_WG_PROFILE=wg-a\nSELECTED_ENDPOINT_IP=203.0.113.10\n' > "$PROTON_RUNTIME_ROOT/lidarr/current-server.env"
+  printf 'wg-a\t1\t40000\tlidarr\n' > "$PF_CLAIMS_FILE"
+  run bash ./proton-server-manager.sh select
+  [ "$status" -eq 0 ]
+  grep -Fx 'SELECTED_WG_PROFILE=wg-b' "$SERVER_SELECTION_FILE"
+}
+
+@test "selector fails closed when flock cannot acquire the shared lock" {
+  write_pool_config wg-a host-a
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$TMPBIN/flock"
+  chmod +x "$TMPBIN/flock"
+  run bash ./proton-server-manager.sh select
+  [ "$status" -ne 0 ]
+  [ ! -f "$SERVER_SELECTION_FILE" ]
 }

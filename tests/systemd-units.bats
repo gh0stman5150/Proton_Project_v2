@@ -46,6 +46,7 @@
   grep -Fq 'ExecStop=/usr/local/bin/proton/proton-qbt-dnat-cleanup.sh %i' proton-port-forward@.service
 
   grep -Fq 'Requires=proton-wg@%i.service proton-port-forward@%i.service' proton-healthcheck@.service
+  grep -Fxq 'PartOf=proton-wg@%i.service proton-port-forward@%i.service' proton-healthcheck@.service
   grep -Fq 'ExecStart=/usr/local/bin/proton/proton-healthcheck.sh %i' proton-healthcheck@.service
 
   grep -Fq 'ExecStart=/usr/local/bin/proton/proton-qbt-allocate-and-sync.sh %i' proton-qbt-allocate@.service
