@@ -421,8 +421,7 @@ ensure_docker_raw_return_rule() {
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
-		iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT 2>/dev/null || true
-		iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT
+		proton_iptables_rule ensure raw PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT || return 1
 		log "Allowed VPN return traffic from $VPN_INTERFACE to Docker subnet $cidr in raw PREROUTING"
 	done
 }
@@ -436,10 +435,8 @@ ensure_vpn_tcp_mss_clamp_rules() {
 	# Docker bridges still use a 1500-byte MTU. Clamp MSS in both directions
 	# across the VPN interface so app traffic works even when ICMP ping already
 	# looks healthy.
-	iptables -t mangle -D FORWARD -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-	iptables -t mangle -I FORWARD 1 -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
-	iptables -t mangle -D FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-	iptables -t mangle -I FORWARD 1 -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+	proton_iptables_rule ensure mangle FORWARD -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu || return 1
+	proton_iptables_rule ensure mangle FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu || return 1
 	log "Clamped TCP MSS for forwarded traffic crossing $VPN_INTERFACE"
 }
 
@@ -742,6 +739,12 @@ secure_runtime_wg_config "$WG_CONFIG_TO_USE"
 DNS_SERVERS_CSV="$(config_dns_servers "$WG_CONFIG_TO_USE")"
 resolve_docker_network_cidr
 
+if [[ ! -x "$KILLSWITCH_SCRIPT" ]]; then
+	log "ERROR: Kill-switch script not found at $KILLSWITCH_SCRIPT"
+	exit 1
+fi
+timeout --kill-after=5s 35s "$KILLSWITCH_SCRIPT"
+
 log "Bringing up WireGuard profile $WG_PROFILE..."
 
 NEW_RUNTIME_HASH="$(sha256sum "$WG_CONFIG_TO_USE" | awk '{print $1}')"
@@ -766,17 +769,8 @@ fi
 
 mv -f "$WG_CONFIG_TO_USE" "$ACTIVE_CONFIG_PATH"
 WG_CONFIG_TO_USE="$ACTIVE_CONFIG_PATH"
-if [[ -x "$KILLSWITCH_SCRIPT" ]]; then
-	timeout --kill-after=5s 35s "$KILLSWITCH_SCRIPT"
-fi
 
 run_wg_quick up "$WG_CONFIG_TO_USE"
-
-if uses_nftables_backend && [[ -x "$KILLSWITCH_SCRIPT" ]]; then
-	# The initial pre-up apply prevents leaks during interface bring-up. Re-run
-	# after the interface exists so nft postrouting masquerade is guaranteed.
-	timeout --kill-after=5s 35s "$KILLSWITCH_SCRIPT"
-fi
 
 configure_resolved_dns "$VPN_INTERFACE" "$DNS_SERVERS_CSV"
 fi

@@ -316,14 +316,14 @@ if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 		proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 
 		if command -v iptables >/dev/null 2>&1; then
-			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT 2>/dev/null || true
+			proton_iptables_rule remove raw PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT
 		fi
 	done
 fi
 
 if command -v iptables >/dev/null 2>&1; then
-	iptables -t mangle -D FORWARD -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-	iptables -t mangle -D FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+	proton_iptables_rule remove mangle FORWARD -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+	proton_iptables_rule remove mangle FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 fi
 
 proton_route_lock_release

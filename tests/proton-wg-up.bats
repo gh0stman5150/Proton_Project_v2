@@ -20,11 +20,14 @@ setup() {
   export LAN_CIDR="192.168.1.0/24"
   export SERVER_POOL_ENABLED="off"
   export MANAGE_RESOLVED_DNS="off"
-  export KILLSWITCH_SCRIPT="$TEST_TMPDIR/missing-killswitch.sh"
+  export KILLSWITCH_SCRIPT="$TEST_TMPDIR/killswitch.sh"
   export PROTON_ROUTE_LOCK_FILE="$TEST_TMPDIR/policy-routing.lock"
+  export KILLSWITCH_LOCK_FILE="$TEST_TMPDIR/killswitch.lock"
 
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_RUNTIME_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$PROTON_COMMON_ENV"
+  printf '#!/usr/bin/env bash\nexit "${FAIL_KILLSWITCH:-0}"\n' > "$KILLSWITCH_SCRIPT"
+  chmod +x "$KILLSWITCH_SCRIPT"
 
   cat > "$TMPBIN/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -124,6 +127,10 @@ EOF
 
   cat > "$TMPBIN/iptables" <<'EOF'
 #!/usr/bin/env bash
+if [[ "$*" == *' -C '* ]]; then
+  printf 'Bad rule (does a matching rule exist in that chain?).\n' >&2
+  exit 1
+fi
 exit 0
 EOF
   chmod +x "$TMPBIN/iptables"
@@ -175,6 +182,16 @@ EOF
   [ "$status" -eq 1 ]
   [ "$(cat "$STATE_DIR/tunnel-generation")" = "$generation" ]
   [ "$(cat "$STATE_DIR/proton-port.state")" = existing-lease ]
+}
+
+@test "bring-up refuses missing or failed kill switch before tunnel mutation" {
+  run env FAIL_KILLSWITCH=1 bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -ne 0 ]
+  [ ! -s "$WG_LOG" ]
+  rm "$KILLSWITCH_SCRIPT"
+  run bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -ne 0 ]
+  [ ! -s "$WG_LOG" ]
 }
 
 @test "changed configuration tears down using the old runtime config" {

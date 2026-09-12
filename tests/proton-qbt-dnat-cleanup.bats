@@ -67,3 +67,41 @@ EOF
   [ "$status" -ne 0 ]
   ! grep -q '^delete ' "$NFT_LOG"
 }
+
+@test "cleanup removes only exact instance handles in one transaction" {
+  cat > "$TMPBIN/nft" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  'list tables') printf 'table ip proton_nat\n' ;;
+  'list table ip proton_nat') printf 'chain prerouting {\n}\nchain postrouting {\n}\n' ;;
+  '-a list chain ip proton_nat prerouting')
+    printf '%s\n' 'tcp dport 40000 comment "qbt-dnat-sonarr" # handle 10' \
+      'udp dport 40000 comment "qbt-dnat-sonarr" # handle 11' \
+      'tcp dport 40000 comment "qbt-dnat-sonarr-extra" # handle 12' \
+      'tcp dport 40000 comment "qbt-dnat-radarr" # handle 13' ;;
+  '-f -') cat >> "$NFT_LOG" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$TMPBIN/nft"
+  run bash ./Archive/proton-qbt-dnat-cleanup.sh sonarr
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$NFT_LOG")" -eq 2 ]
+  grep -Fx 'delete rule ip proton_nat prerouting handle 10' "$NFT_LOG"
+  grep -Fx 'delete rule ip proton_nat prerouting handle 11' "$NFT_LOG"
+}
+
+@test "cleanup accepts an absent prerouting chain in an existing shared NAT table" {
+  cat > "$TMPBIN/nft" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  'list tables') printf 'table ip proton_nat\n' ;;
+  'list table ip proton_nat') printf 'chain postrouting {\n}\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$TMPBIN/nft"
+  run bash ./Archive/proton-qbt-dnat-cleanup.sh sonarr
+  [ "$status" -eq 0 ]
+  [ ! -e "$NFT_LOG" ]
+}

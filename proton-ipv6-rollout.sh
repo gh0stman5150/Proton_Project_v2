@@ -168,6 +168,7 @@ docker_preflight() {
 	local backend docker_ipv6 forwarding default_forwarding script source_script
 	local failed=0
 	local -a firewall_scripts=(
+		proton-instance-common.sh
 		proton-killswitch-nft.sh
 		proton-killswitch-safe.sh
 		proton-killswitch-reset.sh

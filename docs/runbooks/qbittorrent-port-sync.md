@@ -104,6 +104,34 @@ diagnostics, and sync share `ALLOCATION_TIMEOUT_SECONDS` (default and maximum
 150 seconds), below the unit's 180-second start limit. A client timeout or
 allocator failure does **not** cancel an already queued systemd job.
 
+### Selector and firewall failures
+
+Selection, profile claims, capability records, strikes, and cooldown changes
+share the bounded global selector lock. A failed state read or write aborts the
+operation. A profile claim is reserved before publishing a selection; if
+publication is interrupted, the old selection remains and the reservation may
+persist until retry or expiry. Do not delete lock files or pool configurations
+to bypass this condition. Quarantine retains unproven configurations for review;
+proven profiles are cooled down after transient port-forward failures.
+
+The global firewall lock covers both backends, raw/MSS changes, legacy DNAT, and
+manual reset. A failed firewall read is not proof that a table, chain, or rule is
+absent. Bring-up refuses a missing or failed kill switch before tunnel mutation;
+the watcher does not queue allocation after failed firewall reconciliation.
+
+In legacy DNAT mode, replacement is an atomic TCP/UDP pair scoped to the owning
+VPN interface and exact instance comment. Cleanup removes only that instance's
+handles, never a shared NAT table. Equal numeric forwarded ports on different
+tunnels are valid. The manual reset utility removes Proton filter protection and
+owned masquerade rules, but retains DNAT and host default policies; it is not a
+single-instance port-repair command and still needs fleet outage authorization.
+
+Source status, 2026-09-11: fixture and disposable-network-namespace tests passed.
+No host firewall, service, or installed script was changed. Deploy the shared
+instance helper with the callers, not individual executables copied in isolation.
+The separate documentation/deployment gates and all-five live validation remain
+required before accepting this behavior on the host.
+
 ### Last applied Docker port
 
 Path:

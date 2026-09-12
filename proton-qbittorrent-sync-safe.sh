@@ -698,13 +698,13 @@ restart_qbt_container_legacy() {
 }
 
 container_network_mode() {
-	docker inspect -f '{{.HostConfig.NetworkMode}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true
+	docker inspect -f '{{.HostConfig.NetworkMode}}' "$QBT_CONTAINER_NAME"
 }
 
 resolve_container_ip() {
 	local networks
 
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME")" || return 1
 
 	[[ -n "$networks" ]] || return 1
 
@@ -717,28 +717,32 @@ resolve_container_ip() {
             exit
         }
         END {
-            if (!found && first != "") {
+			if (!found && wanted == "" && first != "") {
                 print first
             }
         }
     ' <<<"$networks"
 }
 
-ensure_qbt_dnat_chain() {
-	nft list table ip proton_nat >/dev/null 2>&1 || nft add table ip proton_nat
-	nft list chain ip proton_nat prerouting >/dev/null 2>&1 ||
-		nft 'add chain ip proton_nat prerouting { type nat hook prerouting priority dstnat; policy accept; }'
-}
-
-dnat_rule_present() {
-	local proto="$1"
-
-	nft list chain ip proton_nat prerouting 2>/dev/null |
-		grep -F "${proto} dport ${PORT} dnat to ${CONTAINER_IP}:${QBT_INTERNAL_PORT}" >/dev/null 2>&1
+replace_qbt_dnat_rules() {
+	local batch deletions
+	proton_nft_chain_snapshot ip proton_nat prerouting || return 1
+	deletions="$(proton_nft_delete_comment_rules ip proton_nat prerouting "qbt-dnat-${INSTANCE}" "$PROTON_NFT_RULES")" || return 1
+	batch="$(
+		if [[ "$PROTON_NFT_TABLE_EXISTS" == 0 ]]; then printf 'add table ip proton_nat\n'; fi
+		if [[ "$PROTON_NFT_CHAIN_EXISTS" == 0 ]]; then
+			printf 'add chain ip proton_nat prerouting { type nat hook prerouting priority dstnat; policy accept; }\n'
+		fi
+		printf '%s\n' "$deletions"
+		printf 'add rule ip proton_nat prerouting iifname "%s" tcp dport %s dnat to %s:%s comment "qbt-dnat-%s"\n' "$VPN_INTERFACE" "$PORT" "$CONTAINER_IP" "$QBT_INTERNAL_PORT" "$INSTANCE"
+		printf 'add rule ip proton_nat prerouting iifname "%s" udp dport %s dnat to %s:%s comment "qbt-dnat-%s"\n' "$VPN_INTERFACE" "$PORT" "$CONTAINER_IP" "$QBT_INTERNAL_PORT" "$INSTANCE"
+	)" || return 1
+	nft -f - <<<"$batch"
 }
 
 refresh_qbt_dnat_legacy() {
 	local network_mode
+	local VPN_INTERFACE="${VPN_INTERFACE:-pv${INSTANCE}}"
 
 	if [[ -z "${QBT_CONTAINER_NAME:-}" ]]; then
 		return 0
@@ -747,32 +751,23 @@ refresh_qbt_dnat_legacy() {
 	require_command docker
 	require_command nft
 
-	network_mode="$(container_network_mode)"
+	network_mode="$(container_network_mode)" || return 1
+	[[ -n "$network_mode" ]] || return 1
 	if [[ "$network_mode" == "host" ]]; then
-		if [[ -x "$DNAT_CLEANUP_SCRIPT" ]]; then
-			"$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || true
-		fi
+		[[ -x "$DNAT_CLEANUP_SCRIPT" ]] || return 1
+		"$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || return 1
 		log "qBittorrent container $QBT_CONTAINER_NAME uses host networking; DNAT refresh skipped"
 		return 0
 	fi
 
-	CONTAINER_IP="$(resolve_container_ip || true)"
+	CONTAINER_IP="$(resolve_container_ip)" || return 1
 	if [[ -z "$CONTAINER_IP" ]]; then
 		log "ERROR: Could not resolve a container IP for $QBT_CONTAINER_NAME"
 		return 1
 	fi
 
-	if dnat_rule_present tcp && dnat_rule_present udp; then
-		return 0
-	fi
-
-	if [[ -x "$DNAT_CLEANUP_SCRIPT" ]]; then
-		"$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || true
-	fi
-
-	ensure_qbt_dnat_chain
-	nft add rule ip proton_nat prerouting tcp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat-${INSTANCE}"
-	nft add rule ip proton_nat prerouting udp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat-${INSTANCE}"
+	[[ "$CONTAINER_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$VPN_INTERFACE" =~ ^[a-zA-Z0-9_-]{1,15}$ ]] || return 1
+	proton_with_firewall_lock replace_qbt_dnat_rules || return 1
 	DNAT_CHANGED=1
 	log "Updated qBittorrent DNAT: public port $PORT -> ${CONTAINER_IP}:${QBT_INTERNAL_PORT}"
 }

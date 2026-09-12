@@ -16,6 +16,7 @@ setup() {
   export DOCKER_LOG="$TEST_TMPDIR/docker.log"
   export DOCKER_PORT_FILE="$TEST_TMPDIR/docker-published-port"
   export NFT_LOG="$TEST_TMPDIR/nft.log"
+  export KILLSWITCH_LOCK_FILE="$TEST_TMPDIR/killswitch.lock"
   export CURL_LOG="$TEST_TMPDIR/curl.log"
   export PROJECT_DIR="$TEST_TMPDIR/project"
   export QBT_ROUTE_RECONCILE_SCRIPT="$TEST_TMPDIR/routes.sh"
@@ -255,6 +256,11 @@ EOF
   cat > "$TMPBIN/nft" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$NFT_LOG"
+if [[ "$*" == '-f -' ]]; then
+  cat >> "$NFT_LOG"
+  exit "${QBT_TEST_NFT_APPLY_FAIL:-0}"
+fi
+if [[ "$*" == 'list tables' ]]; then exit "${QBT_TEST_NFT_READ_FAIL:-0}"; fi
 case "$1" in
   list)
     exit 1
@@ -554,9 +560,20 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
-  grep -F 'add rule ip proton_nat prerouting tcp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat-sonarr' "$NFT_LOG"
-  grep -F 'add rule ip proton_nat prerouting udp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat-sonarr' "$NFT_LOG"
+  grep -F 'add rule ip proton_nat prerouting iifname "pvsonarr" tcp dport 45000 dnat to 172.18.0.10:6881 comment "qbt-dnat-sonarr"' "$NFT_LOG"
+  grep -F 'add rule ip proton_nat prerouting iifname "pvsonarr" udp dport 45000 dnat to 172.18.0.10:6881 comment "qbt-dnat-sonarr"' "$NFT_LOG"
   ! grep -F 'CMD=compose ' "$DOCKER_LOG"
+}
+
+@test "legacy DNAT read or transaction failure does not publish success cache" {
+  write_qbt_env legacy-dnat
+  write_lease 45000
+  printf '45000' > "$CURL_STATE"
+  for failure in QBT_TEST_NFT_READ_FAIL QBT_TEST_NFT_APPLY_FAIL; do
+    run env "$failure=1" QBITTORRENT_ENV_FILE="$ENV_FILE" QBT_COMMON_SCRIPT=./proton-qbittorrent-common.sh bash ./proton-qbittorrent-sync-safe.sh sonarr
+    [ "$status" -ne 0 ]
+    [ ! -e "$CACHE_FILE" ]
+  done
 }
 
 @test "failed task inspection or stop prevents recreation and lock removal" {

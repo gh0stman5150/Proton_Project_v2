@@ -301,7 +301,7 @@ reapply_routes() {
 		proton_delete_ip_rule_all 4 from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" || return 1
 		proton_delete_ip_rule_all 4 from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		if command -v iptables >/dev/null 2>&1; then
-			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$old_cidr" -j ACCEPT 2>/dev/null || true
+			proton_iptables_rule remove raw PREROUTING -i "$VPN_INTERFACE" -d "$old_cidr" -j ACCEPT || return 1
 		fi
 	fi
 
@@ -317,8 +317,7 @@ reapply_routes() {
 			ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		fi
 		if command -v iptables >/dev/null 2>&1; then
-			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
-			iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
+			proton_iptables_rule ensure raw PREROUTING -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT || return 1
 		fi
 	else
 		log "No docker network detected; docker->VPN source rule removed"
@@ -388,9 +387,10 @@ reapply_routes_serialized() (
 reapply_killswitch() {
 	if [[ -x "$KILLSWITCH_SCRIPT" ]]; then
 		log "Reapplying Docker kill-switch state via $KILLSWITCH_SCRIPT"
-		"$KILLSWITCH_SCRIPT" || return 1
+		timeout --kill-after=5s 35s "$KILLSWITCH_SCRIPT" || return 1
 	else
-		log "Kill-switch script not found at $KILLSWITCH_SCRIPT; skipping firewall reconciliation"
+		log "ERROR: Kill-switch script not found at $KILLSWITCH_SCRIPT"
+		return 1
 	fi
 }
 
@@ -413,8 +413,8 @@ main() {
 		return 1
 	fi
 	[[ "${2:-}" == "--once" ]] && return 0
-	reapply_killswitch
-	refresh_qb_state
+	reapply_killswitch || return 1
+	refresh_qb_state || return 1
 
 	if command -v docker >/dev/null 2>&1; then
 		log "Starting docker events watch (debounce ${DEBOUNCE_SECONDS}s)"
@@ -434,7 +434,10 @@ main() {
 							log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
 							continue
 						fi
-						reapply_killswitch
+						if ! reapply_killswitch; then
+							log "ERROR: Firewall reconciliation failed; allocation not queued"
+							continue
+						fi
 						refresh_qb_state
 						;;
 					*) ;;
@@ -459,8 +462,7 @@ main() {
 				log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
 				continue
 			fi
-			reapply_killswitch
-			refresh_qb_state
+			reapply_killswitch && refresh_qb_state
 		done
 	fi
 }

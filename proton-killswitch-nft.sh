@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=proton-instance-common.sh
+source "$SCRIPT_DIR/proton-instance-common.sh"
+
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_IF="${VPN_IF:-${VPN_INTERFACE:-$WG_PROFILE}}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
@@ -47,7 +51,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk cat chmod flock ip mkdir nft systemd-cat; do
+for cmd in awk cat chmod flock grep ip mkdir nft sort systemd-cat; do
 	require_command "$cmd"
 done
 
@@ -135,86 +139,18 @@ trim_field() {
 }
 
 ensure_nat_postrouting_chain() {
-	nft list table ip proton_nat >/dev/null 2>&1 || nft add table ip proton_nat
-	nft list chain ip proton_nat postrouting >/dev/null 2>&1 ||
-		nft 'add chain ip proton_nat postrouting { type nat hook postrouting priority srcnat; policy accept; }'
-}
-
-ensure_nat6_postrouting_chain() {
-	[[ -n "$DOCKER_NETWORK_CIDR6" ]] || return 0
-	nft list table ip6 proton_nat6 >/dev/null 2>&1 || nft add table ip6 proton_nat6
-	nft list chain ip6 proton_nat6 postrouting >/dev/null 2>&1 ||
-		nft 'add chain ip6 proton_nat6 postrouting { type nat hook postrouting priority srcnat; policy accept; }'
-}
-
-ensure_masquerade_rule() {
-	local handles="" iface added=0
-
-	for iface in $(vpn_interfaces); do
-		[[ -n "$iface" ]] || continue
-		ip link show "$iface" >/dev/null 2>&1 || continue
-
-		handles="$(
-			nft -a list chain ip proton_nat postrouting 2>/dev/null |
-				awk -v vpn_if="$iface" '
-                $0 ~ ("oifname \"" vpn_if "\"") && /masquerade/ {
-                    for (i = 1; i <= NF; i++) {
-                        if ($i == "handle") print $(i + 1)
-                    }
-                }
-            '
-		)"
-
-		if [[ -n "$handles" ]]; then
-			while read -r handle; do
-				[[ -n "$handle" ]] || continue
-				nft delete rule ip proton_nat postrouting handle "$handle" 2>/dev/null || true
-			done <<<"$handles"
-		fi
-
-		nft add rule ip proton_nat postrouting oifname "$iface" masquerade comment "proton-wg-snat"
-		added=1
-	done
-
-	if ((!added)); then
-		log "INFO: no VPN interface up yet, skipping NAT setup"
+	local family="$1" table="$2" networks="$3" comment="$4" iface cidr
+	proton_nft_chain_snapshot "$family" "$table" postrouting || return 1
+	if [[ "$PROTON_NFT_TABLE_EXISTS" == 0 ]]; then printf 'add table %s %s\n' "$family" "$table"; fi
+	if [[ "$PROTON_NFT_CHAIN_EXISTS" == 0 ]]; then
+		printf 'add chain %s %s postrouting { type nat hook postrouting priority srcnat; policy accept; }\n' "$family" "$table"
 	fi
-}
-
-ensure_masquerade6_rule() {
-	local handles="" iface added=0
-
-	[[ -n "$DOCKER_NETWORK_CIDR6" ]] || return 0
-	for iface in $(vpn_interfaces); do
-		[[ -n "$iface" ]] || continue
-		ip link show "$iface" >/dev/null 2>&1 || continue
-
-		handles="$(
-			nft -a list chain ip6 proton_nat6 postrouting 2>/dev/null |
-				awk -v vpn_if="$iface" '
-                $0 ~ ("oifname \"" vpn_if "\"") && /masquerade/ {
-                    for (i = 1; i <= NF; i++) {
-                        if ($i == "handle") print $(i + 1)
-                    }
-                }
-            '
-		)"
-
-		if [[ -n "$handles" ]]; then
-			while read -r handle; do
-				[[ -n "$handle" ]] || continue
-				nft delete rule ip6 proton_nat6 postrouting handle "$handle" 2>/dev/null || true
-			done <<<"$handles"
-		fi
-
-		nft add rule ip6 proton_nat6 postrouting ip6 saddr "$DOCKER_NETWORK_CIDR6" \
-			oifname "$iface" masquerade comment "proton-wg-snat6"
-		added=1
+	proton_nft_delete_comment_rules "$family" "$table" postrouting "$comment" "$PROTON_NFT_RULES" || return 1
+	for iface in $VPN_INTERFACES; do
+		for cidr in ${networks//,/ }; do
+			printf 'add rule %s %s postrouting %s saddr %s oifname "%s" masquerade comment "%s"\n' "$family" "$table" "$family" "$cidr" "$iface" "$comment"
+		done
 	done
-
-	if ((!added)); then
-		log "INFO: no VPN interface up yet, skipping IPv6 NAT setup"
-	fi
 }
 
 render_docker_local_rules() {
@@ -242,26 +178,8 @@ render_lan_to_docker_rules() {
 	done
 }
 
-# List every active Proton WireGuard interface. All WireGuard interfaces on
-# this host are Proton tunnels, so Docker application egress is permitted via
-# any of them. With per-instance tunnels (pvlidarr, pvradarr, ...) sharing one
-# routing table, the interface that carries Docker egress can be any active
-# tunnel, so the kill switch must accept egress through all of them rather than
-# a single VPN_IF. Falls back to VPN_IF when no WireGuard interface is up yet.
 vpn_interfaces() {
-	local ifaces=""
-	local iface_list=()
-
-	if command -v wg >/dev/null 2>&1; then
-		ifaces="$(wg show interfaces 2>/dev/null || true)"
-	fi
-
-	if [[ -z "$ifaces" ]]; then
-		ifaces="$VPN_IF"
-	fi
-
-	read -r -a iface_list <<<"$ifaces"
-	printf '%s\n' "${iface_list[@]}"
+	printf '%s\n' "$VPN_INTERFACES"
 }
 
 render_vpn_to_docker_rules() {
@@ -364,7 +282,7 @@ render_docker6_drop_rules() {
 	done
 }
 
-if [[ -z "$DOCKER_NETWORK_CIDR" ]]; then
+if [[ -z "${DOCKER_NETWORK_CIDR//[[:space:],]/}" ]]; then
 	log "ERROR: Docker CIDR is required; preserving the existing firewall"
 	exit 1
 fi
@@ -372,17 +290,23 @@ fi
 require_value "LAN_IF" "$LAN_IF"
 require_value "LAN_CIDR" "$LAN_CIDR"
 
-ensure_nat_postrouting_chain
-ensure_masquerade_rule
-ensure_nat6_postrouting_chain
-ensure_masquerade6_rule
+[[ "$VPN_IF" =~ ^[a-zA-Z0-9_-]{1,15}$ ]] || exit 1
+VPN_INTERFACES="$(printf '%s\n' "$VPN_IF" pvlidarr pvprowlarr pvradarr pvsonarr pvwhisparr | sort -u)"
+NAT_BATCH="$(ensure_nat_postrouting_chain ip proton_nat "$DOCKER_NETWORK_CIDR" proton-wg-snat)"
+NAT6_BATCH=""
+if [[ -n "$DOCKER_NETWORK_CIDR6" ]]; then
+	NAT6_BATCH="$(ensure_nat_postrouting_chain ip6 proton_nat6 "$DOCKER_NETWORK_CIDR6" proton-wg-snat6)"
+fi
 
 FILTER_TABLE_DELETE=""
-if nft list table inet proton >/dev/null 2>&1; then
+TABLES="$(nft list tables)"
+if grep -Fxq 'table inet proton' <<<"$TABLES"; then
 	FILTER_TABLE_DELETE="delete table inet proton"
 fi
 
 nft -f - <<EOF
+$NAT_BATCH
+$NAT6_BATCH
 $FILTER_TABLE_DELETE
 table inet proton {
     chain forward {

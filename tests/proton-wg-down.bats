@@ -13,6 +13,7 @@ setup() {
   export IP_LOG="$TEST_TMPDIR/ip.log"
   export WG_LOG="$TEST_TMPDIR/wg.log"
   export PROTON_ROUTE_LOCK_FILE="$TEST_TMPDIR/policy-routing.lock"
+  export KILLSWITCH_LOCK_FILE="$TEST_TMPDIR/killswitch.lock"
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_RUNTIME_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$IP_LOG"
 
@@ -71,6 +72,10 @@ if [[ ! -f "$WG_LOG.absent" ]]; then printf 'pvsonarr\n'; fi
 EOF
   cat > "$TMPBIN/iptables" <<'EOF'
 #!/usr/bin/env bash
+if [[ "$*" == *' -C '* ]]; then
+  printf 'Bad rule (does a matching rule exist in that chain?).\n' >&2
+  exit 1
+fi
 exit 0
 EOF
   cat > "$TMPBIN/systemd-cat" <<'EOF'

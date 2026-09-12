@@ -49,7 +49,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk cat chmod flock ip iptables iptables-save iptables-restore mkdir mktemp systemd-cat tr wg; do
+for cmd in awk cat chmod flock ip iptables iptables-save iptables-restore mkdir mktemp sort systemd-cat; do
 	require_command "$cmd"
 done
 
@@ -86,7 +86,7 @@ if [[ -n "$DOCKER_NETWORK_CIDR6" ]]; then
 	exit 1
 fi
 
-if [[ -z "$DOCKER_NETWORK_CIDR" ]]; then
+if [[ -z "${DOCKER_NETWORK_CIDR//[[:space:],]/}" ]]; then
 	log "ERROR: Docker CIDR is required; preserving the existing firewall"
 	exit 1
 fi
@@ -245,7 +245,8 @@ ensure_nat_chain() {
 require_value "LAN_IF" "$LAN_IF"
 require_value "LAN_CIDR" "$LAN_CIDR"
 
-VPN_INTERFACES="$(printf '%s\n' "$VPN_IF" 'pvlidarr pvprowlarr pvradarr pvsonarr pvwhisparr' "$(wg show interfaces)" | tr ' ' '\n' | sort -u)"
+[[ "$VPN_IF" =~ ^[a-zA-Z0-9_-]{1,15}$ ]] || exit 1
+VPN_INTERFACES="$(printf '%s\n' "$VPN_IF" pvlidarr pvprowlarr pvradarr pvsonarr pvwhisparr | sort -u)"
 FILTER_SNAPSHOT="$(iptables-save -t filter)"
 NAT_SNAPSHOT="$(iptables-save -t nat)"
 BATCH="$(mktemp)"
