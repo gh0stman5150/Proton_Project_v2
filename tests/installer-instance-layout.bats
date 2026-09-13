@@ -59,7 +59,7 @@
 
 @test "fleet reconciler distinguishes transient I/O waits from persistent D-state tasks" {
   grep -Fq 'QBT_FLEET_DSTATE_SAMPLES:-3' tools/reconcile-qbittorrent-fleet.sh
-  grep -Fq 'docker top "$container" -eLo lwp,stat' tools/reconcile-qbittorrent-fleet.sh
+  grep -Fq 'docker top "$container" -eLo pid,lwp,stat' tools/reconcile-qbittorrent-fleet.sh
   grep -Fq 'container_persistent_dstate_lwps "$container"' tools/reconcile-qbittorrent-fleet.sh
   grep -Fq 'persistent uninterruptible D-state task' tools/reconcile-qbittorrent-fleet.sh
 }

@@ -24,12 +24,12 @@ qbt_container_safe_for_recreate() {
 	*) return 1 ;;
 	esac
 	for ((sample = 1; sample <= samples; sample++)); do
-		tasks="$(docker top "$container" -eLo lwp,stat)" || return 1
-		awk 'NR > 1 && $1 ~ /^[0-9]+$/ && $2 ~ /^[SRIDTZtWX]/ { found=1 } END { exit !found }' <<<"$tasks" || return 1
-		if awk 'NR > 1 && $2 ~ /^Z/ { found=1 } END { exit !found }' <<<"$tasks"; then
+		tasks="$(docker top "$container" -eLo pid,lwp,stat)" || return 1
+		awk 'NR > 1 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[SRIDTZtWX]/ { found=1 } END { exit !found }' <<<"$tasks" || return 1
+		if awk 'NR > 1 && $3 ~ /^Z/ { found=1 } END { exit !found }' <<<"$tasks"; then
 			return 1
 		fi
-		current="$(awk 'NR > 1 && $2 ~ /^D/ { print $1 }' <<<"$tasks")"
+		current="$(awk 'NR > 1 && $3 ~ /^D/ { print $2 }' <<<"$tasks")"
 		if ((sample == 1)); then
 			persistent="$current"
 		else
