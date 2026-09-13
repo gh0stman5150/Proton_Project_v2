@@ -99,8 +99,8 @@ done <"$MANIFEST_FILE"
 container_dstate_lwps() {
 	local container="$1"
 
-	docker top "$container" -eLo lwp,stat 2>/dev/null |
-		awk 'NR > 1 && $2 ~ /^D/ { print $1 }' |
+	docker top "$container" -eLo pid,lwp,stat 2>/dev/null |
+		awk 'NR > 1 && $3 ~ /^D/ { print $2 }' |
 		sort -u
 }
 

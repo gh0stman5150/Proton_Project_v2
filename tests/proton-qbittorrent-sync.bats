@@ -231,25 +231,32 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
 fi
 if [[ "$1" == 'top' ]]; then
   if [[ "${QBT_TEST_TOP_FAIL:-}" == 1 ]]; then exit 1; fi
+  if [[ "$*" == *'-eLo lwp,stat'* ]]; then
+    printf '%s\n' "Error response from daemon: Couldn't find PID field in ps output" >&2
+    exit 1
+  fi
   if [[ "${QBT_TEST_DOCKER_DSTATE:-}" == "1" ]]; then
-    printf 'LWP STAT\n'
-    printf '22 Dsl\n'
+    printf 'PID LWP STAT\n'
+    printf '2 22 Dsl\n'
   elif [[ "${QBT_TEST_DOCKER_DSTATE:-}" == "transient" ]]; then
     counter_file="${DOCKER_LOG}.dstate.count"
     count=0
     [[ -f "$counter_file" ]] && count="$(cat "$counter_file")"
     count=$((count + 1))
     printf '%s' "$count" > "$counter_file"
-    printf 'LWP STAT\n'
+    printf 'PID LWP STAT\n'
     if [[ "$count" -eq 1 ]]; then
-      printf '22 Dsl\n'
+      printf '2 22 Dsl\n'
     else
-      printf '22 Ssl\n'
+      printf '2 22 Ssl\n'
     fi
   elif [[ "${QBT_TEST_DOCKER_ZOMBIE:-}" == "1" ]]; then
-    printf 'PID STAT CMD\n'
-    printf '1 Ss s6-svscan\n'
-    printf '2 Zsl [qbittorrent-nox] <defunct>\n'
+    printf 'PID LWP STAT\n'
+    printf '1 11 Ss\n'
+    printf '2 22 Zsl\n'
+  elif [[ "$*" == *'-eLo pid,lwp,stat'* ]]; then
+    printf 'PID LWP STAT\n'
+    printf '1 11 Ssl\n'
   else
     printf 'PID STAT CMD\n'
     printf '1 Ssl qbittorrent-nox\n'
@@ -670,6 +677,19 @@ EOF
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_CONTAINER_STATUS=running QBT_TEST_DOCKER_DSTATE=transient QBT_DSTATE_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+}
+
+@test "compose-recreate task probe includes Docker-required PID while tracking LWP state" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_CONTAINER_STATUS=running bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  grep -F 'CMD=top qbittorrent -eLo pid,lwp,stat' "$DOCKER_LOG"
+  run grep -F -- '-eLo lwp,stat' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
 }
 
 @test "compose-recreate mode retries a busy host port before succeeding" {

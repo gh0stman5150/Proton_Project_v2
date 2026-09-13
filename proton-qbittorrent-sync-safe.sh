@@ -488,8 +488,8 @@ compose_container_has_zombie_process() {
 compose_container_dstate_lwps() {
 	local container_ref="$1"
 
-	docker top "$container_ref" -eLo lwp,stat 2>/dev/null |
-		awk 'NR > 1 && $2 ~ /^D/ { print $1 }' |
+	docker top "$container_ref" -eLo pid,lwp,stat 2>/dev/null |
+		awk 'NR > 1 && $3 ~ /^D/ { print $2 }' |
 		sort -u
 }
 
