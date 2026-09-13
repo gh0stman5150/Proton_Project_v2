@@ -1,6 +1,11 @@
 # Proton WireGuard Routing and qBittorrent Port Forwarding
 
-This repository implements and maintains a host level Proton WireGuard routing design for Docker hosted application services.
+## Repository Purpose
+
+This repository implements and maintains host-level Proton WireGuard routing,
+leak prevention, NAT-PMP port forwarding, and health recovery for five
+Docker-hosted qBittorrent instances. Other Docker applications may use the
+protected routing path, but this repository does not manage their lifecycle.
 
 ## Policy and Authority
 
@@ -45,7 +50,7 @@ The following summarizes the August 2026 incident evidence and required operatin
 
 There is no production kernel currently documented as a proven exact fix. In the recorded package review, Ubuntu `7.0.0-30.30` adds no relevant netfs correction, and `7.0.0-31.31` remains proposed-only. Linux 7.1.8 and 7.2 contain related netfs writeback and exclusion repairs, but they have not been demonstrated against this workload. Keep `cache=none` active and follow the [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) for candidate-kernel qualification. These are historical findings, not a new check of package publication channels.
 
-## Required Behavior
+## Key Capabilities
 
 The repository must enforce the following rules:
 
@@ -57,7 +62,7 @@ The repository must enforce the following rules:
 6. Docker hosted application traffic must not leak directly to WAN during VPN downtime
 7. DNS queries from Docker hosted application services must follow the intended VPN path and must not bypass the kill switch
 
-## Network Model
+## Architecture and Workflow Overview
 
 This host is single homed on one Ethernet interface.
 
@@ -98,32 +103,34 @@ section for event and periodic reconciliation behavior.
 
 Do not rename, consolidate, or remove any script listed here without explicit instruction.
 
-## Services in Scope
+## Managed and Routed Services
 
-The following services are in scope for this routing and operational design:
+This repository directly manages Proton routing and port synchronization for
+the five qBittorrent instances owned by Lidarr, Prowlarr, Radarr, Sonarr, and
+Whisparr. The following applications may use the protected Docker routing path,
+but their lifecycle and application configuration are owned elsewhere:
 
-1. qBittorrent
-2. NZBget
-3. Lidarr
-4. Radarr
-5. Sonarr
-6. Whisparr
-7. Bazarr
-8. Prowlarr
-9. Cross-seed
-10. Reaparr
-11. Flaresolverr
-12. Autobrr
-13. Plex
-14. Seer
-15. Mousehole
-16. Profilarr
-17. Soularr
-18. Upbrr
+1. NZBget
+2. Lidarr
+3. Radarr
+4. Sonarr
+5. Whisparr
+6. Bazarr
+7. Prowlarr
+8. Cross-seed
+9. Reaparr
+10. Flaresolverr
+11. Autobrr
+12. Plex
+13. Seer
+14. Mousehole
+15. Profilarr
+16. Soularr
+17. Upbrr
 
 Prometheus is no longer used and is not in scope for this repository.
 
-## Requirements and authentication
+## Requirements and Prerequisites
 
 This deployment targets a Debian/Ubuntu Linux host with systemd, root administration, Docker Engine and the Compose plugin, WireGuard tools, iproute2, NAT-PMP (`natpmpc`), curl, flock, and the selected firewall backend. The NAS readiness gate also requires `nc`. ShellCheck, shfmt, Git, and Bats are development tools; there is no application build or PowerShell runtime.
 
@@ -131,11 +138,15 @@ Before first activation, provide independent port-forward-capable WireGuard iden
 
 The installer checks its Proton Debian package list and may download the Proton apt repository package and install `protonvpn`. That package step is not a complete host dependency provisioner. Review host routing and management access before approving installation: it restarts the host kill switch.
 
+## Authentication Requirements
+
 Each protected `qbittorrent.env` supplies `QBITTORRENT_URL`, `QBITTORRENT_USER`, and `QBITTORRENT_PASS` for that instance’s Web API. Use its published host Web UI endpoint and enter credentials through an operator-controlled editor such as `sudoedit`. Keep the file root-owned with mode `0600`; it is sourced as shell code, so quote values correctly and treat write access as privileged. Never put real credentials in command examples, shell history, tickets, or this repository.
 
 The installer retains `/etc/proton/qbittorrent.env` and `--qb-*` options for singleton compatibility. Those options do not configure all five named clients. Use the per-instance files below for fleet configuration; obsolete singleton services are disabled during installation.
 
-## Named qBittorrent Instances
+## Configuration
+
+### Named qBittorrent Instances
 
 The templated service path supports one Proton/qBittorrent failure domain per workload. Supported instance names are:
 
@@ -152,7 +163,7 @@ The installer creates example files under `/etc/proton/instances/<instance>/`:
 1. `proton.env.example`
 2. `qbittorrent.env.example`
 
-Copy those to `proton.env` and `qbittorrent.env`, then keep real config files root owned with mode `600`. The generated defaults use:
+Copy those to `proton.env` and `qbittorrent.env`, then keep real config files root owned with mode `600`. The generated defaults are shown below.
 
 Each instance uses the same unique `qbittorrent-<instance>` value for both
 `QBT_CONTAINER_NAME` and `QBT_COMPOSE_SERVICE`. This prevents Docker DNS alias
@@ -241,7 +252,7 @@ A single `D` snapshot can be ordinary transient CIFS I/O, so automation samples 
 
 Use the full [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md). It provides the evidence commands, `S`/`Z`/`D` decision tree, reboot preparation, CIFS post-boot gate, sequential Proton restart, and five-instance acceptance criteria.
 
-## Install
+## Installation
 
 Run the installer from the project bundle directory that contains the scripts, service files, and environment templates together.
 
@@ -575,7 +586,7 @@ Any healthcheck driven recovery must preserve:
 4. qBittorrent port correctness
 5. DNS routing correctness
 
-## Quick Verification
+## Usage and Verification Examples
 
 If you customized the defaults, source the relevant files under `/etc/proton` first or substitute the resolved values directly in the commands below.
 
@@ -711,7 +722,7 @@ Look specifically for:
 
 If `/archive` is absent or empty, note that explicitly and proceed without archive comparison.
 
-## Security Notes
+## Security Considerations
 
 1. Keep WireGuard and qBittorrent credential files root owned and mode `600`
 2. Do not overwrite existing secrets during reinstall or upgrade
@@ -730,7 +741,21 @@ When evaluating or changing this repository:
 4. Be explicit about whether the active firewall control plane is `iptables` or `nftables`
 5. Do not mix `iptables` and `nftables` in recommendations unless the existing repository already depends on both and the interaction is explained clearly
 
-## Development, contributions, and support
+## Troubleshooting
+
+- For stale ports, lease expiry, API failures, or Docker mapping drift, use the
+  [port synchronization runbook](docs/runbooks/qbittorrent-port-sync.md).
+- For shared rollout failures or source-to-installed version mismatches, use the
+  [fleet change runbook](docs/runbooks/qbittorrent-fleet-changes.md).
+- For unhealthy containers, failed shutdown, zombies, or persistent kernel
+  `D` state, stop mutation and use the
+  [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md).
+
+Collect the affected instance, timestamps, source revision, failed command and
+exit status, and redacted logs. Do not include credentials, WireGuard private
+keys, protected environment files, or unredacted API responses.
+
+## Testing Procedures
 
 Run from `/usr/local/bin/proton_project`:
 
@@ -744,6 +769,10 @@ git diff --check
 
 CI additionally checks tracked shell formatting with shfmt and runs `shellcheck -x`. Use the pinned `bats-core/bin/bats` checkout for local tests; do not modify the upstream runner to accommodate a Proton failure. Keep tests isolated with temporary fixtures and mocked host commands.
 
+## Contribution Guidance
+
 Follow [AGENTS.md](AGENTS.md) for contribution and safety requirements. A change record should identify the problem, per-instance or shared scope, implementation, validation, documentation impact, and any authorized deployment/rollback steps. Source tests do not establish installed provenance or live fleet health.
+
+## Support and Ownership
 
 No named support owner, on-call contact, or support SLA is declared in this repository. Report defects through the repository’s existing issue/PR process or the host operator’s established channel. Include the affected instance, timestamps, source revision, failing command and exit status, and redacted logs. The maintainer should add ownership details when confirmed; do not invent contacts.
