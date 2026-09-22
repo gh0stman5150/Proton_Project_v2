@@ -65,20 +65,17 @@ CI checks tracked shell scripts with shfmt and `shellcheck -x`, then runs Bats.
 
 ## Host Storage And Boot Invariants
 
-- The live SMB 3.1.1 `/mnt/data` mount uses `cache=none`. This is the active fleet-wide mitigation for all five qBittorrent clients and every other `/mnt/data` consumer, not a staged option or a demonstrated kernel fix.
-- The third oops occurred at 19:05 CDT on 2026-08-17 under `cache=strict`; fstab changed at 20:01, and the 20:16 reboot created the first live `cache=none` mount. Never attribute that oops to `cache=none`.
-- `mnt-data.mount` and `mnt-plex.mount` require and follow `nas-network-online.service`, which checks both NAS route availability and TCP port 445 before succeeding.
-- Docker wants and follows all five `proton-wg@<instance>.service` units. This is startup ordering, not proof of tunnel health; the kill switch and runtime verifier remain required.
-- `install-proton-systemd.sh` owns both the NAS mount drop-ins and the Docker tunnel-ordering drop-in. Update and validate the installer source rather than editing installed drop-ins as one-off fixes.
-- Local incomplete storage is not capacity-safe for the current fleet. Any future storage-layout change is shared fleet structure and requires capacity, import/move, permissions, cleanup, rollback, and all-five validation.
+- `cache=none` on `/mnt/data` is the active fleet-wide mitigation for all five clients; never attribute a past oops to it or treat it as a demonstrated kernel fix. Boot ordering (NAS mount, Docker-vs-tunnel) is startup sequencing only, not proof of tunnel health — the kill switch and runtime verifier remain required.
+- `install-proton-systemd.sh` owns the NAS mount and tunnel-ordering drop-ins; fix the installer source, not installed drop-ins.
+- Local incomplete storage is not capacity-safe. Treat any storage-layout change as shared fleet structure requiring all-five validation and rollback.
+- Full mount/oops timeline, dependency edges, and kernel-package evidence: `docs/architecture/qbittorrent-fleet-contract.md`.
 
 ## Wedge Detection
 
-- A zombie is an immediate recreation refusal.
-- A single `D`-state snapshot can be normal transient CIFS I/O. Automation samples LWP IDs and treats only the same task remaining in `D` state across samples as a persistent wedge.
-- Persistent `D` state, especially with `folio_wait_bit_common` plus CIFS/netfs errors or a kernel oops, is a host-kernel recovery boundary. Preserve evidence and require a coordinated reboot; repeated signals or Docker cleanup cannot repair it.
-- Human incident triage may stop mutation on the first observed `D` state while sampling and kernel evidence are collected. Do not weaken the persistent-wedge guard to bypass a real blocked task.
-- Do not call a kernel version the fix without exact patch provenance and workload validation. Ubuntu `7.0.0-30.30` has no relevant netfs change, `7.0.0-31.31` is proposed-only, and the related Linux 7.1.8 and 7.2 repairs have not been demonstrated to prevent this exact oops.
+- A zombie is an immediate recreation refusal. A single `D`-state snapshot can be normal transient CIFS I/O; only the same task remaining in `D` across samples is a persistent wedge.
+- A persistent wedge (especially `folio_wait_bit_common` plus CIFS/netfs errors or a kernel oops) is a host-kernel recovery boundary: preserve evidence, require a coordinated reboot, and never escalate through signals/Docker cleanup as a repair.
+- Do not weaken the persistent-wedge guard to bypass a real blocked task, and do not call any specific kernel version the fix without exact patch provenance and workload validation.
+- Full decision table and kernel-package evidence: `docs/runbooks/qbittorrent-wedge-recovery.md`.
 
 ## Change Workflow
 
