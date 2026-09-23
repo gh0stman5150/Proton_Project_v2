@@ -24,8 +24,9 @@ here; if anything below conflicts with it, follow `AGENTS.md`.
 
 ## Commands
 
-`bats-core` is a gitlink with no `.gitmodules`, so it may be empty in a fresh
-checkout; CI uses the apt `bats` package instead. The suite assumes Linux, GNU
+`bats-core` is a submodule pinned to the `gh0stman5150/bats-core` fork; in a
+fresh clone run `git submodule update --init bats-core`. CI uses the apt `bats`
+package instead. The suite assumes Linux, GNU
 coreutils, and bash 4+; many tests fail under macOS bash 3.2/BSD tools.
 
 ```bash

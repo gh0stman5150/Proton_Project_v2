@@ -80,6 +80,6 @@
   grep -Fq 'Source status, 2026-09-11:' README.md
   grep -Fq 'They have not been deployed or verified on live host traffic' README.md
   grep -Fq 'Its pool config remains in `WG_POOL_DIR` for review.' docs/runbooks/server-pool-selection.md
-  run grep -E 'rele/establish-agents-md-hierarchyvant|pool config is deleted|start one instance first' README.md docs/runbooks/server-pool-selection.md install-proton-systemd.sh
+  run grep -E 'pool config is deleted|start one instance first' README.md docs/runbooks/server-pool-selection.md install-proton-systemd.sh
   [ "$status" -eq 1 ]
 }

@@ -80,10 +80,6 @@
   ! grep -Fq 'QBT_FORWARDED_PORT=' install-proton-systemd.sh
 }
 
-@test "instance normalizer applies unique Compose service names" {
-  grep -Fq 'QBT_COMPOSE_SERVICE=qbittorrent-$inst' Archive/proton-instances-normalize.sh
-}
-
 @test "cleanup scripts install at the existing flat runtime paths" {
   run bash -c '
     set -euo pipefail

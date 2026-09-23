@@ -9,4 +9,7 @@
 *.bats text eol=lf
 *.conf text eol=lf
 *.tsv text eol=lf
+*.json text eol=lf
+*.code-workspace text eol=lf
+.git* text eol=lf
 .github/workflows/*.lock.yml linguist-generated=true merge=ours

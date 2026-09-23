@@ -39,7 +39,7 @@ macOS bash 3.2/BSD tools for environmental reasons).
 
 ## 1. Repository hygiene and CI breakers
 
-- [ ] **1.1 Stage the moved files together (C).** Untracked:
+- [x] **1.1 Stage the moved files together (C).** Untracked:
   `proton-killswitch-reset.sh`, `proton-qbt-dnat-cleanup.sh`,
   `deploy-live-ipv6-firewall.sh`, `tests/proton-qbittorrent-sync-{port,recreate,safety}.bats`,
   `tests/proton-qbittorrent-sync-helper.bash`, `docs/reviews/`,
@@ -49,33 +49,48 @@ macOS bash 3.2/BSD tools for environmental reasons).
   tracked-only commit leaves the installer `SCRIPTS` array, the
   `proton-port-forward@.service` `ExecStop`, and tests referencing files absent
   from the repo. `git add` all of them in the same commit.
-- [ ] **1.2 `.gitignore` case (C).** `archive/*` only matches `Archive/` on
+- [x] **1.2 `.gitignore` case (C).** `archive/*` only matches `Archive/` on
   case-insensitive filesystems (`git -c core.ignorecase=false check-ignore
   Archive/x.sh` → not ignored). On the Linux host the legacy helpers are not
   ignored, contradicting `AGENTS.md` and `Archive/README.md`. Change to
   `Archive/*` and keep `!Archive/README.md`.
-- [ ] **1.3 `tests/installer-instance-layout.bats` (~line 84) (C).** Greps
+- [x] **1.3 `tests/installer-instance-layout.bats` (~line 84) (C).** Greps
   `Archive/proton-instances-normalize.sh`, which is git-ignored and absent in
   CI. Delete the assertion; the preceding test already checks
   `QBT_COMPOSE_SERVICE=qbittorrent-${instance}` in the installer.
-- [ ] **1.4 `tests/docs-archive-contract.bats` (~line 83) (C).** Regex
+- [x] **1.4 `tests/docs-archive-contract.bats` (~line 83) (C).** Regex
   contains corrupted token `rele/establish-agents-md-hierarchyvant`; restore
   `relevant` or drop that alternative.
-- [ ] **1.5 `bats-core` gitlink (C).** Mode 160000 entry with no
+- [x] **1.5 `bats-core` gitlink (C).** Mode 160000 entry with no
   `.gitmodules`; the directory is empty in fresh copies, so every documented
   `./bats-core/bin/bats` command fails. Add `.gitmodules` (upstream
   `bats-core/bats-core` at the pinned commit) or vendor the runner, or document
   the system `bats` fallback CI already uses.
-- [ ] **1.6 Committed public address (C).** `proton-common.env`
+- [x] **1.6 Committed public address (C).** `proton-common.env`
   `MANAGEMENT_ALLOWED_CIDRS` contains a real-looking public `/32`. The key is
   unused (see 3.6). Remove the address from the template; consider whether
   history needs rewriting.
-- [ ] **1.7 Line endings (C).** `.gitattributes`, `.gitignore`,
+- [x] **1.7 Line endings (C).** `.gitattributes`, `.gitignore`,
   `Proton_Project_v2.code-workspace`, `nas-network-online.mount.conf`, and
   `tests/proton-instances.bats` are CRLF in the macOS working tree
   (`git ls-files --eol`). The CRLF drop-in breaks the `systemd-units.bats`
   "NAS mounts wait…" test locally. Re-checkout with LF on the host and add
   `*.json`, `.git*`, `*.code-workspace` rules to `.gitattributes`.
+
+Section 1 resolved, 2026-09-23 (canonical Linux checkout, source-only):
+
+- 1.1 landed with merge `bdbf9d0`.
+- 1.2 was masked on the host by `core.ignorecase=true` in `.git/config`;
+  verified with `git -c core.ignorecase=false status --ignored Archive`.
+- 1.4: the token was corrupt since it was introduced in `85f8636`, so the
+  alternative was dropped rather than restored.
+- 1.5: `.gitmodules` points at the `gh0stman5150/bats-core` fork, because the
+  pinned commit `3799ca3` is not on upstream.
+- 1.6: the address was removed from the template only; it remains in history
+  from `28c6a48`. History rewriting was not performed. The unused key is 3.6.
+- 1.7: on the host the CRLF files were `.vscode/*.json` and
+  `proton-port-forward.env` (working copy only); the installed
+  `/etc/proton/proton-port-forward.env` was already LF.
 
 ## 2. Hot-path inefficiencies (*shared*)
 
