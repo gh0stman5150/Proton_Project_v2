@@ -129,7 +129,7 @@ EOF
 }
 
 @test "iptables backend blocks Docker WAN bypass and direct LAN DNS" {
-  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
+  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
   [ "$status" -eq 0 ]
   grep -F 'PROTON_DOCKER_FORWARD -s 172.18.0.0/16 -o eth0 -d 192.168.50.0/24 -p tcp --dport 53 -j DROP' "$IPTABLES_LOG"
   grep -F 'PROTON_DOCKER_FORWARD -s 172.18.0.0/16 -o eth0 -d 192.168.50.0/24 -p udp --dport 53 -j DROP' "$IPTABLES_LOG"
@@ -138,8 +138,17 @@ EOF
   ! grep -F -- '--dport 53 -j ACCEPT' "$IPTABLES_LOG"
 }
 
+@test "nft backend admits and masquerades every managed instance tunnel" {
+  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
+  [ "$status" -eq 0 ]
+  for iface in proton pvlidarr pvprowlarr pvradarr pvsonarr pvwhisparr; do
+    grep -F "oifname \"$iface\" ip saddr 172.18.0.0/16 accept" "$NFT_STDIN"
+    grep -F "saddr 172.18.0.0/16 oifname \"$iface\" masquerade" "$NFT_STDIN"
+  done
+}
+
 @test "nft backend emits Docker-only DNS drops and no host mark rules" {
-  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
+  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
   [ "$status" -eq 0 ]
   grep -F 'udp dport 53 drop' "$NFT_STDIN"
   grep -F 'tcp dport 53 drop' "$NFT_STDIN"
@@ -150,7 +159,7 @@ EOF
 
 @test "nft backend replaces an existing filter table in one atomic batch" {
   run env TEST_NFT_PROTON_EXISTS=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 \
-    SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
+    VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
 
   [ "$status" -eq 0 ]
   grep -Fx 'delete table inet proton' "$NFT_STDIN"
@@ -162,9 +171,9 @@ EOF
 
 @test "nft backend serializes concurrent watcher applies" {
   run bash -c '
-    TEST_NFT_CONCURRENCY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh &
+    TEST_NFT_CONCURRENCY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh &
     first=$!
-    TEST_NFT_CONCURRENCY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh &
+    TEST_NFT_CONCURRENCY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh &
     second=$!
     wait "$first"
     wait "$second"
@@ -178,7 +187,6 @@ EOF
   run env \
     DOCKER_NETWORK_CIDR=172.18.0.0/16 \
     DOCKER_NETWORK_CIDR6=fdca:6c19:2096::/64 \
-    SERVER_POOL_ENABLED=off \
     VPN_INTERFACE=proton \
     bash ./proton-killswitch-nft.sh
 
@@ -194,7 +202,6 @@ EOF
   run env \
     DOCKER_NETWORK_CIDR=172.18.0.0/16 \
     DOCKER_NETWORK_CIDR6=fdca:6c19:2096::/64 \
-    SERVER_POOL_ENABLED=off \
     VPN_INTERFACE=proton \
     bash ./proton-killswitch-safe.sh
 
@@ -204,7 +211,7 @@ EOF
 }
 
 @test "iptables replacement covers all five interfaces without live chain flushes" {
-  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
+  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
   [ "$status" -eq 0 ]
   for instance in lidarr prowlarr radarr sonarr whisparr; do
     grep -F -- "-o pv$instance -j ACCEPT" "$IPTABLES_LOG"
@@ -217,7 +224,7 @@ EOF
 @test "both backends refuse an unknown Docker network scope" {
   for backend in safe nft; do
     for scope in '' ' , , '; do
-      run env DOCKER_NETWORK_CIDR="$scope" SERVER_POOL_ENABLED=off bash "./proton-killswitch-$backend.sh"
+      run env DOCKER_NETWORK_CIDR="$scope" bash "./proton-killswitch-$backend.sh"
       [ "$status" -ne 0 ]
     done
   done
@@ -226,7 +233,7 @@ EOF
 }
 
 @test "nft NAT replacement preserves foreign rules and shares the filter transaction" {
-  run env TEST_NFT_NAT_EXISTS=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
+  run env TEST_NFT_NAT_EXISTS=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
   [ "$status" -eq 0 ]
   grep -Fx 'delete rule ip proton_nat postrouting handle 10' "$NFT_STDIN"
   grep -F 'table inet proton {' "$NFT_STDIN"
@@ -238,7 +245,7 @@ EOF
 
 @test "both backends exclude unrelated WireGuard interfaces" {
   for backend in safe nft; do
-    run env DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash "./proton-killswitch-$backend.sh"
+    run env DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash "./proton-killswitch-$backend.sh"
     [ "$status" -eq 0 ]
   done
   run grep -F 'unrelated-wg' "$IPTABLES_LOG" "$NFT_STDIN"
@@ -250,7 +257,7 @@ EOF
 
 @test "nft read and apply failures propagate without a success report" {
   for failure in TEST_NFT_READ_FAIL TEST_NFT_APPLY_FAIL; do
-    run env "$failure=1" DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
+    run env "$failure=1" DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
     [ "$status" -ne 0 ]
   done
   run grep -F 'kill switch applied' "$SYSTEMD_LOG"
@@ -278,7 +285,7 @@ EOF
 
 @test "iptables refuses read parser and apply failures" {
   for failure in TEST_IPTABLES_READ_FAIL TEST_IPTABLES_TEST_FAIL TEST_IPTABLES_APPLY_FAIL; do
-    run env "$failure=1" DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
+    run env "$failure=1" DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
     [ "$status" -ne 0 ]
   done
   run grep -F 'kill switch applied' "$SYSTEMD_LOG"
@@ -286,7 +293,7 @@ EOF
 }
 
 @test "iptables parser refusal prevents live apply" {
-  run env TEST_IPTABLES_TEST_FAIL=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 SERVER_POOL_ENABLED=off VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
+  run env TEST_IPTABLES_TEST_FAIL=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-safe.sh
   [ "$status" -ne 0 ]
   [ "$(grep -c '^restore ' "$IPTABLES_LOG")" -eq 1 ]
 }
@@ -299,7 +306,7 @@ EOF
     set -euo pipefail
     systemd-cat() { cat >/dev/null; }
     export -f systemd-cat
-    export LAN_IF=lo LAN_CIDR=127.0.0.0/8 VPN_INTERFACE=pvsonarr SERVER_POOL_ENABLED=off
+    export LAN_IF=lo LAN_CIDR=127.0.0.0/8 VPN_INTERFACE=pvsonarr
     export DOCKER_NETWORK_CIDR=172.18.0.0/16 DOCKER_NETWORK_CIDR6=fdca:6c19:2096::/64
     nft -f - <<EOF
 add table ip proton_nat
@@ -336,7 +343,7 @@ EOF
     set -euo pipefail
     systemd-cat() { cat >/dev/null; }
     export -f systemd-cat
-    export LAN_IF=lo LAN_CIDR=127.0.0.0/8 VPN_INTERFACE=pvsonarr SERVER_POOL_ENABLED=off
+    export LAN_IF=lo LAN_CIDR=127.0.0.0/8 VPN_INTERFACE=pvsonarr
     export DOCKER_NETWORK_CIDR=172.18.0.0/16 DOCKER_NETWORK_CIDR6=""
     iptables -P FORWARD DROP
     iptables -N FOREIGN_CHAIN

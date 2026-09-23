@@ -23,6 +23,8 @@ require_command() {
 	fi
 }
 
+# ExecStartPre preflight: ip, natpmpc, and systemd-cat are checked for the
+# port-forward loop that starts next, not used here.
 for cmd in curl ip natpmpc stat systemd-cat; do
 	require_command "$cmd"
 done

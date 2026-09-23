@@ -129,7 +129,10 @@ proton_allowed_instances() {
 }
 
 proton_allowed_instances_csv() {
-	printf '%s\n' "lidarr,radarr,sonarr,whisparr,prowlarr"
+	local -a instances
+	mapfile -t instances < <(proton_allowed_instances)
+	local IFS=,
+	printf '%s\n' "${instances[*]}"
 }
 
 proton_instance_error() {
@@ -281,14 +284,11 @@ proton_validate_instance_name() {
 		proton_instance_error "Unsafe instance name '$instance'."
 	fi
 
-	case "$instance" in
-	lidarr | radarr | sonarr | whisparr | prowlarr)
-		return 0
-		;;
-	*)
-		proton_instance_error "Unsupported instance '$instance'. Allowed instances: $(proton_allowed_instances_csv)"
-		;;
-	esac
+	local allowed
+	while IFS= read -r allowed; do
+		[[ "$instance" == "$allowed" ]] && return 0
+	done < <(proton_allowed_instances)
+	proton_instance_error "Unsupported instance '$instance'. Allowed instances: $(proton_allowed_instances_csv)"
 }
 
 proton_source_env_if_present() {

@@ -214,7 +214,7 @@ Proton NAT-PMP response
        ├─ verify qBittorrent listen_port
        ├─ verify Docker TCP mapping
        ├─ verify Docker UDP mapping
-       └─ write the per-instance cache only after success
+       └─ record the port in the diagnostic qbt-port.cache only after success
 ```
 
 On a failed port-changing recreation, the script attempts to restore the previous published artifact and service port. A forced same-port structural recreation has no different port to restore. It must never substitute another instance's port.

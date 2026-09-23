@@ -174,14 +174,14 @@ installed):
 
 ## 3. Dead code and unused configuration
 
-- [ ] **3.1 `command -v docker` always true (C).** `proton-instance-common.sh`
+- [x] **3.1 `command -v docker` always true (C).** `proton-instance-common.sh`
   line 3 defines a `docker()` function, which `command -v` reports. Unreachable
   "docker CLI not present" branches: `proton-docker-network-watcher.sh`
   (~78, 86, 124, 203, 226, 460; else-branch ~493–505), `proton-wg-up-safe.sh`
   (~329, 356, 719), `proton-wg-down-safe.sh` (~123, 146),
   `tools/verify-qbittorrent-fleet.sh` (~194). Remove, or use `type -P docker`
   where a real binary check is intended.
-- [ ] **3.2 Kill-switch scripts (C).** Never called: `server_pool_requested`,
+- [x] **3.2 Kill-switch scripts (C).** Never called: `server_pool_requested`,
   `load_selected_server` and their variables (`SERVER_SELECTION_FILE`,
   `SERVER_RESELECT_FILE`, `SERVER_POOL_ENABLED`, `SERVER_MANAGER_SCRIPT`,
   `WG_POOL_DIR`) in both `proton-killswitch-safe.sh` and
@@ -190,7 +190,7 @@ installed):
   leftovers); "applied without Docker CIDR state" log branches (both scripts
   already exit on empty CIDR). Then drop the no-op `SERVER_POOL_ENABLED=off`
   settings in `tests/proton-killswitch-contract.bats`.
-- [ ] **3.3 Installer dead functions (C).** Defined, never called:
+- [x] **3.3 Installer dead functions (C).** Defined, never called:
   `validate_wireguard_config`, `secure_wireguard_config`, `path_dirname`,
   `restart_enabled_optional_services`, `reset_runtime_state_for_redeploy`.
   `load_common_env`/`load_port_forward_env` calls before
@@ -198,25 +198,25 @@ installed):
   only logs. Note: `host-routing-and-tunnels.md` claims the installer secures
   WireGuard files; only per-instance `wireguard.conf` is chmod'd — either
   restore `secure_wireguard_config` for pool configs or fix the doc.
-- [ ] **3.4 wg-up / wg-down (C).** `uses_nftables_backend` unused (and so
+- [x] **3.4 wg-up / wg-down (C).** `uses_nftables_backend` unused (and so
   `KILLSWITCH_BACKEND` in wg-up); unreachable `QBT_SNAPSHOT_READY` early return
   in wg-up; in wg-down, unused `KILLSWITCH_BACKEND`,
   `DOCKER_LOCAL_RULE_PRIORITY`, `DOCKER_LAN_RULE_PRIORITY`,
   `RESOLVED_DNS_ROUTE_DOMAIN`, a `detect_lan_cidr` call whose results are
   never read, and unreachable `SELECTED_WG_PROFILE`/`SELECTED_VPN_INTERFACE`
   fallbacks.
-- [ ] **3.5 Watcher and server manager (C).** Watcher: `load_selected_server`
+- [x] **3.5 Watcher and server manager (C).** Watcher: `load_selected_server`
   sources `current-server.env` every reconcile but reads none of it;
   `QBT_SYNC_SCRIPT`, `QBITTORRENT_ENV_FILE` unused; `LAST_FILE`/`STATE_DIR`
   defaults always overridden. Server manager: `port_claimed_by`,
   `endpoint_claimed_by` never called (so the claim record's port column is
   never read); `SELECTED_VPN_INTERFACE=$profile` has no live consumer and is
   the wrong value for `pv<instance>` interfaces.
-- [ ] **3.6 Unused env keys (C).** `proton-common.env`: `BYPASS_TCP_PORTS`,
+- [x] **3.6 Unused env keys (C).** `proton-common.env`: `BYPASS_TCP_PORTS`,
   `BYPASS_UDP_PORTS`, `MANAGEMENT_ALLOWED_CIDRS`, `MANAGEMENT_TCP_PORTS`,
   `MANAGEMENT_UDP_PORTS` — no script reads them. Remove, and remove the
   `MANAGEMENT_ALLOWED_CIDRS` step in `host-routing-and-tunnels.md`.
-- [ ] **3.7 Write-only `CACHE_FILE` (C).** `qbt-port.cache` is written by the
+- [x] **3.7 Write-only `CACHE_FILE` (C).** `qbt-port.cache` is written by the
   sync (and overwritten with the rollback port on failure) but never read.
   Remove, or document as diagnostic-only and fix the port-sync runbook wording
   that implies it has a function.
@@ -224,7 +224,7 @@ installed):
   column 3 of `qbittorrent-instances.tsv`. Dropping it means renumbering the
   installer's field reads, the verifier `read`, the test fixture, and the doc
   table in `qbittorrent-fleet-contract.md`.
-- [ ] **3.9 Misc (C).** `proton_allowed_instances` unused (either delete it or
+- [x] **3.9 Misc (C).** `proton_allowed_instances` unused (either delete it or
   make it the single allowlist; the five names are hard-coded in ~6 places,
   plus `docker-proton-tunnels.conf` and the kill-switch interface lists);
   `trim_field` subshells on already-split CIDRs; `$(vpn_interfaces)` in nft
@@ -232,6 +232,46 @@ installed):
   `systemd-cat` it doesn't use (keep only if intended as a preflight and say
   so); `verify-qbittorrent-fleet.sh` re-sources `QBT_COMMON_SCRIPT` in a
   subshell.
+
+Section 3 resolved except 3.8, 2026-09-23 (canonical Linux checkout,
+source-only, not installed):
+
+- 3.1: the always-true guards were removed, including the watcher's
+  no-Docker polling loop. Checks that must find a real binary now use
+  `type -P`: `require_command` in the sync script, and the `proton-ipv6-rollout.sh`
+  preflight and status. The fleet verifier already exits early without Docker.
+- 3.2: the pool-selection helpers, their variables, the `ensure_*` chain
+  helpers, and the empty-CIDR log branches were removed from both backends.
+- 3.3: the dead installer functions and the `load_*_env` calls were removed;
+  the "leaving services running" message is now logged inline. The doc was
+  corrected rather than restoring `secure_wireguard_config`: the installer
+  secures per-instance `wireguard.conf`, `proton.env`, and `qbittorrent.env`,
+  and keeps `/etc/wireguard/proton-pool` `root:root` 0700. Individual pool
+  configs are not re-moded.
+- 3.4: all listed items removed. wg-down's `LAN_IF`/`LAN_CIDR` defaults went
+  with `detect_lan_cidr`, their only reader.
+- 3.5: the watcher's selection loader, `QBT_SYNC_SCRIPT`,
+  `QBITTORRENT_ENV_FILE`, and the `LAST_FILE`/`STATE_DIR` defaults were
+  removed (`proton_instance_init` sets both). The server manager no longer
+  writes `SELECTED_VPN_INTERFACE`. The claim record keeps its port column, which
+  is still logged and counted by `cleanup_claims`; nothing reads it back.
+- 3.6: keys removed from the template and from both WireGuard-defaults lists.
+  Installed `/etc/proton/proton-common.env` copies are preserved by the
+  installer and keep the inert keys until edited by hand.
+- 3.7: kept as diagnostic-only and documented that way in the port-sync
+  runbook and fleet contract. Its directory still anchors the
+  `qbt-recreate.pending` record and legacy path inference.
+- 3.8 deferred: the fleet contract documents the column as a
+  pre-migration reference for incident comparison, and dropping it changes the
+  installed manifest format for all five instances.
+- 3.9: `proton_allowed_instances` is now the allowlist for instance
+  validation, the error message, the nft interface list, and the fleet
+  verifier's manifest check. `proton-killswitch-safe.sh`,
+  `proton-qbittorrent-common.sh`, and `proton-ipv6-rollout.sh` do not load the
+  instance helper and keep their literal lists. The no-op `trim_field` calls on
+  already-split CIDRs, `vpn_interfaces`, and the verifier's subshell
+  re-source were removed. The port-forward preflight keeps its command list,
+  now commented as an `ExecStartPre` check for the loop that follows.
 
 ## 4. Obsolete modes and migration shims
 

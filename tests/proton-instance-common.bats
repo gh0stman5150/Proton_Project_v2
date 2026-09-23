@@ -63,6 +63,7 @@ EOF
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"Unsupported instance"* ]]
+  [[ "$output" == *"Allowed instances: lidarr,radarr,sonarr,whisparr,prowlarr"* ]]
 }
 
 @test "instance loader rebases legacy global paths to the selected instance" {

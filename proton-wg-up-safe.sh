@@ -38,7 +38,6 @@ QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
 QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
 QBT_CONTAINER_IP_STATE_FILE="${QBT_CONTAINER_IP_STATE_FILE:-${STATE_DIR}/qbt-container-ip}"
 QBT_CONTAINER_IP6_STATE_FILE="${QBT_CONTAINER_IP6_STATE_FILE:-${STATE_DIR}/qbt-container-ip6}"
-KILLSWITCH_BACKEND="${KILLSWITCH_BACKEND:-auto}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
@@ -322,16 +321,11 @@ docker_ipv4_fallback_enabled() {
 }
 
 resolve_qbt_container_ip() {
-	if [[ "${QBT_SNAPSHOT_READY:-0}" == 1 ]]; then
-		printf '%s\n' "$QBT_IP_SNAPSHOT"
-		return
-	fi
 	proton_docker_ready || return 1
 	local networks=""
 	local ip=""
 
 	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-	command -v docker >/dev/null 2>&1 || return 1
 
 	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
 	[[ -n "$networks" ]] || return 1
@@ -349,16 +343,11 @@ resolve_qbt_container_ip() {
 }
 
 resolve_qbt_container_ipv6() {
-	if [[ "${QBT_SNAPSHOT_READY:-0}" == 1 ]]; then
-		printf '%s\n' "$QBT_IP6_SNAPSHOT"
-		return
-	fi
 	proton_docker_ready || return 1
 	local networks=""
 	local ip=""
 
 	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-	command -v docker >/dev/null 2>&1 || return 1
 
 	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
 	[[ -n "$networks" ]] || return 1
@@ -430,7 +419,6 @@ ensure_docker_raw_return_rule() {
 	# interface already destined for the container IP, so allow that path
 	# before Docker's "! -i br-... -j DROP" rules fire.
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
 		proton_iptables_rule ensure raw PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT || return 1
 		log "Allowed VPN return traffic from $VPN_INTERFACE to Docker subnet $cidr in raw PREROUTING"
@@ -449,23 +437,6 @@ ensure_vpn_tcp_mss_clamp_rules() {
 	proton_iptables_rule ensure mangle FORWARD -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu || return 1
 	proton_iptables_rule ensure mangle FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu || return 1
 	log "Clamped TCP MSS for forwarded traffic crossing $VPN_INTERFACE"
-}
-
-uses_nftables_backend() {
-	case "$KILLSWITCH_BACKEND" in
-	nft | nftables)
-		return 0
-		;;
-	iptables)
-		return 1
-		;;
-	auto)
-		command -v nft >/dev/null 2>&1
-		;;
-	*)
-		return 1
-		;;
-	esac
 }
 
 config_dns_servers() {
@@ -721,7 +692,7 @@ resolve_docker_network_cidr() {
 	local candidate=""
 	local subnet=""
 
-	if [[ -z "$DOCKER_NETWORK_CIDR" ]] && proton_docker_ready && command -v docker >/dev/null 2>&1; then
+	if [[ -z "$DOCKER_NETWORK_CIDR" ]] && proton_docker_ready; then
 		candidate=$(docker network ls --format '{{.Name}}' | grep -i starr | head -n1 || true)
 		if [[ -n "$candidate" ]]; then
 			subnet=$(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$candidate" 2>/dev/null || true)
@@ -828,7 +799,6 @@ inject_routes() {
 
 		detect_lan_cidr
 		for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
 			proton_replace_ip_rule 4 from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 
@@ -883,7 +853,6 @@ inject_routes() {
 		fi
 
 		for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
-			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
 			proton_replace_ip_rule 6 from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 			proton_delete_ip_rule_all 6 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
@@ -911,7 +880,6 @@ QBT_IP_SNAPSHOT="$(resolve_qbt_container_ip || true)"
 QBT_IP6_SNAPSHOT="$(resolve_qbt_container_ipv6 || true)"
 if [[ -z "$QBT_IP_SNAPSHOT" ]]; then QBT_IP_SNAPSHOT="$(read_cached_qbt_container_ip || true)"; fi
 if [[ -z "$QBT_IP6_SNAPSHOT" ]]; then QBT_IP6_SNAPSHOT="$(read_cached_qbt_container_ipv6 || true)"; fi
-QBT_SNAPSHOT_READY=1
 if ! proton_route_lock_acquire; then
 	log "ERROR: Could not acquire the shared policy-route lock for $INSTANCE"
 	exit 1

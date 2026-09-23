@@ -46,10 +46,9 @@ Shared compatibility defaults include the following; named services override pro
 1. `WG_PROFILE=proton`
 2. `VPN_INTERFACE=proton`
 3. `NATPMP_GATEWAY=10.2.0.1`
-4. `MANAGEMENT_ALLOWED_CIDRS=<LAN_CIDR>,<YOUR_WAN_IP>/32`
-5. `MANAGE_RESOLVED_DNS=auto`
-6. `RESOLVED_DNS_ROUTE_DOMAIN=~.`
-7. `WG_PERSISTENT_KEEPALIVE=25`
+4. `MANAGE_RESOLVED_DNS=auto`
+5. `RESOLVED_DNS_ROUTE_DOMAIN=~.`
+6. `WG_PERSISTENT_KEEPALIVE=25`
 
 Set real values in environment files, not in committed documentation.
 
@@ -194,7 +193,7 @@ The installer:
 4. Copies systemd units to `/etc/systemd/system`; no unit executes from the source checkout
 5. Installs the shared qBittorrent Compose policy and canonical instance manifest under `/opt/qbittorrent-common`
 6. Copies environment templates to `/etc/proton`
-7. Secures active WireGuard and protected environment files as `root:root` with mode `600`
+7. Secures each instance's `wireguard.conf`, `proton.env`, and `qbittorrent.env` as `root:root` with mode `600`, and keeps the shared pool directory `/etc/wireguard/proton-pool` `root:root` with mode `700`; it does not change the modes of individual pool configs
 8. Preserves existing secrets and writes replacement templates to `*.new` files rather than overwriting them
 9. Canonicalizes each existing per-instance port artifact to exactly one validated `QBT_PUBLISHED_PORT` assignment while preserving its value
 10. Reconciles `VPN_TABLE`, `QBT_VPN_RULE_PRIORITY`, and `QBT_INSTANCE_NAME` into existing protected instance configs without changing credentials or WireGuard secrets

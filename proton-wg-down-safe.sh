@@ -38,16 +38,10 @@ QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
 QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
 QBT_CONTAINER_IP_STATE_FILE="${QBT_CONTAINER_IP_STATE_FILE:-${STATE_DIR}/qbt-container-ip}"
 QBT_CONTAINER_IP6_STATE_FILE="${QBT_CONTAINER_IP6_STATE_FILE:-${STATE_DIR}/qbt-container-ip6}"
-KILLSWITCH_BACKEND="${KILLSWITCH_BACKEND:-auto}"
-LAN_IF="${LAN_IF:-}"
-LAN_CIDR="${LAN_CIDR:-}"
-DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
-DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
 DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
 QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
-RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
 
 mkdir -p "$STATE_DIR"
 if [[ "${PROTON_LIFECYCLE_LOCK_FD:-}" != 205 || ! /proc/self/fd/205 -ef "${STATE_DIR}/lifecycle.lock" ]]; then
@@ -120,7 +114,6 @@ resolve_qbt_container_ip() {
 	local ip=""
 
 	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-	command -v docker >/dev/null 2>&1 || return 1
 
 	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
 	[[ -n "$networks" ]] || return 1
@@ -143,7 +136,6 @@ resolve_qbt_container_ipv6() {
 	local ip=""
 
 	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-	command -v docker >/dev/null 2>&1 || return 1
 	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
 	[[ -n "$networks" ]] || return 1
 	if [[ -n "$QBT_NETWORK_NAME" ]]; then
@@ -190,20 +182,6 @@ teardown_resolved_dns() {
 
 	timeout --kill-after=2s 5s resolvectl revert "$ifname" >/dev/null 2>&1 || return 1
 	timeout --kill-after=2s 5s resolvectl flush-caches >/dev/null 2>&1
-}
-
-detect_lan_cidr() {
-	if [[ -n "$LAN_CIDR" ]]; then
-		return 0
-	fi
-
-	if [[ -z "$LAN_IF" ]]; then
-		LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
-	fi
-
-	if [[ -n "$LAN_IF" ]]; then
-		LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
-	fi
 }
 
 for cmd in cat chmod flock ip mktemp rm timeout wg wg-quick; do
@@ -275,8 +253,6 @@ fi
 if [[ -f "$SERVER_SELECTION_FILE" ]]; then
 	# shellcheck disable=SC1090
 	source "$SERVER_SELECTION_FILE"
-	WG_PROFILE="${WG_PROFILE:-${SELECTED_WG_PROFILE:-$WG_PROFILE}}"
-	VPN_INTERFACE="${VPN_INTERFACE:-${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}}"
 	WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
 	FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 fi
@@ -309,7 +285,6 @@ if ipv6_enabled; then
 		proton_delete_ip_rule_all 6 from "$source_rule" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 	done
 	for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
-		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
 		proton_delete_ip_rule_all 6 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 	done
@@ -317,9 +292,7 @@ if ipv6_enabled; then
 	proton_flush_route_table 6 "$VPN_TABLE"
 fi
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-	detect_lan_cidr
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
 		proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
 		proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"

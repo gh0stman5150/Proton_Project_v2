@@ -41,7 +41,7 @@ EOF
 }
 
 require_command() {
-	command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"
+	type -P "$1" >/dev/null 2>&1 || die "Required command is missing: $1"
 }
 
 require_root() {
@@ -73,7 +73,7 @@ ipv6_is_enabled() {
 status() {
 	local docker_ipv6="unavailable"
 
-	if command -v docker >/dev/null 2>&1; then
+	if type -P docker >/dev/null 2>&1; then
 		docker_ipv6="$(docker network inspect starr_network --format '{{.EnableIPv6}}' 2>/dev/null || printf 'unknown')"
 	fi
 
@@ -90,7 +90,7 @@ preflight() {
 	local backend
 
 	for command in awk docker ip nft systemctl tar; do
-		if ! command -v "$command" >/dev/null 2>&1; then
+		if ! type -P "$command" >/dev/null 2>&1; then
 			printf 'FAIL: required command is missing: %s\n' "$command" >&2
 			failed=1
 		fi
@@ -110,7 +110,7 @@ preflight() {
 		failed=1
 	fi
 
-	if command -v docker >/dev/null 2>&1 &&
+	if type -P docker >/dev/null 2>&1 &&
 		[[ "$(docker network inspect starr_network --format '{{.EnableIPv6}}' 2>/dev/null || true)" == "true" ]]; then
 		printf '%s\n' 'FAIL: starr_network already has IPv6 enabled; current state is not the expected IPv4-only baseline' >&2
 		failed=1
@@ -178,7 +178,7 @@ docker_preflight() {
 	)
 
 	for command in cmp docker ip nft python3 sysctl; do
-		if ! command -v "$command" >/dev/null 2>&1; then
+		if ! type -P "$command" >/dev/null 2>&1; then
 			printf 'FAIL: required command is missing: %s\n' "$command" >&2
 			failed=1
 		fi

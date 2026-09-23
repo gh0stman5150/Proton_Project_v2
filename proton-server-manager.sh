@@ -260,24 +260,10 @@ get_profile_forward_port() {
 	fi
 }
 
-port_claimed_by() {
-	local port="$1"
-	if [[ -f "$PF_CLAIMS_FILE" && -n "$port" ]]; then
-		awk -F '\t' -v port="$port" '$3 == port { print $4; exit }' "$PF_CLAIMS_FILE"
-	fi
-}
-
 profile_claimed_by() {
 	local profile="$1"
 	if [[ -f "$PF_CLAIMS_FILE" && -n "$profile" ]]; then
 		awk -F '\t' -v p="$profile" '$1 == p { print $4; exit }' "$PF_CLAIMS_FILE"
-	fi
-}
-
-endpoint_claimed_by() {
-	local endpoint="$1"
-	if [[ -f "$PF_CLAIMS_FILE" && -n "$endpoint" ]]; then
-		awk -F '\t' -v ep="$endpoint" '$3 == ep { print $4; exit }' "$PF_CLAIMS_FILE"
 	fi
 }
 
@@ -625,7 +611,6 @@ save_selection() (
 	trap 'rm -f "$temporary"' EXIT
 	{
 		echo "SELECTED_WG_PROFILE=$profile"
-		echo "SELECTED_VPN_INTERFACE=$profile"
 		echo "SELECTED_CONFIG=$config"
 		echo "SELECTED_ENDPOINT_HOST=$endpoint_host"
 		echo "SELECTED_ENDPOINT_IP=$endpoint_ip"

@@ -105,8 +105,6 @@ runtime_qbt_listen_port() {
 		# shellcheck disable=SC1090
 		source "$qbt_env"
 		set +a
-		# shellcheck disable=SC1090
-		source "$QBT_COMMON_SCRIPT"
 		cookie_jar="$(mktemp)"
 		trap 'rm -f "$cookie_jar"' EXIT
 		qbt_login "$cookie_jar" >/dev/null 2>&1 || exit 1
@@ -122,7 +120,7 @@ if [[ ! -r "$MANIFEST_FILE" ]]; then
 	fail "instance manifest is missing or unreadable: $MANIFEST_FILE"
 	exit 1
 fi
-[[ "$(awk -F '\t' '!/^#/ && NF {print $1}' "$MANIFEST_FILE" | sort)" == "$(printf '%s\n' lidarr prowlarr radarr sonarr whisparr | sort)" ]] || {
+[[ "$(awk -F '\t' '!/^#/ && NF {print $1}' "$MANIFEST_FILE" | sort)" == "$(proton_allowed_instances | sort)" ]] || {
 	fail "manifest must contain each managed instance exactly once"
 	exit 1
 }
@@ -191,16 +189,14 @@ while IFS=$'\t' read -r instance webui _legacy_port bind_ip vpn_interface subnet
 		fail "$instance: fleet-controlled service policy was duplicated into its wrapper"
 	fi
 
-	if command -v docker >/dev/null 2>&1; then
-		if ! QBT_PUBLISHED_PORT=45678 docker compose -f "$compose_file" config --quiet >/dev/null 2>&1; then
-			fail "$instance: Docker Compose could not resolve the wrapper"
-		else
-			resolved="$(QBT_PUBLISHED_PORT=45678 docker compose -f "$compose_file" config 2>/dev/null || true)"
-			grep -Fq 'TORRENTING_PORT: "45678"' <<<"$resolved" || fail "$instance: injected port does not reach TORRENTING_PORT"
-			[[ "$(grep -Fc 'published: "45678"' <<<"$resolved")" -eq 2 ]] || fail "$instance: injected port is not published once for both TCP and UDP"
-			[[ "$(grep -Fc 'target: 45678' <<<"$resolved")" -eq 2 ]] || fail "$instance: TCP/UDP container targets do not both use the injected port"
-			grep -Fq "host_ip: $bind_ip" <<<"$resolved" || fail "$instance: torrent port is not bound to $bind_ip"
-		fi
+	if ! QBT_PUBLISHED_PORT=45678 docker compose -f "$compose_file" config --quiet >/dev/null 2>&1; then
+		fail "$instance: Docker Compose could not resolve the wrapper"
+	else
+		resolved="$(QBT_PUBLISHED_PORT=45678 docker compose -f "$compose_file" config 2>/dev/null || true)"
+		grep -Fq 'TORRENTING_PORT: "45678"' <<<"$resolved" || fail "$instance: injected port does not reach TORRENTING_PORT"
+		[[ "$(grep -Fc 'published: "45678"' <<<"$resolved")" -eq 2 ]] || fail "$instance: injected port is not published once for both TCP and UDP"
+		[[ "$(grep -Fc 'target: 45678' <<<"$resolved")" -eq 2 ]] || fail "$instance: TCP/UDP container targets do not both use the injected port"
+		grep -Fq "host_ip: $bind_ip" <<<"$resolved" || fail "$instance: torrent port is not bound to $bind_ip"
 	fi
 
 	if [[ ! -r "$init_file" ]]; then

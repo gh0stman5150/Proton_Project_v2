@@ -38,26 +38,16 @@ DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
 DOCKER_FALLBACK_INSTANCE="${DOCKER_FALLBACK_INSTANCE:-sonarr}"
 DOCKER_IPV6_FALLBACK_INSTANCE="${DOCKER_IPV6_FALLBACK_INSTANCE:-sonarr}"
-LAST_FILE="${LAST_FILE:-/run/proton/docker-network-watcher.last}"
 LAST6_FILE="${LAST6_FILE:-${STATE_DIR}/docker-network-watcher6.last}"
-QBT_SYNC_SCRIPT="${QBT_SYNC_SCRIPT:-$DIR/proton-qbittorrent-sync-safe.sh}"
-QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
-STATE_DIR="${STATE_DIR:-/run/proton}"
-SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
 QBT_ALLOCATED_STATE_FILE="${QBT_ALLOCATED_STATE_FILE:-${STATE_DIR}/qbt-allocated-routing}"
 KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-$DIR/proton-killswitch-dispatch.sh}"
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
+# proton_instance_init sets LAST_FILE under the instance STATE_DIR.
+# shellcheck disable=SC2153
 touch "$LAST_FILE" 2>/dev/null || true
-
-load_selected_server() {
-	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
-		# shellcheck disable=SC1090
-		source "$SERVER_SELECTION_FILE"
-	fi
-}
 
 detect_lan_cidr() {
 	if [[ -n "$LAN_CIDR" ]]; then
@@ -77,16 +67,10 @@ find_network_cidr() {
 	local cidr=""
 
 	# If a specific network name is configured, prefer it
-	if [[ -n "${QBT_NETWORK_NAME:-}" && -n "$(command -v docker 2>/dev/null)" ]]; then
+	if [[ -n "${QBT_NETWORK_NAME:-}" ]]; then
 		cidr=$(docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' "$QBT_NETWORK_NAME" 2>/dev/null | awk '!/:/ {print; exit}') || return 1
 		[[ -n "$cidr" ]] || return 1
 		printf '%s\n' "$cidr"
-		return 0
-	fi
-
-	# If docker CLI not available, nothing to do
-	if ! command -v docker >/dev/null 2>&1; then
-		echo ""
 		return 0
 	fi
 
@@ -123,10 +107,6 @@ find_network_cidr6() {
 	local cidr=""
 	local network="${QBT_NETWORK_NAME:-}"
 
-	command -v docker >/dev/null 2>&1 || {
-		echo ""
-		return 0
-	}
 	if [[ -z "$network" ]]; then
 		network="$(docker network ls --format '{{.Name}}' | grep -i starr | head -n1 || true)"
 	fi
@@ -206,7 +186,6 @@ resolve_qbt_container_ip() {
 	local ip=""
 
 	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-	command -v docker >/dev/null 2>&1 || return 1
 
 	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null)" || return 1
 	[[ -n "$networks" ]] || return 1
@@ -229,7 +208,6 @@ resolve_qbt_container_ipv6() {
 	local ip=""
 
 	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-	command -v docker >/dev/null 2>&1 || return 1
 	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null)" || return 1
 	[[ -n "$networks" ]] || return 1
 	if [[ -n "$QBT_NETWORK_NAME" ]]; then
@@ -279,7 +257,6 @@ reapply_routes() {
 	local new_qbt_ipv6_rule_source=""
 	local old_qbt_ipv6_rule_source=""
 
-	load_selected_server
 	if [[ -f "$LAST_FILE" ]]; then
 		old_cidr="$(cat "$LAST_FILE" 2>/dev/null || true)"
 	fi
@@ -534,31 +511,17 @@ main() {
 	reapply_killswitch || return 1
 	queue_allocation || return 1
 
-	if command -v docker >/dev/null 2>&1; then
-		log "Starting docker events watch (debounce ${DEBOUNCE_SECONDS}s)"
-		while true; do
-			command timeout --foreground "${POLL_INTERVAL}s" docker events \
-				--filter 'type=network' --filter 'type=container' \
-				--format '{{.Type}}:{{.Action}}:{{.Actor.Attributes.name}}' 2>/dev/null |
-				handle_docker_events || true
+	log "Starting docker events watch (debounce ${DEBOUNCE_SECONDS}s)"
+	while true; do
+		command timeout --foreground "${POLL_INTERVAL}s" docker events \
+			--filter 'type=network' --filter 'type=container' \
+			--format '{{.Type}}:{{.Action}}:{{.Actor.Attributes.name}}' 2>/dev/null |
+			handle_docker_events || true
 
-			periodic_reconcile
-			log "docker events window ended; reconciling again in 5s"
-			sleep 5
-		done
-	else
-		log "docker CLI not present; running periodic check every ${POLL_INTERVAL}s"
-		while true; do
-			sleep "$POLL_INTERVAL"
-			cidr=$(find_network_cidr)
-			cidr6=$(find_network_cidr6)
-			if ! reapply_routes_serialized "$cidr" "$cidr6"; then
-				log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
-				continue
-			fi
-			reapply_killswitch && refresh_qb_state
-		done
-	fi
+		periodic_reconcile
+		log "docker events window ended; reconciling again in 5s"
+		sleep 5
+	done
 }
 
 if [[ "${PROTON_WATCHER_SOURCE_ONLY:-0}" != 1 ]]; then

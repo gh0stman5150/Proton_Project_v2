@@ -31,7 +31,7 @@ log() {
 require_command() {
 	local cmd="$1"
 
-	if ! command -v "$cmd" >/dev/null 2>&1; then
+	if ! type -P "$cmd" >/dev/null 2>&1; then
 		log "ERROR: Required command '$cmd' is not installed."
 		exit 1
 	fi

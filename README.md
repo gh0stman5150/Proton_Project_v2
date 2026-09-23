@@ -274,10 +274,9 @@ Shared compatibility defaults include the following; named services override pro
 1. `WG_PROFILE=proton`
 2. `VPN_INTERFACE=proton`
 3. `NATPMP_GATEWAY=10.2.0.1`
-4. `MANAGEMENT_ALLOWED_CIDRS=<LAN_CIDR>,<YOUR_WAN_IP>/32`
-5. `MANAGE_RESOLVED_DNS=auto`
-6. `RESOLVED_DNS_ROUTE_DOMAIN=~.`
-7. `WG_PERSISTENT_KEEPALIVE=25`
+4. `MANAGE_RESOLVED_DNS=auto`
+5. `RESOLVED_DNS_ROUTE_DOMAIN=~.`
+6. `WG_PERSISTENT_KEEPALIVE=25`
 
 Set real values in environment files, not in committed documentation.
 

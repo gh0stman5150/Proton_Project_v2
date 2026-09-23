@@ -255,69 +255,6 @@ validate_bundle() {
 	ensure_source_file "${SCRIPT_DIR}/proton-qbittorrent-port.env"
 }
 
-load_common_env() {
-	local env_file="${ETC_PROTON_DIR}/proton-common.env"
-
-	if [[ -f "$env_file" ]]; then
-		# shellcheck disable=SC1090
-		source "$env_file"
-	fi
-}
-
-load_port_forward_env() {
-	local env_file="${ETC_PROTON_DIR}/proton-port-forward.env"
-
-	if [[ -f "$env_file" ]]; then
-		# shellcheck disable=SC1090
-		source "$env_file"
-	fi
-}
-
-validate_wireguard_config() {
-	local resolved_profile resolved_config available_configs
-
-	resolved_profile="${WG_PROFILE:-proton}"
-	resolved_config="${WG_CONFIG:-/etc/wireguard/${resolved_profile}.conf}"
-
-	if [[ "${SERVER_POOL_ENABLED:-auto}" =~ ^(1|true|yes|on|auto)$ ]] && compgen -G "${WG_POOL_DIR:-/etc/wireguard/proton-pool}/*.conf" >/dev/null; then
-		return 0
-	fi
-
-	if [[ -f "$resolved_config" ]]; then
-		return 0
-	fi
-
-	available_configs="$(find /etc/wireguard -maxdepth 1 -type f -name '*.conf' -printf '  - %f\n' 2>/dev/null || true)"
-
-	echo "ERROR: WireGuard config not found: ${resolved_config}" >&2
-	echo "Update ${ETC_PROTON_DIR}/proton-common.env so WG_PROFILE/VPN_INTERFACE match your real WireGuard profile before starting the Proton services." >&2
-
-	if [[ -n "$available_configs" ]]; then
-		echo "Available WireGuard configs:" >&2
-		printf '%s' "$available_configs" >&2
-	fi
-
-	exit 1
-}
-
-secure_wireguard_config() {
-	local resolved_profile resolved_config
-
-	resolved_profile="${WG_PROFILE:-proton}"
-	resolved_config="${WG_CONFIG:-/etc/wireguard/${resolved_profile}.conf}"
-
-	if [[ "${SERVER_POOL_ENABLED:-auto}" =~ ^(1|true|yes|on|auto)$ ]] && compgen -G "${WG_POOL_DIR:-/etc/wireguard/proton-pool}/*.conf" >/dev/null; then
-		chown root:root "${WG_POOL_DIR:-/etc/wireguard/proton-pool}"/*.conf
-		chmod 0600 "${WG_POOL_DIR:-/etc/wireguard/proton-pool}"/*.conf
-		log "Secured pool configs under ${WG_POOL_DIR:-/etc/wireguard/proton-pool} with owner root:root and mode 0600"
-		return 0
-	fi
-
-	chown root:root "$resolved_config"
-	chmod 0600 "$resolved_config"
-	log "Secured ${resolved_config} with owner root:root and mode 0600"
-}
-
 canonical_path() {
 	local path="$1"
 	local dir base
@@ -739,55 +676,6 @@ EOF
 	done
 }
 
-path_dirname() {
-	local path="$1"
-
-	if [[ "$path" == */* ]]; then
-		printf '%s\n' "${path%/*}"
-	else
-		printf '.\n'
-	fi
-}
-
-stop_proton_services_for_redeploy() {
-	log "Leaving existing Proton services running; start templated instances manually during migration"
-}
-
-restart_enabled_optional_services() {
-	local service
-
-	for service in "${OPTIONAL_SERVICES[@]}"; do
-		if systemctl is-enabled --quiet "$service" >/dev/null 2>&1; then
-			systemctl restart "$service"
-		fi
-	done
-}
-
-reset_runtime_state_for_redeploy() {
-	local runtime_state_dir bad_server_file server_selection_file server_reselect_file
-	local recovery_lock_file port_state_file pf_incapable_file pf_incapable_strikes_file
-
-	runtime_state_dir="${STATE_DIR:-/run/proton}"
-	bad_server_file="${BAD_SERVER_FILE:-${runtime_state_dir}/bad-servers.tsv}"
-	server_selection_file="${SERVER_SELECTION_FILE:-${runtime_state_dir}/current-server.env}"
-	server_reselect_file="${SERVER_RESELECT_FILE:-${runtime_state_dir}/reselect-server.flag}"
-	recovery_lock_file="${RECOVERY_LOCK_FILE:-${runtime_state_dir}/recovery.lock}"
-	port_state_file="${STATE_FILE:-${runtime_state_dir}/proton-port.state}"
-	pf_incapable_file="${PF_INCAPABLE_PROFILES_FILE:-${ETC_PROTON_DIR}/pf-incapable-profiles.tsv}"
-	pf_incapable_strikes_file="${PF_INCAPABLE_STRIKES_FILE:-/run/proton/pf-incapable-strikes.tsv}"
-
-	log "Resetting stale Proton runtime and failure state before service restart"
-
-	rm -f \
-		"$bad_server_file" \
-		"$server_selection_file" \
-		"$server_reselect_file" \
-		"$recovery_lock_file" \
-		"$port_state_file" \
-		"$pf_incapable_file" \
-		"$pf_incapable_strikes_file"
-}
-
 enable_and_start_services() {
 	systemctl daemon-reload
 	systemctl disable --now "${LEGACY_SINGLETON_SERVICES[@]}" >/dev/null 2>&1 || true
@@ -848,7 +736,7 @@ done
 ensure_proton_vpn_packages
 validate_bundle
 load_instance_manifest
-stop_proton_services_for_redeploy
+log "Leaving existing Proton services running; start templated instances manually during migration"
 
 mkdir -p "$BIN_DIR" "$ETC_PROTON_DIR" "$SYSTEMD_DIR" "$WG_POOL_DIR" "$QBT_COMPOSE_COMMON_DIR"
 mkdir -p "$WG_RUNTIME_DIR"
@@ -889,8 +777,6 @@ install_qbittorrent_fleet_verifier
 install_nas_mount_readiness
 install_docker_tunnel_ordering
 install_instance_examples
-load_common_env
-load_port_forward_env
 
 enable_and_start_services
 

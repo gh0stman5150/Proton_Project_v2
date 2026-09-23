@@ -12,11 +12,6 @@ DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 KILLSWITCH_LOCK_FILE="${KILLSWITCH_LOCK_FILE:-/run/proton/killswitch.lock}"
 DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
-SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
-SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
-SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
-SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
-WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
 
 log() {
 	echo "$(date '+%F %T') | $*" | systemd-cat -t proton-killswitch
@@ -83,44 +78,6 @@ if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
 	DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
 fi
 
-server_pool_requested() {
-	case "$SERVER_POOL_ENABLED" in
-	1 | true | yes | on)
-		return 0
-		;;
-	auto)
-		compgen -G "$WG_POOL_DIR/*.conf" >/dev/null
-		;;
-	*)
-		return 1
-		;;
-	esac
-}
-
-load_selected_server() {
-	if ! server_pool_requested; then
-		return 0
-	fi
-
-	if [[ ! -x "$SERVER_MANAGER_SCRIPT" ]]; then
-		log "ERROR: Server manager script is not executable: $SERVER_MANAGER_SCRIPT"
-		exit 1
-	fi
-
-	if [[ -f "$SERVER_SELECTION_FILE" && ! -f "$SERVER_RESELECT_FILE" ]]; then
-		# shellcheck disable=SC1090
-		source "$SERVER_SELECTION_FILE"
-	else
-		"$SERVER_MANAGER_SCRIPT" select >/dev/null
-	fi
-
-	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
-		# shellcheck disable=SC1090
-		source "$SERVER_SELECTION_FILE"
-		VPN_IF="${SELECTED_VPN_INTERFACE:-$VPN_IF}"
-	fi
-}
-
 require_value() {
 	local name="$1"
 	local value="$2"
@@ -129,13 +86,6 @@ require_value() {
 		log "ERROR: Missing required value for $name"
 		exit 1
 	fi
-}
-
-trim_field() {
-	local value="$1"
-	value="${value#"${value%%[![:space:]]*}"}"
-	value="${value%"${value##*[![:space:]]}"}"
-	printf '%s\n' "$value"
 }
 
 ensure_nat_postrouting_chain() {
@@ -157,11 +107,9 @@ render_docker_local_rules() {
 	local source_cidr target_cidr
 
 	for source_cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-		source_cidr="$(trim_field "$source_cidr")"
 		[[ -n "$source_cidr" ]] || continue
 
 		for target_cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-			target_cidr="$(trim_field "$target_cidr")"
 			[[ -n "$target_cidr" ]] || continue
 			printf '        ip saddr %s ip daddr %s accept\n' "$source_cidr" "$target_cidr"
 		done
@@ -172,23 +120,17 @@ render_lan_to_docker_rules() {
 	local cidr
 
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
 		printf '        iifname "%s" ip saddr %s ip daddr %s accept\n' "$LAN_IF" "$LAN_CIDR" "$cidr"
 	done
 }
 
-vpn_interfaces() {
-	printf '%s\n' "$VPN_INTERFACES"
-}
-
 render_vpn_to_docker_rules() {
 	local cidr iface
 
-	for iface in $(vpn_interfaces); do
+	for iface in $VPN_INTERFACES; do
 		[[ -n "$iface" ]] || continue
 		for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
 			printf '        iifname "%s" ip daddr %s accept\n' "$iface" "$cidr"
 		done
@@ -199,7 +141,6 @@ render_docker_to_lan_rules() {
 	local cidr
 
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
 		printf '        oifname "%s" ip saddr %s ip daddr %s tcp dport 53 drop\n' "$LAN_IF" "$cidr" "$LAN_CIDR"
 		printf '        oifname "%s" ip saddr %s ip daddr %s udp dport 53 drop\n' "$LAN_IF" "$cidr" "$LAN_CIDR"
@@ -210,10 +151,9 @@ render_docker_to_lan_rules() {
 render_docker_to_vpn_rules() {
 	local cidr iface
 
-	for iface in $(vpn_interfaces); do
+	for iface in $VPN_INTERFACES; do
 		[[ -n "$iface" ]] || continue
 		for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
 			printf '        oifname "%s" ip saddr %s accept\n' "$iface" "$cidr"
 		done
@@ -224,7 +164,6 @@ render_docker_drop_rules() {
 	local cidr
 
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
 		printf '        ip saddr %s drop\n' "$cidr"
 		printf '        ip daddr %s drop\n' "$cidr"
@@ -235,10 +174,8 @@ render_docker6_local_rules() {
 	local source_cidr target_cidr
 
 	for source_cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
-		source_cidr="$(trim_field "$source_cidr")"
 		[[ -n "$source_cidr" ]] || continue
 		for target_cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
-			target_cidr="$(trim_field "$target_cidr")"
 			[[ -n "$target_cidr" ]] || continue
 			printf '        ip6 saddr %s ip6 daddr %s accept\n' "$source_cidr" "$target_cidr"
 		done
@@ -248,10 +185,9 @@ render_docker6_local_rules() {
 render_vpn_to_docker6_rules() {
 	local cidr iface
 
-	for iface in $(vpn_interfaces); do
+	for iface in $VPN_INTERFACES; do
 		[[ -n "$iface" ]] || continue
 		for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
-			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
 			printf '        iifname "%s" ip6 daddr %s accept\n' "$iface" "$cidr"
 		done
@@ -261,10 +197,9 @@ render_vpn_to_docker6_rules() {
 render_docker6_to_vpn_rules() {
 	local cidr iface
 
-	for iface in $(vpn_interfaces); do
+	for iface in $VPN_INTERFACES; do
 		[[ -n "$iface" ]] || continue
 		for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
-			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
 			printf '        oifname "%s" ip6 saddr %s accept\n' "$iface" "$cidr"
 		done
@@ -275,7 +210,6 @@ render_docker6_drop_rules() {
 	local cidr
 
 	for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
-		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
 		printf '        ip6 saddr %s drop\n' "$cidr"
 		printf '        ip6 daddr %s drop\n' "$cidr"
@@ -291,7 +225,8 @@ require_value "LAN_IF" "$LAN_IF"
 require_value "LAN_CIDR" "$LAN_CIDR"
 
 [[ "$VPN_IF" =~ ^[a-zA-Z0-9_-]{1,15}$ ]] || exit 1
-VPN_INTERFACES="$(printf '%s\n' "$VPN_IF" pvlidarr pvprowlarr pvradarr pvsonarr pvwhisparr | sort -u)"
+mapfile -t PROTON_INSTANCES < <(proton_allowed_instances)
+VPN_INTERFACES="$(printf '%s\n' "$VPN_IF" "${PROTON_INSTANCES[@]/#/pv}" | sort -u)"
 NAT_BATCH="$(ensure_nat_postrouting_chain ip proton_nat "$DOCKER_NETWORK_CIDR" proton-wg-snat)"
 NAT6_BATCH=""
 if [[ -n "$DOCKER_NETWORK_CIDR6" ]]; then
@@ -326,8 +261,4 @@ $(render_docker6_drop_rules)
 }
 EOF
 
-if [[ -n "$DOCKER_NETWORK_CIDR" || -n "$DOCKER_NETWORK_CIDR6" ]]; then
-	log "nftables Docker kill switch applied for IPv4 [$DOCKER_NETWORK_CIDR] IPv6 [$DOCKER_NETWORK_CIDR6] on $LAN_IF -> $VPN_IF; DNS to LAN is blocked and non-Docker host traffic is untouched"
-else
-	log "nftables Docker kill switch applied without Docker CIDR state; non-Docker host traffic is untouched"
-fi
+log "nftables Docker kill switch applied for IPv4 [$DOCKER_NETWORK_CIDR] IPv6 [$DOCKER_NETWORK_CIDR6] on $LAN_IF -> $VPN_IF; DNS to LAN is blocked and non-Docker host traffic is untouched"

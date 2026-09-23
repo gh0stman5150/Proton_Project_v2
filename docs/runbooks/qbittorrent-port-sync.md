@@ -194,7 +194,10 @@ Web UI ports, bind IPs, and interfaces are in the
 16. It waits for the Web UI.
 17. It verifies qBittorrent reports the target port.
 18. It verifies Docker publishes the port for both TCP and UDP.
-19. It commits the per-instance cache and reports success.
+19. It records the port in the per-instance `qbt-port.cache` and reports success.
+
+`qbt-port.cache` is diagnostic only: it holds the last port the sync applied, or
+the port it restored after a failed recreation. No script reads it back.
 
 An unchanged lease does not normally recreate the container when the artifact and both Docker mappings match. Stale mappings or an unreachable Web UI can trigger guarded recreation. Forced fleet sync can repair absent port mappings after lifecycle checks, but never bypasses zombie or persistent `D`-state refusal. If the artifact is in the legacy two-key format, the script canonicalizes it to one key without an unnecessary restart.
 
