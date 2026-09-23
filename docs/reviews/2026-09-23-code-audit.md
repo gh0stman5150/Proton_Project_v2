@@ -79,15 +79,20 @@ macOS bash 3.2/BSD tools for environmental reasons).
 
 Section 1 resolved, 2026-09-23 (canonical Linux checkout, source-only):
 
-- 1.1 landed with merge `bdbf9d0`.
-- 1.2 was masked on the host by `core.ignorecase=true` in `.git/config`;
-  verified with `git -c core.ignorecase=false status --ignored Archive`.
-- 1.4: the token was corrupt since it was introduced in `85f8636`, so the
+- 1.1 landed with merge `ff4c1c9`.
+- 1.2 was masked on the host by `core.ignorecase=true` in `.git/config`
+  (since set to `false`); verified with
+  `git -c core.ignorecase=false status --ignored Archive`.
+- 1.4: the token was corrupt since it was introduced in `3f1f7f1`, so the
   alternative was dropped rather than restored.
 - 1.5: `.gitmodules` points at the `gh0stman5150/bats-core` fork, because the
   pinned commit `3799ca3` is not on upstream.
-- 1.6: the address was removed from the template only; it remains in history
-  from `28c6a48`. History rewriting was not performed. The unused key is 3.6.
+- 1.6: the address was removed from the template and from history.
+  `main` and `copilot/fix-shfmt-shellcheck-bats-job` were rewritten with
+  `git filter-branch --index-filter` touching only `proton-common.env`; commit
+  hashes from `b9feb91` onward changed. Clones made before the rewrite still
+  hold the address and must be re-cloned or hard-reset, not merged. The
+  unused key is 3.6.
 - 1.7: on the host the CRLF files were `.vscode/*.json` and
   `proton-port-forward.env` (working copy only); the installed
   `/etc/proton/proton-port-forward.env` was already LF.
