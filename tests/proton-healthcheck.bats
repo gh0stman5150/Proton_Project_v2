@@ -30,11 +30,6 @@ EOF
 
   cat > "$QBT_COMMON_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
-qbt_source_env_file() {
-  # shellcheck disable=SC1090
-  source "$1"
-}
-
 qbt_webui_http_status() {
   echo 200
 }
@@ -257,4 +252,58 @@ EOF
     fi
   done
   grep -Fx -- '--no-block restart proton-wg@sonarr.service proton-port-forward@sonarr.service' "$SYSTEMCTL_LOG"
+}
+
+write_counting_session_stubs() {
+  export LOGIN_LOG="$TEST_TMPDIR/login.log" CURL_LOG="$TEST_TMPDIR/curl.log" TEST_TMPDIR
+  export RECOVERY_LOCK_FILE="$TEST_TMPDIR/recovery.lock" MAX_LOW_SPEED_CHECKS=5
+  cat >> "$QBT_COMMON_SCRIPT" <<'STUB'
+qbt_login() {
+  printf 'login\n' >> "$LOGIN_LOG"
+  return 0
+}
+STUB
+  cat > "$TMPBIN/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CURL_LOG"
+if [[ "$*" == *"/api/v2/torrents/info"* && -n "${EXPIRE_FIRST_REQUEST:-}" && ! -f "$TEST_TMPDIR/expired" ]]; then
+  touch "$TEST_TMPDIR/expired"
+  exit 22
+fi
+case "$*" in
+  *"/api/v2/torrents/info?filter=active"*) printf '[{"name":"active"}]' ;;
+  *"/api/v2/transfer/info"*) printf '{"connection_status":"connected","dl_info_speed":1,"up_info_speed":2}' ;;
+esac
+STUB
+  cat > "$TMPBIN/sleep" <<'STUB'
+#!/usr/bin/env bash
+count="$(( $(cat "$TEST_TMPDIR/ticks" 2>/dev/null || echo 0) + 1 ))"
+printf '%s\n' "$count" > "$TEST_TMPDIR/ticks"
+if (( count >= 3 )); then exit 42; fi
+STUB
+  chmod +x "$TMPBIN/curl" "$TMPBIN/sleep"
+}
+
+@test "healthcheck reuses one qBittorrent session across checks" {
+  write_counting_session_stubs
+  run env CHECK_INTERVAL=60 MIN_COMBINED_SPEED_BPS=1 bash ./proton-healthcheck.sh sonarr
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$LOGIN_LOG")" -eq 1 ]
+  [ "$(grep -c '/api/v2/transfer/info' "$CURL_LOG")" -eq 3 ]
+}
+
+@test "healthcheck logs in again once when the session is rejected" {
+  write_counting_session_stubs
+  run env CHECK_INTERVAL=60 MIN_COMBINED_SPEED_BPS=65536 EXPIRE_FIRST_REQUEST=1 \
+    bash ./proton-healthcheck.sh sonarr
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$LOGIN_LOG")" -eq 2 ]
+  [[ "$output" == *"Low throughput detected (3 B/s, 1/5, stage 0)"* ]]
+}
+
+@test "active-transfer probe requests a single torrent" {
+  write_counting_session_stubs
+  run env CHECK_INTERVAL=60 MIN_COMBINED_SPEED_BPS=1 bash ./proton-healthcheck.sh sonarr
+  [ "$status" -eq 42 ]
+  grep -F '/api/v2/torrents/info?filter=active&limit=1' "$CURL_LOG"
 }

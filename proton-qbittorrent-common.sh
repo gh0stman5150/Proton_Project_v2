@@ -73,37 +73,6 @@ qbt_fleet_preflight() {
 	done <"$manifest"
 }
 
-qbt_source_env_file() {
-	local env_file="$1"
-	local env_mode env_owner
-
-	if [[ ! -f "$env_file" ]]; then
-		echo "ERROR: qBittorrent env file not found: $env_file." >&2
-		return 1
-	fi
-
-	env_mode="$(stat -c '%a' "$env_file")"
-	env_owner="$(stat -c '%u' "$env_file")"
-
-	if [[ "$env_mode" != "600" ]]; then
-		echo "ERROR: $env_file must have mode 600." >&2
-		return 1
-	fi
-
-	if [[ "$env_owner" != "0" ]]; then
-		echo "ERROR: $env_file must be owned by root." >&2
-		return 1
-	fi
-
-	# shellcheck disable=SC1090
-	source "$env_file"
-
-	if [[ -n "${QBITTORRENT_URL:-}" ]]; then
-		QBITTORRENT_URL="${QBITTORRENT_URL%/}"
-		export QBITTORRENT_URL
-	fi
-}
-
 export QBT_LOGIN_ERROR=""
 export QBT_LOGIN_HTTP_STATUS=""
 

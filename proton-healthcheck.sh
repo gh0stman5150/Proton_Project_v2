@@ -55,9 +55,10 @@ fi
 
 # shellcheck disable=SC1090
 source "$QBT_COMMON_SCRIPT"
-qbt_source_env_file "$QBITTORRENT_ENV_FILE"
 
+# proton_instance_init already checked and sourced the qBittorrent env file.
 : "${QBITTORRENT_URL:?QBITTORRENT_URL must be set in ${QBITTORRENT_ENV_FILE}}"
+QBITTORRENT_URL="${QBITTORRENT_URL%/}"
 
 HTTP_STATUS="$(qbt_webui_http_status 5)"
 case "$HTTP_STATUS" in
@@ -73,11 +74,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Reuse the session cookie across checks. A failed request (for example a
+# session invalidated by a container recreate) logs in again and retries once.
+qbt_api_get() {
+	local path="$1"
+
+	curl -fsS -b "$COOKIE_JAR" "$QBITTORRENT_URL$path" 2>/dev/null && return 0
+	if ! qbt_login "$COOKIE_JAR"; then
+		log "${QBT_LOGIN_ERROR:-qBittorrent login failed during healthcheck}; retrying later"
+		return 1
+	fi
+	curl -fsS -b "$COOKIE_JAR" "$QBITTORRENT_URL$path"
+}
+
 has_active_transfers() {
 	local active_json
 
-	active_json="$(curl -fsS -b "$COOKIE_JAR" \
-		"$QBITTORRENT_URL/api/v2/torrents/info?filter=active" || true)"
+	active_json="$(qbt_api_get '/api/v2/torrents/info?filter=active&limit=1' || true)"
 
 	[[ -n "$active_json" && "$active_json" != "[]" ]]
 }
@@ -85,8 +98,7 @@ has_active_transfers() {
 combined_speed_bps() {
 	local transfer_json
 
-	transfer_json="$(curl -fsS -b "$COOKIE_JAR" \
-		"$QBITTORRENT_URL/api/v2/transfer/info" || true)"
+	transfer_json="$(qbt_api_get /api/v2/transfer/info || true)"
 
 	printf '%s' "$transfer_json" | awk -F '[:,}]' '
         {
@@ -249,19 +261,23 @@ reset_recovery_state() {
 
 LOW_SPEED_COUNT="${LOW_SPEED_COUNT:-0}"
 RECOVERY_STAGE="${RECOVERY_STAGE:-0}"
+SESSION_READY=0
 
 log "Starting throughput healthcheck loop..."
 
 while true; do
-	if ! qbt_login "$COOKIE_JAR"; then
-		reset_recovery_state
-		if [[ -n "${QBT_LOGIN_ERROR:-}" ]]; then
-			log "${QBT_LOGIN_ERROR}; retrying later"
-		else
-			log "qBittorrent login failed during healthcheck; retrying later"
+	if ((!SESSION_READY)); then
+		if ! qbt_login "$COOKIE_JAR"; then
+			reset_recovery_state
+			if [[ -n "${QBT_LOGIN_ERROR:-}" ]]; then
+				log "${QBT_LOGIN_ERROR}; retrying later"
+			else
+				log "qBittorrent login failed during healthcheck; retrying later"
+			fi
+			sleep "$CHECK_INTERVAL"
+			continue
 		fi
-		sleep "$CHECK_INTERVAL"
-		continue
+		SESSION_READY=1
 	fi
 
 	if ! has_active_transfers; then

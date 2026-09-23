@@ -235,3 +235,62 @@ EOF
   run bash -c 'source ./proton-docker-network-watcher.sh radarr; event_is_relevant "network:connect:any-network"'
   [ "$status" -eq 0 ]
 }
+
+write_watcher_loop_stubs() {
+  export TEST_TMPDIR
+  cat > "$TEST_TMPDIR/watcher-stubs.bash" <<'STUBS'
+find_network_cidr() { cat "$STATE_DIR/test-cidr"; }
+find_network_cidr6() { :; }
+reapply_routes_serialized() { printf 'routes\n' >> "$STATE_DIR/calls"; proton_persist_route_state "$LAST_FILE" "$1"; }
+reapply_killswitch() { printf 'killswitch\n' >> "$STATE_DIR/calls"; }
+refresh_qb_state() { printf 'allocate\n' >> "$STATE_DIR/calls"; [[ ! -f "$STATE_DIR/fail-allocate" ]]; }
+sleep() { :; }
+STUBS
+  mkdir -p "$STATE_DIR/sonarr"
+  printf '192.168.96.0/20\n' > "$STATE_DIR/sonarr/test-cidr"
+}
+
+call_count() {
+  grep -cx "$1" "$STATE_DIR/sonarr/calls" || true
+}
+
+@test "queued events from one container recreate produce one reconciliation" {
+  write_watcher_loop_stubs
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; source "$TEST_TMPDIR/watcher-stubs.bash"
+    printf "%s\n" container:destroy:qbittorrent-sonarr container:create:qbittorrent-sonarr \
+      network:disconnect:starr_network network:connect:starr_network container:start:qbittorrent-sonarr |
+      handle_docker_events'
+  [ "$status" -eq 0 ]
+  [ "$(call_count routes)" -eq 1 ]
+  [ "$(call_count killswitch)" -eq 1 ]
+  [ "$(call_count allocate)" -eq 1 ]
+}
+
+@test "periodic passes reassert the kill switch but allocate only on routing changes or failures" {
+  write_watcher_loop_stubs
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; source "$TEST_TMPDIR/watcher-stubs.bash"
+    periodic_reconcile
+    periodic_reconcile
+    printf "192.168.112.0/20\n" > "$STATE_DIR/test-cidr"
+    periodic_reconcile
+    printf "192.168.128.0/20\n" > "$STATE_DIR/test-cidr"
+    touch "$STATE_DIR/fail-allocate"
+    periodic_reconcile
+    rm "$STATE_DIR/fail-allocate"
+    periodic_reconcile
+    periodic_reconcile'
+  [ "$status" -eq 0 ]
+  [ "$(call_count routes)" -eq 6 ]
+  [ "$(call_count killswitch)" -eq 6 ]
+  [ "$(call_count allocate)" -eq 4 ]
+}
+
+@test "an event-driven allocation is not repeated by the next unchanged periodic pass" {
+  write_watcher_loop_stubs
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; source "$TEST_TMPDIR/watcher-stubs.bash"
+    printf "container:start:qbittorrent-sonarr\n" | handle_docker_events
+    periodic_reconcile'
+  [ "$status" -eq 0 ]
+  [ "$(call_count killswitch)" -eq 2 ]
+  [ "$(call_count allocate)" -eq 1 ]
+}

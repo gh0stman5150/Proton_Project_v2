@@ -96,7 +96,14 @@ attempt started. Work time is subtracted from that delay; a shorter granted
 lifetime can bring renewal forward further. Expired state is rejected even if
 renewal or host scheduling fails to meet the budget.
 
-The loop keeps at most one sync child running. Sync has a default 120-second
+The loop keeps at most one sync child running. It starts one when the port
+differs from the last successfully synced port (including the first lease and
+after a tunnel address change), when the previous sync failed, or when
+`QBT_SYNC_DRIFT_INTERVAL_SECONDS` (default 300) has passed since the last sync
+started; an unchanged renewal otherwise skips the sync. The drift sync still
+repairs listen-port, published-port, artifact, and route drift. Port-forward
+capability is recorded with the server manager once per profile and port, and
+retried on the next renewal if that call fails. Sync has a default 120-second
 limit (`QBT_SYNC_TIMEOUT_SECONDS`) plus a 2-second forced-termination allowance;
 slow recreation does not block lease renewal. Loop shutdown signals its owned
 sync process group through the timeout monitor. These deadlines cannot repair
@@ -172,7 +179,7 @@ Web UI ports, bind IPs, and interfaces are in the
 1. `proton-wg@<instance>` establishes that instance's tunnel.
 2. `proton-port-forward@<instance>` requests or refreshes a NAT-PMP lease through that instance's derived gateway.
 3. The port-forward loop atomically publishes the validated lease and freshness metadata in `/run/proton/<instance>`.
-4. It starts at most one bounded `proton-qbittorrent-sync-safe.sh <instance>` child while renewal continues independently.
+4. It starts at most one bounded `proton-qbittorrent-sync-safe.sh <instance>` child while renewal continues independently: immediately on a port change or after a failed sync, and otherwise every `QBT_SYNC_DRIFT_INTERVAL_SECONDS`.
 5. The synchronizer acquires `/run/proton/<instance>/qbt-sync.lock`; ordinary lease sync skips if busy, while forced fleet sync waits and fails on timeout.
 6. It rejects invalid ports, expired leases, and state from a different boot, tunnel address, or generation.
 7. It rejects `QBT_PORT_ENV_FILE` if it points to the Compose project's static `.env`.

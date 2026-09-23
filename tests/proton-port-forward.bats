@@ -431,6 +431,83 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+write_renewal_loop_stubs() {
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+port=45678
+if [[ -n "${PORT_CHANGE_AFTER:-}" && -f "$STATE_DIR/iterations" ]] && (( $(cat "$STATE_DIR/iterations") >= PORT_CHANGE_AFTER )); then
+  port=45679
+fi
+printf 'Mapped public port %s protocol %s lifetime 60\n' "$port" "$4"
+EOF
+  cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+count="$(( $(wc -l < "$STATE_DIR/sync-count" 2>/dev/null || echo 0) + 1 ))"
+printf 'sync\n' >> "$STATE_DIR/sync-count"
+touch "$STATE_DIR/sync-done"
+if (( count <= ${SYNC_FAILURES:-0} )); then exit 1; fi
+exit 0
+EOF
+  # Each renewal ends in sleep: wait for any started sync to finish, then stop
+  # the loop after ITERATIONS renewals.
+  cat > "$TMPBIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+n="$(( $(cat "$STATE_DIR/iterations" 2>/dev/null || echo 0) + 1 ))"
+printf '%s\n' "$n" > "$STATE_DIR/iterations"
+if [[ -f "$STATE_DIR/sync-count" ]]; then
+  for _ in $(seq 100); do
+    [[ -f "$STATE_DIR/sync-done" ]] && break
+    command -p sleep 0.05
+  done
+fi
+if (( n >= ITERATIONS )); then exit 42; fi
+EOF
+  chmod +x "$TMPBIN/sleep" "$TMPBIN/natpmpc" "$QBITTORRENT_SYNC_SCRIPT"
+}
+
+@test "unchanged renewals sync qBittorrent and mark capability once" {
+  write_renewal_loop_stubs
+  run env ITERATIONS=5 bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$STATE_DIR/sync-count")" -eq 1 ]
+  [ "$(grep -c '^mark-capable wg-good 45678$' "$SERVER_MANAGER_LOG")" -eq 1 ]
+}
+
+@test "a changed port syncs qBittorrent and marks the new port capable" {
+  write_renewal_loop_stubs
+  run env ITERATIONS=5 PORT_CHANGE_AFTER=2 bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$STATE_DIR/sync-count")" -eq 2 ]
+  grep -Fx 'mark-capable wg-good 45678' "$SERVER_MANAGER_LOG"
+  grep -Fx 'mark-capable wg-good 45679' "$SERVER_MANAGER_LOG"
+}
+
+@test "a failed sync is retried on a later renewal with the same port" {
+  write_renewal_loop_stubs
+  run env ITERATIONS=5 SYNC_FAILURES=1 bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$STATE_DIR/sync-count")" -eq 2 ]
+}
+
+@test "unchanged renewals still re-run the sync after the drift interval" {
+  write_renewal_loop_stubs
+  run env ITERATIONS=6 QBT_SYNC_DRIFT_INTERVAL_SECONDS=0 bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$STATE_DIR/sync-count")" -ge 2 ]
+}
+
+@test "a dropped mark-capable call is retried on the next renewal" {
+  write_renewal_loop_stubs
+  cat > "$SERVER_MANAGER_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SERVER_MANAGER_LOG"
+[[ "$(grep -c mark-capable "$SERVER_MANAGER_LOG")" -gt 1 ]]
+EOF
+  run env ITERATIONS=5 bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(grep -c '^mark-capable wg-good 45678$' "$SERVER_MANAGER_LOG")" -eq 2 ]
+}
+
 @test "allocator queues startup and requires a fresh lease from an active producer" {
   cat > "$TMPBIN/systemctl" <<'EOF'
 #!/usr/bin/env bash

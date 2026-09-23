@@ -427,6 +427,9 @@ VPN bound containers must not be able to reach WAN directly outside the intended
 
 The healthcheck and port forward loop share `RECOVERY_LOCK_FILE` so they do not trigger overlapping reconnect storms.
 
+The healthcheck keeps one qBittorrent Web API session across checks and logs in
+again only when a request is rejected, such as after a container recreate.
+
 Shared template thresholds:
 
 1. `CHECK_INTERVAL=60`
@@ -563,7 +566,12 @@ ip route show table 51806
 sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
 ```
 
-The watcher also reconciles periodically when no event arrives. Disabling it
+The watcher also reconciles periodically when no event arrives. Every pass
+reasserts policy routes and the kill switch; a periodic pass queues
+allocation and sync only when the Docker CIDRs or qBittorrent addresses changed
+or the previous queue attempt failed, because the port-forward loop runs its
+own drift sync. Events that queue up during the debounce (one container
+recreate emits several) are coalesced into one reconciliation. Disabling it
 removes out-of-band Docker address recovery; do not omit it from this fleet's
 steady-state service coverage. A successful start is not a routing acceptance
 test: verify all five instances using the fleet change runbook.

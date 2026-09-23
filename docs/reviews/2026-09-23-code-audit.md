@@ -99,7 +99,7 @@ Section 1 resolved, 2026-09-23 (canonical Linux checkout, source-only):
 
 ## 2. Hot-path inefficiencies (*shared*)
 
-- [ ] **2.1 Sync after every renewal (C).** `proton-port-forward-safe.sh`
+- [x] **2.1 Sync after every renewal (C).** `proton-port-forward-safe.sh`
   renewal branch (~369–379) launches `proton-qbittorrent-sync-safe.sh` after
   every successful renewal, even with an unchanged port. With shipped defaults
   `RENEW_INTERVAL` ≈ 11 s, so ~5 syncs per 11 s fleet-wide. Each unchanged
@@ -112,28 +112,28 @@ Section 1 resolved, 2026-09-23 (canonical Linux checkout, source-only):
   failed; otherwise run a drift check at a slower cadence. In the sync, run the
   route reconcile only when container ID/IP differs from the cached value.
   Forced fleet sync semantics (wait, fail on timeout) must not change.
-- [ ] **2.2 `mark-capable` every renewal (C).** Same branch runs
+- [x] **2.2 `mark-capable` every renewal (C).** Same branch runs
   `proton-server-manager.sh mark-capable` each time: global
   `server-select.lock`, rewrites of `/etc/proton/pf-capable-profiles.tsv` and
   related files, a log line; silently dropped by its 3 s timeout during
   `select`. **Change:** call only when a new port is obtained or the profile
   changes.
-- [ ] **2.3 Watcher periodic reconcile (C).**
+- [x] **2.3 Watcher periodic reconcile (C).**
   `proton-docker-network-watcher.sh` (~484–489) re-runs route reconcile,
   kill-switch rebuild, and allocate+sync every ~65 s per instance even when
   nothing changed (≈5 firewall rebuilds/min). The periodic route reconcile is
   documented in `host-routing-and-tunnels.md`; keep it, but skip kill switch
   and allocation when CIDR, CIDR6, and qBittorrent IPs match the persisted
   state.
-- [ ] **2.4 Watcher debounce (C).** The per-event loop sleeps
+- [x] **2.4 Watcher debounce (C).** The per-event loop sleeps
   `DEBOUNCE_SECONDS` but does not drain queued events, so one container
   recreate (destroy/create/start/disconnect/connect) triggers several full
   reconciles. Drain with `read -t 0` after the sleep, then reconcile once.
-- [ ] **2.5 Healthcheck login per tick (C).** `proton-healthcheck.sh` calls
+- [x] **2.5 Healthcheck login per tick (C).** `proton-healthcheck.sh` calls
   `qbt_login` every `CHECK_INTERVAL`; `proton-qbittorrent-common.sh` truncates
   the cookie jar and POSTs `/auth/login` each time. Reuse a per-instance 0600
   cookie jar under `STATE_DIR`; re-login on 403.
-- [ ] **2.6 Healthcheck active-transfer probe (C/P).** `has_active_transfers`
+- [x] **2.6 Healthcheck active-transfer probe (C/P).** `has_active_transfers`
   downloads the full active-torrent JSON to test emptiness; add `&limit=1`
   (verify the parameter on the deployed qBittorrent version).
 - [ ] **2.7 Repeated `docker inspect` in sync (C).**
@@ -144,9 +144,33 @@ Section 1 resolved, 2026-09-23 (canonical Linux checkout, source-only):
   `get_ip` twice, three `awk` passes in `save_state`, `boot_id` read on every
   save/read, several `date +%s` forks, NAT-PMP output re-parsed. Use one `awk`
   pass, `printf '%(%s)T'`, cache `boot_id` per process.
-- [ ] **2.9 Double env sourcing (C).** `proton-qbittorrent-sync-safe.sh` and
+- [x] **2.9 Double env sourcing (C).** `proton-qbittorrent-sync-safe.sh` and
   `proton-healthcheck.sh` call `qbt_source_env_file` after `proton_instance_init`
   already stat-checked and sourced the same file. Keep only the URL trim.
+
+Section 2 resolved, 2026-09-23 (canonical Linux checkout, source-only, not
+installed):
+
+- 2.1: the renewal loop syncs when the port differs from the last successfully
+  synced port, after a failed sync, or every `QBT_SYNC_DRIFT_INTERVAL_SECONDS`
+  (default 300). The in-sync route reconcile was left unconditional; with the
+  sync now rare, caching container ID/IP did not justify another state file.
+  Forced fleet sync is unchanged.
+- 2.2: `mark-capable` runs once per profile and port, and again after a failed
+  call. Capability records have no age check, so nothing relied on the refresh.
+- 2.3: operator decision — every periodic pass still reasserts routes and the
+  kill switch (firewall-drift repair unchanged); only allocation+sync is skipped
+  when CIDRs and qBittorrent addresses are unchanged and the last queue attempt
+  succeeded. The allocated state is kept in `qbt-allocated-routing` under the
+  instance state directory because event handling runs in a pipeline subshell.
+- 2.4: queued events are drained after the debounce and logged as coalesced.
+- 2.5: the healthcheck keeps its per-process cookie jar and re-authenticates
+  once on a failed request; no new state file was needed.
+- 2.6: `limit=1` added; the fleet image `linuxserver/qbittorrent:libtorrentv1`
+  is well past Web API 2.0, which introduced the parameter.
+- 2.9: `qbt_source_env_file` had no other callers and was removed.
+- 2.7 and 2.8 deferred by operator decision: after 2.1 the sync runs about 25
+  times less often, and 2.7 would rewrite many template-matching test stubs.
 
 ## 3. Dead code and unused configuration
 

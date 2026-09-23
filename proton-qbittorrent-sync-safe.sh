@@ -12,7 +12,6 @@ source "$INSTANCE_COMMON_SCRIPT"
 REQUESTED_FORCE_RECREATE="${QBT_FORCE_RECREATE:-}"
 proton_instance_init "${1:-}"
 
-ENV_FILE="${QBITTORRENT_ENV_FILE}"
 STATE_FILE="${STATE_FILE:-${STATE_DIR}/proton-port.state}"
 CACHE_FILE="${CACHE_FILE:-${STATE_DIR}/qbt-port.cache}"
 DNAT_CLEANUP_SCRIPT="${DNAT_CLEANUP_SCRIPT:-${SCRIPT_DIR}/proton-qbt-dnat-cleanup.sh}"
@@ -64,7 +63,8 @@ fi
 
 # shellcheck disable=SC1090
 source "$QBT_COMMON_SCRIPT"
-qbt_source_env_file "$ENV_FILE"
+# proton_instance_init already checked and sourced the qBittorrent env file.
+QBITTORRENT_URL="${QBITTORRENT_URL:+${QBITTORRENT_URL%/}}"
 if [[ -n "$REQUESTED_FORCE_RECREATE" ]]; then QBT_FORCE_RECREATE="$REQUESTED_FORCE_RECREATE"; fi
 
 QBT_INTERNAL_PORT="${QBT_INTERNAL_PORT:-6881}"

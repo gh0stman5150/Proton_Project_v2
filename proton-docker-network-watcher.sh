@@ -45,6 +45,7 @@ QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
+QBT_ALLOCATED_STATE_FILE="${QBT_ALLOCATED_STATE_FILE:-${STATE_DIR}/qbt-allocated-routing}"
 KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-$DIR/proton-killswitch-dispatch.sh}"
 
 mkdir -p "$STATE_DIR"
@@ -403,6 +404,34 @@ refresh_qb_state() {
 	timeout 10s systemctl --no-block start "proton-qbt-allocate@${INSTANCE}.service"
 }
 
+# The reconciled Docker CIDRs and qBittorrent addresses, as persisted by
+# reapply_routes.
+routing_fingerprint() {
+	printf '%s|%s|%s|%s' \
+		"$(cat "$LAST_FILE" 2>/dev/null || true)" \
+		"$(cat "$LAST6_FILE" 2>/dev/null || true)" \
+		"$(read_cached_qbt_container_ip || true)" \
+		"$(read_cached_qbt_container_ipv6 || true)"
+}
+
+# Queue allocation+sync and record the routing state it was queued for. The
+# record lives in a file because event handling runs in a pipeline subshell.
+queue_allocation() {
+	if refresh_qb_state; then
+		proton_persist_route_state "$QBT_ALLOCATED_STATE_FILE" "$(routing_fingerprint)" || true
+		return 0
+	fi
+	rm -f "$QBT_ALLOCATED_STATE_FILE"
+	return 1
+}
+
+# The port-forward loop runs its own periodic drift sync, so an unchanged
+# periodic pass does not need another allocation.
+queue_allocation_if_changed() {
+	[[ "$(routing_fingerprint)" == "$(cat "$QBT_ALLOCATED_STATE_FILE" 2>/dev/null || true)" ]] && return 0
+	queue_allocation
+}
+
 # Decide whether a raw `docker events` line is relevant to THIS instance.
 # Format: "<type>:<action>:<name>" (see the --format string in main()).
 # - network events: Actor name is the network's name. A shared "starr"
@@ -450,6 +479,49 @@ graceful_shutdown() {
 }
 trap graceful_shutdown INT TERM
 
+# Reconcile once per relevant event. Events that queued up during the debounce
+# (one container recreate emits several) are drained into the same pass.
+handle_docker_events() {
+	local ev cidr cidr6 queued
+
+	while IFS= read -r ev; do
+		event_is_relevant "$ev" || continue
+		log "Docker event: $ev -- waiting ${DEBOUNCE_SECONDS}s"
+		sleep "$DEBOUNCE_SECONDS"
+		queued=0
+		while read -r -t 0; do
+			IFS= read -r _ || break
+			queued=$((queued + 1))
+		done
+		if ((queued)); then
+			log "Coalesced $queued queued Docker events into this reconciliation"
+		fi
+		cidr=$(find_network_cidr)
+		cidr6=$(find_network_cidr6)
+		if ! reapply_routes_serialized "$cidr" "$cidr6"; then
+			log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
+			continue
+		fi
+		if ! reapply_killswitch; then
+			log "ERROR: Firewall reconciliation failed; allocation not queued"
+			continue
+		fi
+		queue_allocation
+	done
+}
+
+# Routes and the kill switch are reasserted on every pass to repair drift;
+# allocation is queued only when the routing state changed or last failed.
+periodic_reconcile() {
+	local cidr cidr6
+
+	cidr=$(find_network_cidr)
+	cidr6=$(find_network_cidr6)
+	reapply_routes_serialized "$cidr" "$cidr6" || return 0
+	reapply_killswitch || return 0
+	queue_allocation_if_changed || true
+}
+
 main() {
 	local cidr cidr6
 	cidr=$(find_network_cidr)
@@ -460,38 +532,17 @@ main() {
 	fi
 	[[ "${2:-}" == "--once" ]] && return 0
 	reapply_killswitch || return 1
-	refresh_qb_state || return 1
+	queue_allocation || return 1
 
 	if command -v docker >/dev/null 2>&1; then
 		log "Starting docker events watch (debounce ${DEBOUNCE_SECONDS}s)"
 		while true; do
-			# Listen to network/container events and debounce updates
 			command timeout --foreground "${POLL_INTERVAL}s" docker events \
 				--filter 'type=network' --filter 'type=container' \
 				--format '{{.Type}}:{{.Action}}:{{.Actor.Attributes.name}}' 2>/dev/null |
-				while IFS= read -r ev; do
-					if event_is_relevant "$ev"; then
-						log "Docker event: $ev -- waiting ${DEBOUNCE_SECONDS}s"
-						sleep "$DEBOUNCE_SECONDS"
-						cidr=$(find_network_cidr)
-						cidr6=$(find_network_cidr6)
-						if ! reapply_routes_serialized "$cidr" "$cidr6"; then
-							log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
-							continue
-						fi
-						if ! reapply_killswitch; then
-							log "ERROR: Firewall reconciliation failed; allocation not queued"
-							continue
-						fi
-						refresh_qb_state
-					fi
-				done || true
+				handle_docker_events || true
 
-			cidr=$(find_network_cidr)
-			cidr6=$(find_network_cidr6)
-			if reapply_routes_serialized "$cidr" "$cidr6"; then
-				reapply_killswitch && refresh_qb_state
-			fi
+			periodic_reconcile
 			log "docker events window ended; reconciling again in 5s"
 			sleep 5
 		done

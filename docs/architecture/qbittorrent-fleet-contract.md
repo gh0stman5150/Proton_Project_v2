@@ -146,6 +146,8 @@ valid state to expire rather than deleting another writer's lease.
 
 Renewal is scheduled from attempt start and reserves request and lock time.
 A single bounded asynchronous sync child cannot delay subsequent renewals.
+An unchanged renewal re-runs the sync only at the drift interval; a port change
+or failed sync is synced on the next renewal.
 Allocation uses one overall deadline and verifies an active producer and fresh
 lease after queued startup. The timing defaults, migration requirements, and
 source-only deployment status are maintained in the

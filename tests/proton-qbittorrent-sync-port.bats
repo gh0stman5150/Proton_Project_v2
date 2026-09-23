@@ -89,6 +89,20 @@ EOF
   grep -F 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
 }
 
+@test "a trailing slash on the qBittorrent URL does not produce double-slash API paths" {
+  write_qbt_env compose-recreate
+  sed -i 's|^QBITTORRENT_URL=.*|&/|' "$ENV_FILE"
+  write_lease 40000
+  echo 'QBT_PUBLISHED_PORT=40000' > "$PORT_ENV_FILE"
+  printf '40000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  grep -F 'http://127.0.0.1:8081/api/v2/auth/login' "$CURL_LOG"
+  run grep -F '8081//' "$CURL_LOG"
+  [ "$status" -eq 1 ]
+}
+
 @test "compose-recreate mode collapses a legacy two-key port artifact without restarting" {
   write_qbt_env compose-recreate
   write_lease 40000

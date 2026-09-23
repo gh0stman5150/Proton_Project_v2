@@ -37,9 +37,12 @@ PORT_LEASE_SECONDS="${PORT_LEASE_SECONDS:-60}"
 NATPMP_TIMEOUT_SECONDS="${NATPMP_TIMEOUT_SECONDS:-15}"
 NATPMP_LOCK_WAIT_SECONDS="${NATPMP_LOCK_WAIT_SECONDS:-5}"
 QBT_SYNC_TIMEOUT_SECONDS="${QBT_SYNC_TIMEOUT_SECONDS:-120}"
+# Renewals that keep the same port only re-run the qBittorrent sync (which also
+# repairs listen-port, published-port, and route drift) at this cadence.
+QBT_SYNC_DRIFT_INTERVAL_SECONDS="${QBT_SYNC_DRIFT_INTERVAL_SECONDS:-300}"
 NATPMP_KILL_AFTER_SECONDS=2
 LEASE_RENEW_MARGIN_SECONDS=5
-for setting in CHECK_INTERVAL PORT_LEASE_SECONDS NATPMP_TIMEOUT_SECONDS NATPMP_LOCK_WAIT_SECONDS QBT_SYNC_TIMEOUT_SECONDS; do
+for setting in CHECK_INTERVAL PORT_LEASE_SECONDS NATPMP_TIMEOUT_SECONDS NATPMP_LOCK_WAIT_SECONDS QBT_SYNC_TIMEOUT_SECONDS QBT_SYNC_DRIFT_INTERVAL_SECONDS; do
 	if [[ ! "${!setting}" =~ ^(0|[1-9][0-9]{0,5})$ ]]; then
 		echo "ERROR: $setting must be a non-negative integer." >&2
 		exit 1
@@ -326,6 +329,32 @@ if [[ "$MODE" == "once" ]]; then
 fi
 
 SYNC_PID=""
+SYNC_TARGET_PORT=""
+SYNCED_PORT=""
+LAST_SYNC_STARTED=""
+MARKED_CAPABLE=""
+
+# Collect a finished background sync. Only a successful sync records its port,
+# so a failed sync is retried on the next renewal.
+reap_sync() {
+	[[ -n "$SYNC_PID" ]] || return 0
+	kill -0 "$SYNC_PID" 2>/dev/null && return 0
+	if wait "$SYNC_PID"; then
+		SYNCED_PORT="$SYNC_TARGET_PORT"
+	else
+		log "WARNING: qBittorrent port sync failed"
+		SYNCED_PORT=""
+	fi
+	SYNC_PID=""
+}
+
+sync_due() {
+	local port="$1"
+
+	[[ "$port" != "$SYNCED_PORT" || -z "$LAST_SYNC_STARTED" ]] && return 0
+	((SECONDS - LAST_SYNC_STARTED >= QBT_SYNC_DRIFT_INTERVAL_SECONDS))
+}
+
 cleanup_loop() {
 	if [[ -n "$SYNC_PID" ]]; then
 		kill -TERM "$SYNC_PID" 2>/dev/null || true
@@ -352,6 +381,7 @@ while true; do
 		log "VPN IP changed: ${LAST_IP:-unknown} -> $IP"
 		LAST_IP="$IP"
 		CURRENT_PORT=""
+		SYNCED_PORT=""
 		FAILURES=0
 		TRANSIENT_KEEPS=0
 	fi
@@ -369,13 +399,19 @@ while true; do
 	if [[ -n "$PORT" ]]; then
 		log "Got port: $PORT"
 		CURRENT_PORT="$PORT"
-		if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
-			timeout --kill-after=2s 3s "$SERVER_MANAGER_SCRIPT" mark-capable "$CURRENT_WG_PROFILE" "$PORT" >/dev/null 2>&1 || true
+		# Record capability once per profile and port; a call dropped by the
+		# server manager's timeout is retried on the next renewal.
+		if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" && "$MARKED_CAPABLE" != "$CURRENT_WG_PROFILE:$PORT" ]]; then
+			if timeout --kill-after=2s 3s "$SERVER_MANAGER_SCRIPT" mark-capable "$CURRENT_WG_PROFILE" "$PORT" >/dev/null 2>&1; then
+				MARKED_CAPABLE="$CURRENT_WG_PROFILE:$PORT"
+			fi
 		fi
-		if [[ -z "$SYNC_PID" ]] || ! kill -0 "$SYNC_PID" 2>/dev/null; then
-			if [[ -n "$SYNC_PID" ]]; then wait "$SYNC_PID" || log "WARNING: qBittorrent port sync failed"; fi
+		reap_sync
+		if [[ -z "$SYNC_PID" ]] && sync_due "$PORT"; then
 			timeout --kill-after=2s "${QBT_SYNC_TIMEOUT_SECONDS}s" "$QBITTORRENT_SYNC_SCRIPT" "$INSTANCE" &
 			SYNC_PID=$!
+			SYNC_TARGET_PORT="$PORT"
+			LAST_SYNC_STARTED="$SECONDS"
 		fi
 		FAILURES=0
 		TRANSIENT_KEEPS=0
