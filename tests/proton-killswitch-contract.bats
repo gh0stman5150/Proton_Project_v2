@@ -258,7 +258,7 @@ EOF
 }
 
 @test "reset retains shared NAT tables DNAT and unrelated rules" {
-  run env TEST_NFT_NAT_EXISTS=1 TEST_NFT_PROTON_EXISTS=1 KILLSWITCH_BACKEND=nft bash ./Archive/proton-killswitch-reset.sh
+  run env TEST_NFT_NAT_EXISTS=1 TEST_NFT_PROTON_EXISTS=1 KILLSWITCH_BACKEND=nft bash ./proton-killswitch-reset.sh
   [ "$status" -eq 0 ]
   grep -Fx 'delete table inet proton' "$NFT_STDIN"
   grep -Fx 'delete rule ip proton_nat postrouting handle 10' "$NFT_STDIN"
@@ -268,7 +268,7 @@ EOF
 }
 
 @test "iptables reset removes owned jumps but never changes host policies" {
-  run env TEST_IPTABLES_EXISTS=1 KILLSWITCH_BACKEND=iptables bash ./Archive/proton-killswitch-reset.sh
+  run env TEST_IPTABLES_EXISTS=1 KILLSWITCH_BACKEND=iptables bash ./proton-killswitch-reset.sh
   [ "$status" -eq 0 ]
   grep -Fx -- '-X PROTON_DOCKER_FORWARD' "$IPTABLES_LOG"
   grep -Fx -- '-D POSTROUTING -j PROTON_POSTROUTING' "$IPTABLES_LOG"
@@ -320,7 +320,7 @@ EOF
     [[ "$(nft list chain ip6 proton_nat6 postrouting | grep -c "comment \"proton-wg-snat6\"")" == 5 ]]
     nft list chain ip proton_nat prerouting | grep -F "qbt-dnat-radarr"
     nft list chain ip proton_nat postrouting | grep -F "foreign-owner"
-    KILLSWITCH_BACKEND=nft bash ./Archive/proton-killswitch-reset.sh
+    KILLSWITCH_BACKEND=nft bash ./proton-killswitch-reset.sh
     nft list chain ip proton_nat prerouting | grep -F "qbt-dnat-radarr"
     nft list chain ip proton_nat postrouting | grep -F "foreign-owner"
     [[ "$(nft list chain ip proton_nat postrouting | grep -c "proton-wg-snat" || true)" == 0 ]]
@@ -360,7 +360,7 @@ EOF
     iptables -t raw -S PREROUTING | grep "^-A " | head -n 1 | grep -F -- "-j ACCEPT"
     proton_iptables_rule remove raw PREROUTING -i pvsonarr -d 172.18.0.0/16 -j ACCEPT
     proton_iptables_rule remove raw PREROUTING -i pvsonarr -d 172.18.0.0/16 -j ACCEPT
-    KILLSWITCH_BACKEND=iptables bash ./Archive/proton-killswitch-reset.sh
+    KILLSWITCH_BACKEND=iptables bash ./proton-killswitch-reset.sh
     iptables -S FORWARD | grep -Fx -- "-P FORWARD DROP"
     iptables -S FORWARD | grep -Fx -- "-A FORWARD -j FOREIGN_CHAIN"
   '
@@ -371,7 +371,7 @@ EOF
   run bash -c '
     exec 8>"$KILLSWITCH_LOCK_FILE"
     flock -x 8
-    PROTON_FIREWALL_LOCK_WAIT_SECONDS=0 KILLSWITCH_BACKEND=nft bash ./Archive/proton-killswitch-reset.sh
+    PROTON_FIREWALL_LOCK_WAIT_SECONDS=0 KILLSWITCH_BACKEND=nft bash ./proton-killswitch-reset.sh
   '
   [ "$status" -ne 0 ]
   [ ! -s "$NFT_LOG" ]

@@ -27,7 +27,7 @@ EOF
   # Intentionally override PATH to simulate missing commands
   # shellcheck disable=SC2123
   PATH="/nonexistent"
-  run "$BASH_BIN" ./Archive/proton-qbt-dnat-cleanup.sh sonarr
+  run "$BASH_BIN" ./proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -ne 0 ]
   PATH="$OLD_PATH"
 }
@@ -50,7 +50,7 @@ exit 0
 EOF
   chmod +x "$TMPBIN/nft"
 
-  run bash ./Archive/proton-qbt-dnat-cleanup.sh sonarr
+  run bash ./proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -eq 0 ]
   [[ "$output" =~ "No DNAT chain" ]]
 }
@@ -63,7 +63,7 @@ if [[ "$*" == 'list tables' ]]; then printf 'table ip proton_nat\n'; exit 0; fi
 exit 1
 EOF
   chmod +x "$TMPBIN/nft"
-  run bash ./Archive/proton-qbt-dnat-cleanup.sh sonarr
+  run bash ./proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -ne 0 ]
   ! grep -q '^delete ' "$NFT_LOG"
 }
@@ -84,7 +84,7 @@ case "$*" in
 esac
 EOF
   chmod +x "$TMPBIN/nft"
-  run bash ./Archive/proton-qbt-dnat-cleanup.sh sonarr
+  run bash ./proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$NFT_LOG")" -eq 2 ]
   grep -Fx 'delete rule ip proton_nat prerouting handle 10' "$NFT_LOG"
@@ -101,7 +101,7 @@ case "$*" in
 esac
 EOF
   chmod +x "$TMPBIN/nft"
-  run bash ./Archive/proton-qbt-dnat-cleanup.sh sonarr
+  run bash ./proton-qbt-dnat-cleanup.sh sonarr
   [ "$status" -eq 0 ]
   [ ! -e "$NFT_LOG" ]
 }

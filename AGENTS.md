@@ -4,27 +4,20 @@
 
 This Bash project manages host Proton WireGuard routing, firewall protection,
 and NAT-PMP port synchronization for five Docker-hosted qBittorrent clients.
-
-- `Proton_Project_v2.code-workspace` opens only this repository (`.`). This file serves as both workspace and repository guidance in that view. The user-requested `/usr/local/bin/AGENTS.md` supplies parent navigation when working across local automation; it does not change this repository boundary.
-- This file is the authoritative project guide. `.github/copilot-instructions.md` remains a compatibility pointer to it; task prompts and workflow-specific guidance do not replace its safety boundaries.
-- `bats-core/` is a pinned upstream Git dependency used as the test runner, not another application maintained by this project. Follow its `docs/CONTRIBUTING.md` if explicitly changing that dependency; ordinary Proton changes belong outside it.
-- No additional nested instruction files are needed within this repository for its current layout. Reassess if a distinct subproject needs different guidance.
+This file is the authoritative project guide; task prompts and workflow guidance
+never replace its safety boundaries. Instruction-file maintenance notes live in
+`.github/copilot-instructions.md`.
 
 ## Repository Layout And Tooling
 
-- Root `proton-*.sh`: tunnel lifecycle, shared helpers, routing/firewall policy, port allocation and synchronization, and health checks.
-- `install-proton-systemd.sh`, root `*.service`, and `*.conf`: installation, systemd units, and boot-ordering drop-ins.
+- `Archive/`: git-ignored legacy helpers kept on the host only; `Archive/verify_serialized_sync.sh` invokes allocation and sync and can mutate runtime state despite its name. See `Archive/README.md`.
 - `qbittorrent-compose.common.yml` and `qbittorrent-instances.tsv`: shared container policy and fleet identity manifest.
-- `tools/`: fleet verification, sequential reconciliation, and container bootstrap/recreation.
-- `Archive/`: relocated legacy and maintenance scripts; see `Archive/README.md`. Two archived cleanup scripts still supply installed runtime entrypoints. `Archive/verify_serialized_sync.sh` invokes allocation and sync and can mutate runtime state despite its name.
-- `tests/`: Bats behavioral and contract tests. Existing tests use temporary fixtures and PATH-injected command stubs to isolate host operations.
-- `docs/` and `README.md`: architecture, operator procedures, and historical incident evidence; see the documentation map below.
-- `.github/`: CI, compatibility instructions, task prompts, and optional Agentic Workflows guidance.
-- `bats-core/`: checked-out Bash test runner. The Proton application has no package-manager build step; CI installs ShellCheck, shfmt, and Bats through apt.
+- `bats-core/`: pinned upstream test runner, not project code; change it only when explicitly asked. There is no package-manager build step; CI installs ShellCheck, shfmt, and Bats through apt.
 
 Match the owning script's Bash conventions and reuse shared helpers. Keep host
-commands mocked in behavioral tests and use synthetic credentials in fixtures.
-CI checks tracked shell scripts with shfmt and `shellcheck -x`, then runs Bats.
+commands mocked in behavioral tests (temporary fixtures, PATH-injected stubs)
+and use synthetic credentials in fixtures. CI checks tracked shell scripts with
+shfmt and `shellcheck -x`, then runs Bats.
 
 ## Authority And Repository Location
 
@@ -72,7 +65,7 @@ CI checks tracked shell scripts with shfmt and `shellcheck -x`, then runs Bats.
 
 ## Wedge Detection
 
-- A zombie is an immediate recreation refusal. A single `D`-state snapshot can be normal transient CIFS I/O; only the same task remaining in `D` across samples is a persistent wedge.
+- A zombie is an immediate recreation refusal. A single `D`-state snapshot can be normal transient CIFS I/O. Only the same task remaining in `D` across samples is a persistent wedge.
 - A persistent wedge (especially `folio_wait_bit_common` plus CIFS/netfs errors or a kernel oops) is a host-kernel recovery boundary: preserve evidence, require a coordinated reboot, and never escalate through signals/Docker cleanup as a repair.
 - Do not weaken the persistent-wedge guard to bypass a real blocked task, and do not call any specific kernel version the fix without exact patch provenance and workload validation.
 - Full decision table and kernel-package evidence: `docs/runbooks/qbittorrent-wedge-recovery.md`.
@@ -93,8 +86,8 @@ From `/usr/local/bin/proton_project`:
 
 ```bash
 ./bats-core/bin/bats tests
-shellcheck ./*.sh tools/*.sh Archive/*.sh
-for script in ./*.sh tools/*.sh Archive/*.sh; do bash -n "$script" || exit; done
+shellcheck ./*.sh tools/*.sh
+for script in ./*.sh tools/*.sh; do bash -n "$script" || exit; done
 git diff --check
 ```
 
@@ -106,18 +99,17 @@ sudo /usr/local/bin/proton/proton-qbt-fleet-verify.sh --config
 sudo /usr/local/bin/proton/proton-qbt-fleet-reconcile.sh --recreate
 ```
 
-When containers have been removed and must be bootstrapped, use the installed
-fleet recreate tool instead of raw Docker commands:
+`--recreate` performs final runtime verification; check its exit status rather
+than appending a separate newline-delimited verifier.
+
+If containers were removed, bootstrap with the installed tool, never raw Docker.
+It restores all five sequentially through the live lease and Compose
+synchronizer, then verifies; it must not bypass zombie or persistent `D`-state
+gates:
 
 ```bash
 sudo /usr/local/bin/proton/proton-qbt-fleet-recreate.sh --bootstrap
 ```
-
-It restores all five instances sequentially through the live Proton lease and
-Compose synchronizer, then runs runtime verification. It must not be used to
-bypass zombie or persistent `D`-state safety gates.
-
-The `--recreate` command performs final runtime verification. Do not append a separate newline-delimited verifier as a substitute for checking its exit status.
 
 ## Documentation Map
 
@@ -125,15 +117,21 @@ The `--recreate` command performs final runtime verification. Do not append a se
 - Port synchronization: `docs/runbooks/qbittorrent-port-sync.md`
 - Shared fleet changes: `docs/runbooks/qbittorrent-fleet-changes.md`
 - Kernel/storage wedge recovery: `docs/runbooks/qbittorrent-wedge-recovery.md`
+- Host routing, tunnels, DNS, healthcheck, installer: `docs/architecture/host-routing-and-tunnels.md`
+- Server pool, IPv6 rollout, host verification: `docs/runbooks/{server-pool-selection,ipv6-rollout,host-verification}.md`
 - Sonarr incident record: `docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md`
+
+Read the incident record only for incident history or root-cause questions; the
+wedge runbook holds the current decision table. Prefer the owning runbook over
+the full README once the task area is known.
 
 Keep historical evidence intact, but add dated recovery updates when operational status changes. Avoid hard-coded documentation or test line totals that become stale after ordinary edits.
 
 ## Contributor And Documentation Standards
 
 - Reuse `proton-instance-common.sh` for instance loading and route locks, and `proton-qbittorrent-common.sh` for protected configuration and API authentication. Keep error exits and cleanup behavior consistent with the owning script; do not mask failed activation with a later successful check.
-- Preserve existing logging conventions: runtime scripts generally use their `LOG_TAG` and `systemd-cat`, with stderr fallback where implemented; installer and verification tools report to the terminal. Log the instance, operation, and failure without credentials or complete environment dumps.
+- Logging: runtime scripts use their `LOG_TAG` with `systemd-cat` (stderr fallback where implemented); installer and verification tools report to the terminal. Log instance, operation, and failure without credentials or environment dumps.
 - Treat implementation and tests as evidence of behavior, and this guide as the required safety contract. If code conflicts with a safety invariant, report the defect rather than weakening the invariant to match code.
-- Keep README onboarding concise, architecture in `docs/architecture`, operations in `docs/runbooks`, and dated evidence in `docs/incidents`. Link to the owning document instead of copying a second procedure into Copilot guidance.
-- Check documented paths, flags, service names, configuration precedence, and mutation effects against source. Distinguish source validation, installation, and live verification. Label historical package/health observations with their evidence period; documentation edits do not extend it.
-- PRs or change records should explain the concrete problem, scope, final behavior, validation, documentation impact, and any deployment/rollback requirements. No additional branch or commit naming convention is established here.
+- Keep README onboarding concise, architecture in `docs/architecture`, operations in `docs/runbooks`, dated evidence in `docs/incidents`, and dated reviews in `docs/reviews`. Link to the owning document instead of restating a procedure.
+- Verify documented paths, flags, service names, config precedence, and mutation effects against source. Distinguish source validation, installation, and live verification. Label historical package/health observations with their evidence period; doc edits do not extend it.
+- PRs and change records state the problem, scope, final behavior, validation, documentation impact, and deployment/rollback needs. No branch or commit naming convention is established.

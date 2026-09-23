@@ -37,12 +37,7 @@ require_root() {
 }
 
 project_source() {
-	local script="$1"
-	if [[ "$script" == proton-killswitch-reset.sh ]]; then
-		printf '%s/Archive/%s\n' "$PROJECT_DIR" "$script"
-	else
-		printf '%s/%s\n' "$PROJECT_DIR" "$script"
-	fi
+	printf '%s/%s\n' "$PROJECT_DIR" "$1"
 }
 
 validate_sources() {

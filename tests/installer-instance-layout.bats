@@ -84,7 +84,7 @@
   grep -Fq 'QBT_COMPOSE_SERVICE=qbittorrent-$inst' Archive/proton-instances-normalize.sh
 }
 
-@test "archived cleanup scripts install at the existing flat runtime paths" {
+@test "cleanup scripts install at the existing flat runtime paths" {
   run bash -c '
     set -euo pipefail
     SCRIPT_DIR="$PWD"
@@ -95,13 +95,12 @@
     same_path() { [[ "$1" == "$2" ]]; }
     install_normalized_file() { install -m "$3" "$1" "$2"; }
     log() { :; }
-    for source in Archive/proton-killswitch-reset.sh Archive/proton-qbt-dnat-cleanup.sh; do
+    for source in proton-killswitch-reset.sh proton-qbt-dnat-cleanup.sh; do
       install_script_file "$source"
       target="$BIN_DIR/${source##*/}"
       test -x "$target"
       cmp "$source" "$target"
     done
-    test ! -e "$BIN_DIR/Archive"
   ' _ "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
 }

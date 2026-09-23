@@ -56,13 +56,13 @@ SCRIPTS=(
 	proton-killswitch-dispatch.sh
 	proton-killswitch-safe.sh
 	proton-killswitch-nft.sh
-	Archive/proton-killswitch-reset.sh
+	proton-killswitch-reset.sh
 	proton-port-forward-healthcheck.sh
 	proton-port-forward-safe.sh
 	proton-qbittorrent-common.sh
 	proton-qbittorrent-sync-safe.sh
 	proton-qbt-allocate-and-sync.sh
-	Archive/proton-qbt-dnat-cleanup.sh
+	proton-qbt-dnat-cleanup.sh
 	proton-docker-network-watcher.sh
 	proton-server-manager.sh
 	proton-wg-up-safe.sh

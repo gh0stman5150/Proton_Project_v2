@@ -47,7 +47,7 @@
 }
 
 @test "canonical docs record cache=none as the active shared mitigation" {
-  grep -Fq 'The live SMB 3.1.1 `/mnt/data` mount uses `cache=none`.' AGENTS.md
+  grep -Fq 'The live SMB 3.1.1 `/mnt/data` mount uses `cache=none`.' docs/architecture/qbittorrent-fleet-contract.md
   grep -Fq '`/mnt/data` is an SMB 3.1.1 CIFS mount with active `cache=none`.' README.md
   grep -Fq 'The live SMB 3.1.1 `/mnt/data` mount uses `cache=none` for all five clients' docs/README.md
   grep -Fq 'The active fstab entry and live `/mnt/data` mount use `cache=none`.' docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md
@@ -63,14 +63,14 @@
 }
 
 @test "canonical docs record NAS and Proton before Docker ordering" {
-  grep -Fq '`mnt-data.mount` and `mnt-plex.mount` require and follow `nas-network-online.service`' AGENTS.md
+  grep -Fq '`mnt-data.mount` and `mnt-plex.mount` require and follow `nas-network-online.service`' docs/architecture/qbittorrent-fleet-contract.md
   grep -Fq 'Docker wants and follows all five Proton WireGuard units.' README.md
   grep -Fq 'Both NAS mount units require the route-and-TCP-445 `nas-network-online.service` gate.' docs/README.md
   grep -Fq 'Docker wants and follows all five `proton-wg@<instance>.service` units.' docs/runbooks/qbittorrent-wedge-recovery.md
 }
 
 @test "kernel guidance distinguishes related repairs from a proven fix" {
-  grep -Fq 'Ubuntu `7.0.0-30.30` has no relevant netfs change' AGENTS.md
+  grep -Fq 'Ubuntu `7.0.0-30.30` has no relevant netfs correction' docs/architecture/qbittorrent-fleet-contract.md
   grep -Fq '`7.0.0-31.31` remains proposed-only' README.md
   grep -Fq 'Linux 7.1.8 contains later writeback error and `ENOMEM` iteration-state repairs' docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md
   grep -Fq 'The latter changes are relevant but do not prove prevention of this exact `netfs_read_gaps` oops.' docs/runbooks/qbittorrent-wedge-recovery.md
@@ -79,7 +79,7 @@
 @test "audit documentation distinguishes source fixes from deployment and preserves quarantined profiles" {
   grep -Fq 'Source status, 2026-09-11:' README.md
   grep -Fq 'They have not been deployed or verified on live host traffic' README.md
-  grep -Fq 'Its pool config remains in `WG_POOL_DIR` for review.' README.md
-  run grep -E 'rele/establish-agents-md-hierarchyvant|pool config is deleted|start one instance first' README.md install-proton-systemd.sh
+  grep -Fq 'Its pool config remains in `WG_POOL_DIR` for review.' docs/runbooks/server-pool-selection.md
+  run grep -E 'rele/establish-agents-md-hierarchyvant|pool config is deleted|start one instance first' README.md docs/runbooks/server-pool-selection.md install-proton-systemd.sh
   [ "$status" -eq 1 ]
 }
