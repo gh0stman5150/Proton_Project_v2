@@ -14,3 +14,13 @@ sections instead of duplicating their rules here:
 - Documentation requirements: [Documentation Map](../AGENTS.md#documentation-map) and [Contributor And Documentation Standards](../AGENTS.md#contributor-and-documentation-standards)
 
 Use the [README](../README.md) for setup and the [documentation index](../docs/README.md) for the relevant architecture or runbook. Keep shared rules in the project guide instead of duplicating them here. Workflow-specific prompts apply only to their task and remain subject to that guide.
+
+## Instruction-File Maintenance
+
+These notes apply only when changing instruction files; they were moved out of
+`AGENTS.md` to keep per-session context small.
+
+- `Proton_Project_v2.code-workspace` opens only this repository (`.`), so `AGENTS.md` serves as both workspace and repository guidance in that view. The user-requested `/usr/local/bin/AGENTS.md` supplies parent navigation when working across local automation; it does not change this repository boundary.
+- `bats-core/` follows its own `docs/CONTRIBUTING.md` if that dependency is explicitly changed.
+- No nested instruction files are needed for the current layout. Reassess if a distinct subproject needs different guidance.
+- Tracked files and directory purposes are discoverable from the tree and `README.md`; `AGENTS.md` lists only layout facts that are non-obvious or safety-relevant.

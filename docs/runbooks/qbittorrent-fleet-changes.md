@@ -8,26 +8,19 @@ The rule applies to shared configuration and code. It does not collapse the inde
 
 ## Availability, storage, and boot contract
 
+The [host availability and storage contract](../architecture/qbittorrent-fleet-contract.md#host-availability-and-storage-contract) owns the storage, boot-order,
+and kernel rules. For fleet changes specifically:
+
 - Keep uploading and seeding enabled. Do not globally pause torrents or introduce queueing, active-upload limits, or seeding limits to simplify a rollout.
-- Reconcile shared changes sequentially. The four untouched clients remain available while one client is recreated and health-gated; stop on the first failure.
-- The active shared `/mnt/data` policy is SMB 3.1.1 with `cache=none`. Treat any mount-option or incomplete-storage change as Class 2 and apply it fleet-wide; do not create a Sonarr-only storage fork.
-- Local incomplete storage is not capacity-safe on the current host. Do not document or deploy it as the current mitigation without additional fleet capacity and a complete migration design.
-- Both NAS mount units require and follow the route-and-TCP-445 readiness gate. Docker wants and follows all five Proton WireGuard units. Changes to either dependency graph belong in the installer and require reboot-path validation.
-- `cache=none` is containment, not proof of a kernel repair. A kernel candidate requires exact patch provenance, a rollback kernel, and controlled all-five storage and runtime validation.
+- Reconcile shared changes sequentially and stop on the first failure.
+- Treat any mount-option, incomplete-storage, or boot-dependency change as Class 2: apply it fleet-wide through the installer and validate the reboot path. Do not create a Sonarr-only storage fork.
 
 ## Fleet definition
 
-The canonical catalog is `qbittorrent-instances.tsv`, installed as `/opt/qbittorrent-common/qbittorrent-instances.tsv`.
-
-| Instance | Container | Web UI | Tunnel bind | Interface | Legacy port reference |
-| --- | --- | ---: | --- | --- | ---: |
-| Lidarr | `qbittorrent-lidarr` | 8081 | 10.2.0.2 | `pvlidarr` | 51058 |
-| Prowlarr | `qbittorrent-prowlarr` | 8082 | 10.6.0.2 | `pvprowlarr` | 51057 |
-| Radarr | `qbittorrent-radarr` | 8083 | 10.3.0.2 | `pvradarr` | 51056 |
-| Sonarr | `qbittorrent-sonarr` | 8084 | 10.4.0.2 | `pvsonarr` | 51055 |
-| Whisparr | `qbittorrent-whisparr` | 8085 | 10.5.0.2 | `pvwhisparr` | 51054 |
-
-The legacy values are retained only for incident/history comparison. They do not make Compose render and are never valid lease inputs. Every wrapper requires the synchronizer to inject a current `QBT_PUBLISHED_PORT` and requires its tunnel bind IP; neither has a permissive fallback.
+The five instances and their identities are defined in the
+[canonical instance catalog](../architecture/qbittorrent-fleet-contract.md#canonical-instance-catalog) (`qbittorrent-instances.tsv`). Legacy port
+values there are history only; every wrapper requires an injected current
+`QBT_PUBLISHED_PORT` and its tunnel bind IP with no permissive fallback.
 
 ## Change classification
 
@@ -226,18 +219,18 @@ For qBittorrent preferences, do not copy entire `qBittorrent.conf` files across 
 From the repository root:
 
 ```bash
-for script in ./*.sh tools/*.sh Archive/*.sh; do bash -n "$script" || exit; done
+for script in ./*.sh tools/*.sh; do bash -n "$script" || exit; done
 timeout --kill-after=5s 300s env BATS_TEST_TIMEOUT=30 ./bats-core/bin/bats tests &&
-shellcheck -x ./*.sh tools/*.sh Archive/*.sh &&
-shfmt -d ./*.sh tools/*.sh Archive/*.sh || exit
+shellcheck -x ./*.sh tools/*.sh &&
+shfmt -d ./*.sh tools/*.sh || exit
 git diff --check
 ```
 
 CI also requires shfmt formatting and ShellCheck with sourced-file analysis:
 
 ```bash
-shfmt -d ./*.sh tools/*.sh Archive/*.sh
-shellcheck -x ./*.sh tools/*.sh Archive/*.sh
+shfmt -d ./*.sh tools/*.sh
+shellcheck -x ./*.sh tools/*.sh
 ```
 
 Tests for a shared fix must be table-driven over all five instances or exercise the shared implementation directly. A grep that happens to find another instance's value is not an adequate per-instance assertion.

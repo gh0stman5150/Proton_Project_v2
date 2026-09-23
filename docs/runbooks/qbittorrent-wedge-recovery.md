@@ -35,15 +35,8 @@ This procedure deliberately separates an ordinary application failure from a Doc
 
 ## Instance reference
 
-| Instance | Container/service | Web UI | Bind IP | VPN interface |
-| --- | --- | ---: | --- | --- |
-| Lidarr | `qbittorrent-lidarr` | 8081 | 10.2.0.2 | `pvlidarr` |
-| Prowlarr | `qbittorrent-prowlarr` | 8082 | 10.6.0.2 | `pvprowlarr` |
-| Radarr | `qbittorrent-radarr` | 8083 | 10.3.0.2 | `pvradarr` |
-| Sonarr | `qbittorrent-sonarr` | 8084 | 10.4.0.2 | `pvsonarr` |
-| Whisparr | `qbittorrent-whisparr` | 8085 | 10.5.0.2 | `pvwhisparr` |
-
-The authoritative machine-readable catalog is `/opt/qbittorrent-common/qbittorrent-instances.tsv`.
+Container names, Web UI ports, bind IPs, and interfaces are in the
+[canonical instance catalog](../architecture/qbittorrent-fleet-contract.md#canonical-instance-catalog).
 
 ## Phase 1: Freeze automation and capture evidence
 

@@ -1,6 +1,7 @@
 # Archived scripts
 
-These nine scripts were moved here on 2026-09-10 at the operator's request.
+Nine scripts were moved here on 2026-09-10 at the operator's request; three
+active ones returned to the repository root on 2026-09-23 (see below).
 This source directory is distinct from the external `/archive` location used
 for historical incident comparisons.
 
@@ -43,3 +44,11 @@ the archive ignore rule so reviewed changes are visible to Git. They remain
 unstaged until explicitly added. Fixture and isolated network-namespace tests do
 not establish installation provenance or live-host safety; no deployment was
 performed as part of this update.
+
+Source update, 2026-09-23: `proton-killswitch-reset.sh`, `proton-qbt-dnat-cleanup.sh`,
+and `deploy-live-ipv6-firewall.sh` were confirmed in use (installed entrypoint,
+port-forward `ExecStop`, and the documented IPv6 bundle helper) and moved back to
+the repository root. The installer, synchronizer, IPv6 preflight, bundle helper,
+and tests now use flat source paths; installed paths under `/usr/local/bin/proton`
+are unchanged. The table above records the original 2026-09-10 move. The six
+remaining legacy helpers are git-ignored and exist only on the host checkout.

@@ -1,6 +1,3 @@
 .vscode-root/
 archive/*
-!Archive/proton-killswitch-reset.sh
-!Archive/proton-qbt-dnat-cleanup.sh
 !Archive/README.md
-!Archive/deploy-live-ipv6-firewall.sh

@@ -21,8 +21,8 @@ No installation or live recovery was performed during that work. Follow the
 [fresh-lease migration](runbooks/qbittorrent-fleet-changes.md#fresh-lease-schema-migration)
 and its remaining acceptance gates before deploying the updated bundle.
 
-The [2026-09-10 documentation review](documentation-review-2026-09-10.md)
-records documentation corrections, validation, and remaining onboarding gaps.
+Dated documentation reviews live in [reviews/](reviews/); they are records,
+not operating guidance.
 
 | Document | Use it when |
 | --- | --- |
@@ -30,6 +30,10 @@ records documentation corrections, validation, and remaining onboarding gaps.
 | [Port synchronization runbook](runbooks/qbittorrent-port-sync.md) | diagnosing or validating a Proton lease, qBittorrent listen port, or Docker TCP/UDP mapping |
 | [Fleet change runbook](runbooks/qbittorrent-fleet-changes.md) | changing Compose, image, init hooks, orchestration code, routing, storage policy, or common qBittorrent settings |
 | [Wedge recovery runbook](runbooks/qbittorrent-wedge-recovery.md) | a qBittorrent container is unhealthy, cannot stop, contains a zombie, or has a task in kernel `D` state |
+| [Host routing, tunnels, and runtime state](architecture/host-routing-and-tunnels.md) | tunnel isolation, WireGuard defaults, runtime state, DNS/egress policy, healthcheck, watcher, installer behavior |
+| [Server pool runbook](runbooks/server-pool-selection.md) | latency selection, port-forward capability learning, quarantine, selector helpers |
+| [IPv6 rollout runbook](runbooks/ipv6-rollout.md) | IPv6 snapshot, canary, rollback, and Docker dual-stack prerequisites |
+| [Host verification runbook](runbooks/host-verification.md) | routing, firewall, DNS, and leak checks; watcher enablement |
 | [2026-08-14 Sonarr incident report](incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md) | reviewing the evidence, timeline, root-cause assessment, impact, and corrective actions for this incident |
 | [2026-09-13 Docker Proton fallback-route incident](incidents/2026-09-13-docker-proton-fallback-route-churn.md) | diagnosing cross-container DNS/TLS failures, reviewing the single-owner route fix, or completing its deployment and acceptance checks |
 

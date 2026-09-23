@@ -219,9 +219,6 @@ docker_preflight() {
 
 	for script in "${firewall_scripts[@]}"; do
 		source_script="$PROJECT_DIR/$script"
-		if [[ "$script" == proton-killswitch-reset.sh && -f "$PROJECT_DIR/Archive/$script" ]]; then
-			source_script="$PROJECT_DIR/Archive/$script"
-		fi
 		if [[ ! -f "$source_script" || ! -f "$LIVE_DIR/$script" ]] ||
 			! cmp -s "$source_script" "$LIVE_DIR/$script"; then
 			printf 'FAIL: tested and installed Docker IPv6 scripts differ: %s\n' "$script" >&2

@@ -27,7 +27,7 @@ incident evidence retains its recorded time scope.
 | `docs/runbooks/qbittorrent-fleet-changes.md` | Correct all-script syntax checking and CI lint expectations |
 | `docs/runbooks/qbittorrent-wedge-recovery.md` | Stop-on-failure recovery, affected-instance selection, chained scratch check, dated kernel evidence |
 | `docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md` | Historical observation-window note; original evidence retained |
-| `docs/documentation-review-2026-09-10.md` | Review findings and follow-ups |
+| `docs/reviews/2026-09-10-documentation-review.md` (moved 2026-09-23) | Review findings and follow-ups |
 
 ## Outdated content corrected
 
@@ -78,3 +78,13 @@ After: requirements and gaps are explicit, examples better match source,
 instruction ownership remains centralized, and historical observations are
 distinguished from live verification. The repository is clearer for maintaining
 the existing fleet; it is not yet a validated clean-host provisioning guide.
+
+## Follow-up status, 2026-09-23
+
+- Resolved in source: the sync script's zombie refusal now directs operators to
+  the wedge runbook and warns against cgroup/shim cleanup when any task is in
+  `D` state. No live deployment is implied by this note.
+- Still open: a validated clean-host bootstrap procedure, and a confirmed
+  support owner.
+- README sections for server pool, IPv6 rollout, host verification, and host
+  routing moved to dedicated documents; see the [documentation index](../README.md).
