@@ -684,6 +684,7 @@ WG_ADDRESS_SUBNET=${address_subnet}
 VPN_TABLE=${vpn_table}
 QBT_VPN_RULE_PRIORITY=${qbt_rule_priority}
 DOCKER_FALLBACK_VPN_RULE_PRIORITY=130
+DOCKER_FALLBACK_INSTANCE=sonarr
 STATE_DIR=/run/proton/${instance}
 SERVER_SELECTION_FILE=/run/proton/${instance}/current-server.env
 SERVER_RESELECT_FILE=/run/proton/${instance}/reselect-server.flag

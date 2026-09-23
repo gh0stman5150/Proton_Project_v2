@@ -47,6 +47,7 @@ DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
 QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
+DOCKER_FALLBACK_INSTANCE="${DOCKER_FALLBACK_INSTANCE:-sonarr}"
 DOCKER_IPV6_FALLBACK_INSTANCE="${DOCKER_IPV6_FALLBACK_INSTANCE:-sonarr}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
@@ -314,6 +315,10 @@ docker_fallback_vpn_routing_enabled() {
 		return 1
 		;;
 	esac
+}
+
+docker_ipv4_fallback_enabled() {
+	docker_fallback_vpn_routing_enabled && [[ "$INSTANCE" == "$DOCKER_FALLBACK_INSTANCE" ]]
 }
 
 resolve_qbt_container_ip() {
@@ -833,7 +838,7 @@ inject_routes() {
 
 			proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
 			proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
-			if docker_fallback_vpn_routing_enabled; then
+			if docker_ipv4_fallback_enabled; then
 				ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 			fi
 		done
@@ -848,8 +853,10 @@ inject_routes() {
 		fi
 
 		ensure_docker_raw_return_rule
-		if docker_fallback_vpn_routing_enabled; then
+		if docker_ipv4_fallback_enabled; then
 			log "Docker fallback policy routing: source $DOCKER_NETWORK_CIDR -> table $VPN_TABLE via $VPN_INTERFACE at priority $DOCKER_FALLBACK_VPN_RULE_PRIORITY while LAN traffic stays on main"
+		elif docker_fallback_vpn_routing_enabled; then
+			log "Docker fallback policy routing owned by $DOCKER_FALLBACK_INSTANCE; qBittorrent-specific rules remain active for $INSTANCE"
 		else
 			log "Docker fallback policy routing disabled; qBittorrent-specific rules remain active"
 		fi

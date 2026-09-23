@@ -170,6 +170,29 @@ EOF
   grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
 }
 
+@test "wg up non-owner installs only its qBittorrent source rule" {
+  run env \
+    PATH="$PATH" \
+    STATE_DIR="$STATE_DIR" \
+    WG_RUNTIME_DIR="$WG_RUNTIME_DIR" \
+    WG_PROFILE="$WG_PROFILE" \
+    VPN_INTERFACE="$VPN_INTERFACE" \
+    WG_CONFIG="$WG_CONFIG" \
+    DOCKER_NETWORK_CIDR="$DOCKER_NETWORK_CIDR" \
+    DOCKER_FALLBACK_INSTANCE=radarr \
+    LAN_IF="$LAN_IF" \
+    LAN_CIDR="$LAN_CIDR" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    MANAGE_RESOLVED_DNS="$MANAGE_RESOLVED_DNS" \
+    KILLSWITCH_SCRIPT="$KILLSWITCH_SCRIPT" \
+    bash ./proton-wg-up-safe.sh sonarr
+
+  [ "$status" -eq 0 ]
+  grep -F 'rule add from 192.168.96.44/32 lookup 51804 priority 114' "$IP_LOG"
+  ! grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
+  [[ "$output" == *"Docker fallback policy routing owned by radarr; qBittorrent-specific rules remain active for sonarr"* ]]
+}
+
 @test "repeated healthy bring-up preserves the tunnel generation and lease" {
   run bash ./proton-wg-up-safe.sh sonarr
   [ "$status" -eq 0 ]

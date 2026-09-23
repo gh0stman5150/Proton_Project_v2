@@ -18,6 +18,7 @@ setup() {
 
   cat > "$PROTON_COMMON_ENV" <<EOF
 DOCKER_NETWORK_CIDR6=fdca:6c19:2096::/64
+DOCKER_FALLBACK_INSTANCE=sonarr
 DOCKER_IPV6_FALLBACK_INSTANCE=sonarr
 DOCKER_FALLBACK_VPN_ROUTING=on
 EOF
@@ -115,6 +116,22 @@ EOF
   grep -F -- '-6 rule add from fdca:6c19:2096::/64 to fdca:6c19:2096::/64 lookup main priority 108' "$IP_LOG"
   grep -F -- '-6 rule add from fdca:6c19:2096::17/128 lookup 51804 priority 114' "$IP_LOG"
   grep -F -- '-6 rule add from fdca:6c19:2096::/64 lookup 51804 priority 130' "$IP_LOG"
+}
+
+@test "IPv4 fallback owner receives subnet fallback and qBittorrent owner rules" {
+  run bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
+
+  [ "$status" -eq 0 ]
+  grep -F -- 'rule add from 192.168.96.17/32 lookup 51804 priority 114' "$IP_LOG"
+  grep -F -- 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
+}
+
+@test "IPv4 fallback non-owner receives only its qBittorrent owner rule" {
+  run bash -c 'source ./proton-docker-network-watcher.sh radarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
+
+  [ "$status" -eq 0 ]
+  grep -F -- 'rule add from 192.168.96.16/32 lookup 51803 priority 113' "$IP_LOG"
+  ! grep -F -- 'rule add from 192.168.96.0/20 lookup 51803 priority 130' "$IP_LOG"
 }
 
 @test "non-owner receives only its qBittorrent IPv6 rule" {

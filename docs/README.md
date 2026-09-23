@@ -1,6 +1,6 @@
 # qBittorrent/Proton operations documentation
 
-This directory documents the five-instance qBittorrent fleet, its Proton port-forwarding control plane, and the 2026-08-14 Sonarr kernel/CIFS incident.
+This directory documents the five-instance qBittorrent fleet, its Proton port-forwarding control plane, and recorded storage and routing incidents.
 
 The canonical source is `/usr/local/bin/proton_project`. Do not use `/opt/proton_project_work` as current source unless it has been explicitly synchronized and verified.
 
@@ -31,6 +31,7 @@ records documentation corrections, validation, and remaining onboarding gaps.
 | [Fleet change runbook](runbooks/qbittorrent-fleet-changes.md) | changing Compose, image, init hooks, orchestration code, routing, storage policy, or common qBittorrent settings |
 | [Wedge recovery runbook](runbooks/qbittorrent-wedge-recovery.md) | a qBittorrent container is unhealthy, cannot stop, contains a zombie, or has a task in kernel `D` state |
 | [2026-08-14 Sonarr incident report](incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md) | reviewing the evidence, timeline, root-cause assessment, impact, and corrective actions for this incident |
+| [2026-09-13 Docker Proton fallback-route incident](incidents/2026-09-13-docker-proton-fallback-route-churn.md) | diagnosing cross-container DNS/TLS failures, reviewing the single-owner route fix, or completing its deployment and acceptance checks |
 
 ## Core operational rule
 

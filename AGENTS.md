@@ -129,6 +129,7 @@ The `--recreate` command performs final runtime verification. Do not append a se
 - Shared fleet changes: `docs/runbooks/qbittorrent-fleet-changes.md`
 - Kernel/storage wedge recovery: `docs/runbooks/qbittorrent-wedge-recovery.md`
 - Sonarr incident record: `docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md`
+- Docker Proton fallback-route incident: `docs/incidents/2026-09-13-docker-proton-fallback-route-churn.md`
 
 Keep historical evidence intact, but add dated recovery updates when operational status changes. Avoid hard-coded documentation or test line totals that become stale after ordinary edits.
 

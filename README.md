@@ -26,6 +26,13 @@ replacement startup and success, retries its own recorded stopped container
 after a failed recreation, and bounds complete WireGuard teardown below the
 systemd stop timeout. These changes are source-only and are not deployed.
 
+Source follow-up, 2026-09-13: a confirmed multi-owner IPv4 fallback-route defect
+caused ordinary Docker applications to change Proton tunnels during active TLS
+connections. The canonical source now assigns the subnet fallback to one stable
+owner while preserving every qBittorrent-specific tunnel. The change passed the
+complete source suite but still requires privileged deployment and live
+acceptance. See the [incident record](docs/incidents/2026-09-13-docker-proton-fallback-route-churn.md).
+
 ## Detailed Documentation
 
 The qBittorrent fleet has dedicated architecture, operations, and incident documentation:
@@ -35,6 +42,7 @@ The qBittorrent fleet has dedicated architecture, operations, and incident docum
 3. [Fleet change runbook](docs/runbooks/qbittorrent-fleet-changes.md) enforces “change one, change all” for shared code, Compose policy, init hooks, storage, and qBittorrent preferences.
 4. [Wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) distinguishes an application failure from a Docker/runtime wedge and an unkillable kernel `D`-state failure.
 5. [2026-08-14 Sonarr incident report](docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md) preserves the timeline, evidence, root-cause assessment, and corrective actions.
+6. [2026-09-13 Docker Proton fallback-route incident](docs/incidents/2026-09-13-docker-proton-fallback-route-churn.md) documents the cross-container DNS/TLS symptoms, routing evidence, single-owner correction, deployment status, and acceptance gates.
 
 Shared configuration changes must be implemented once and reconciled across `lidarr`, `prowlarr`, `radarr`, `sonarr`, and `whisparr`. Dynamic Proton ports remain independent: a lease change recreates only the qBittorrent service that owns that tunnel, using the same synchronizer behavior as the other four.
 
@@ -508,7 +516,7 @@ sudo /usr/local/bin/proton/proton-ipv6-rollout.sh \
 
 This command requires an explicit `KILLSWITCH_BACKEND=nftables`, confirms the tested firewall scripts match their installed copies, validates a canonical ULA `/64`, rejects overlap with host routes or Docker networks, verifies `starr_network` is still IPv4-only, and requires host IPv6 forwarding to remain off. It does not write configuration, enable forwarding, apply nftables, restart services, or modify Docker.
 
-Docker IPv6 policy routing mirrors the existing IPv4 ownership model. Each qBittorrent container receives a higher-priority IPv6 `/128` source rule for its own instance tunnel. `DOCKER_IPV6_FALLBACK_INSTANCE` names exactly one IPv6-capable tunnel that carries ordinary Docker application traffic at the lower fallback priority; it defaults to `sonarr`. Docker-to-Docker ULA traffic remains in the main table. The network watcher refreshes these rules after container recreation, and WireGuard teardown removes instance-owned IPv6 rules before flushing the tunnel table.
+Docker IPv4 and IPv6 fallback routing each have one stable owner so ordinary application traffic cannot change tunnels while a connection is active. `DOCKER_FALLBACK_INSTANCE` names the IPv4 owner and `DOCKER_IPV6_FALLBACK_INSTANCE` names the IPv6-capable owner; both default to `sonarr`. Each qBittorrent container receives a higher-priority per-container source rule for its own instance tunnel. Docker-to-Docker traffic remains in the main table. The network watcher refreshes these rules after container recreation, and WireGuard teardown removes instance-owned rules before flushing the tunnel table.
 
 Deploy the complete inert firewall and routing bundle before a maintenance window:
 

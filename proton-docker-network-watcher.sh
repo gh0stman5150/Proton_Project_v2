@@ -36,6 +36,7 @@ DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-$RULE_PRIORITY}"
 QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
+DOCKER_FALLBACK_INSTANCE="${DOCKER_FALLBACK_INSTANCE:-sonarr}"
 DOCKER_IPV6_FALLBACK_INSTANCE="${DOCKER_IPV6_FALLBACK_INSTANCE:-sonarr}"
 LAST_FILE="${LAST_FILE:-/run/proton/docker-network-watcher.last}"
 LAST6_FILE="${LAST6_FILE:-${STATE_DIR}/docker-network-watcher6.last}"
@@ -195,6 +196,10 @@ docker_fallback_vpn_routing_enabled() {
 	esac
 }
 
+docker_ipv4_fallback_enabled() {
+	docker_fallback_vpn_routing_enabled && [[ "$INSTANCE" == "$DOCKER_FALLBACK_INSTANCE" ]]
+}
+
 resolve_qbt_container_ip() {
 	local networks=""
 	local ip=""
@@ -313,7 +318,7 @@ reapply_routes() {
 		fi
 		proton_delete_ip_rule_all 4 from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" || return 1
 		proton_delete_ip_rule_all 4 from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
-		if docker_fallback_vpn_routing_enabled; then
+		if docker_ipv4_fallback_enabled; then
 			ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		fi
 		if command -v iptables >/dev/null 2>&1; then
