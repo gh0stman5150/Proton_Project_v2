@@ -10,10 +10,17 @@ here; if anything below conflicts with it, follow `AGENTS.md`.
 
 ## Checkout Location
 
-`AGENTS.md` names `/usr/local/bin/proton_project` as canonical source. This
-checkout may be a synced development copy on macOS instead; it has no live
-host, systemd, Docker, or WireGuard state, so only source-level validation is
-possible here. Never claim installed or live verification from it.
+`AGENTS.md` names `/usr/local/bin/proton_project` as canonical source. Check
+`pwd` before acting:
+
+- In `/usr/local/bin/proton_project` you are on the live Linux host. systemd,
+  Docker, WireGuard, and the installed copies under `/usr/local/bin/proton` are
+  real. Tests are safe because they stub host commands. Do not run runtime
+  scripts, the installer, or `sudo` fleet tools unless you have explicit
+  authorization (see Safety Boundaries).
+- Anywhere else (e.g. a synced macOS copy) there is no live state, so only
+  source-level validation is possible. Never claim installed or live
+  verification from it.
 
 ## Commands
 
