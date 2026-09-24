@@ -121,6 +121,7 @@ sudo /usr/local/bin/proton/proton-qbt-fleet-recreate.sh --bootstrap
 - Server pool, IPv6 rollout, host verification: `docs/runbooks/{server-pool-selection,ipv6-rollout,host-verification}.md`
 - Sonarr incident record: `docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md`
 - Docker Proton fallback-route incident: `docs/incidents/2026-09-13-docker-proton-fallback-route-churn.md`
+- Installer Docker-restart and rule-sweep incident: `docs/incidents/2026-09-23-installer-docker-restart-and-rule-sweep.md`
 
 Read the incident record only for incident history or root-cause questions; the
 wedge runbook holds the current decision table. Prefer the owning runbook over

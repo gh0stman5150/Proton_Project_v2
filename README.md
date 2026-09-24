@@ -43,6 +43,7 @@ The qBittorrent fleet has dedicated architecture, operations, and incident docum
 4. [Wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) distinguishes an application failure from a Docker/runtime wedge and an unkillable kernel `D`-state failure.
 5. [2026-08-14 Sonarr incident report](docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md) preserves the timeline, evidence, root-cause assessment, and corrective actions.
 6. [2026-09-13 Docker Proton fallback-route incident](docs/incidents/2026-09-13-docker-proton-fallback-route-churn.md) documents the cross-container DNS/TLS symptoms, routing evidence, single-owner correction, deployment status, and acceptance gates.
+7. [2026-09-23 installer Docker-restart and rule-sweep incident](docs/incidents/2026-09-23-installer-docker-restart-and-rule-sweep.md) documents how installs restarted Docker through the kill switch's `Requires=` edge, the reverted policy-rule sweep that conflicted with mousehole, and the reload fix.
 
 Shared configuration changes must be implemented once and reconciled across `lidarr`, `prowlarr`, `radarr`, `sonarr`, and `whisparr`. Dynamic Proton ports remain independent: a lease change recreates only the qBittorrent service that owns that tunnel, using the same synchronizer behavior as the other four.
 

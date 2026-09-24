@@ -36,6 +36,7 @@ not operating guidance.
 | [Host verification runbook](runbooks/host-verification.md) | routing, firewall, DNS, and leak checks; watcher enablement |
 | [2026-08-14 Sonarr incident report](incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md) | reviewing the evidence, timeline, root-cause assessment, impact, and corrective actions for this incident |
 | [2026-09-13 Docker Proton fallback-route incident](incidents/2026-09-13-docker-proton-fallback-route-churn.md) | diagnosing cross-container DNS/TLS failures, reviewing the single-owner route fix, or completing its deployment and acceptance checks |
+| [2026-09-23 installer Docker-restart incident](incidents/2026-09-23-installer-docker-restart-and-rule-sweep.md) | reviewing why installs restarted Docker, the reverted policy-rule sweep, externally owned rules in instance tables, or the remaining follow-ups |
 
 ## Core operational rule
 
