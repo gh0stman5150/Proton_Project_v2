@@ -74,3 +74,12 @@
   grep -Fxq 'Wants=proton-wg@lidarr.service proton-wg@prowlarr.service proton-wg@radarr.service proton-wg@sonarr.service proton-wg@whisparr.service' docker-proton-tunnels.conf
   grep -Fxq 'After=proton-wg@lidarr.service proton-wg@prowlarr.service proton-wg@radarr.service proton-wg@sonarr.service proton-wg@whisparr.service' docker-proton-tunnels.conf
 }
+
+@test "Docker's stop timeout outlasts qBittorrent's stop grace period" {
+  grace="$(awk '$1 == "stop_grace_period:" { sub(/s$/, "", $2); print $2 }' qbittorrent-compose.common.yml)"
+  timeout="$(awk -F= '$1 == "TimeoutStopSec" { print $2 }' docker-proton-stop-timeout.conf)"
+  [[ "$grace" =~ ^[0-9]+$ && "$timeout" =~ ^[0-9]+$ ]]
+  # Docker stops every container at once and needs time of its own after the
+  # slowest one, or systemd kills it and unless-stopped leaves that one exited.
+  (( timeout >= grace + 60 ))
+}

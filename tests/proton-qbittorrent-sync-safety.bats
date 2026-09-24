@@ -17,6 +17,46 @@ load proton-qbittorrent-sync-helper
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
+@test "a container that exited during a Docker restart is restored, not treated as a manual stop" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+  printf 'exited' > "${DOCKER_LOG}.status"
+  finished="$(date -d 2026-09-12T00:00:00Z +%s)"
+
+  # Docker began stopping 60 s before the container finished and was active
+  # again 30 s after, as when systemd killed dockerd mid-shutdown.
+  run env QBT_TEST_LOGIN_FAIL=while-stopped QBT_TEST_DOCKER_STOP_BEGAN=$((finished - 60)) \
+    QBT_TEST_DOCKER_STARTED=$((finished + 30)) bash ./proton-qbittorrent-sync-safe.sh sonarr
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "${DOCKER_LOG}.compose-40001.count")" -eq 1 ]
+  [ "$(cat "${DOCKER_LOG}.status")" = running ]
+  grep -Fxq 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
+}
+
+@test "an exit outside the Docker restart window is still respected as a manual stop" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+  finished="$(date -d 2026-09-12T00:00:00Z +%s)"
+
+  # Stopped before Docker began restarting; stopped after Docker was back
+  # (beyond the 10 s slack); and a restart window that is still open.
+  for window in "$((finished + 60)) $((finished + 120))" "$((finished - 120)) $((finished - 11))" \
+    "$((finished - 60)) $((finished - 120))"; do
+    printf 'exited' > "${DOCKER_LOG}.status"
+    run env QBT_TEST_LOGIN_FAIL=while-stopped QBT_TEST_DOCKER_STOP_BEGAN="${window% *}" \
+      QBT_TEST_DOCKER_STARTED="${window#* }" bash ./proton-qbittorrent-sync-safe.sh sonarr
+    [ "$status" -eq 0 ]
+    [ ! -e "${DOCKER_LOG}.compose-40001.count" ]
+    [ "$(cat "${DOCKER_LOG}.status")" = exited ]
+  done
+  grep -Fxq 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+}
+
 @test "compose-recreate mode skips self-heal when qBittorrent stop is still in progress" {
   write_qbt_env compose-recreate
   write_lease 40001

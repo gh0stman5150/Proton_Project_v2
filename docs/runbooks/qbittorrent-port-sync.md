@@ -518,6 +518,7 @@ No systemd unit may execute from `/usr/local/bin/proton_project`.
 The synchronizer distinguishes:
 
 - intentional manual stop: skip;
+- exited during the last Docker restart: restore through the guarded recreation;
 - ordinary running failure: one guarded self-heal;
 - running/no published ports: refuse;
 - zombie: refuse;
@@ -528,7 +529,11 @@ Use `docs/runbooks/qbittorrent-wedge-recovery.md` before issuing more Docker com
 
 ### Manual stops
 
-With `QBT_RESPECT_MANUAL_STOP=1`, the sync script treats an existing qBittorrent container in `created`, `exited`, `dead`, or `removing` state as intentionally stopped and skips compose recreation. The exception is an unchanged `created` or `exited` container recorded as stopped by an unfinished automated recreation; retry still requires a fresh lease and the normal safety gates. A different container ID or stop timestamp invalidates that exception. It also treats recent Docker stop or network-disconnect events as a stop in progress for `QBT_MANUAL_STOP_EVENT_GRACE_SECONDS`, so a graceful qBittorrent shutdown is not mistaken for a wedged Web UI. Set `QBT_RESPECT_MANUAL_STOP=0` only if Proton should bring stopped qBittorrent containers back up automatically.
+With `QBT_RESPECT_MANUAL_STOP=1`, the sync script treats an existing qBittorrent container in `created`, `exited`, `dead`, or `removing` state as intentionally stopped and skips compose recreation. The exception is an unchanged `created` or `exited` container recorded as stopped by an unfinished automated recreation; retry still requires a fresh lease and the normal safety gates. A different container ID or stop timestamp invalidates that exception.
+
+A second exception covers Docker restarts. An `exited` container whose `FinishedAt` falls between `docker.service` starting to stop (`ActiveExitTimestamp`) and becoming active again (`ActiveEnterTimestamp`, plus `QBT_DOCKER_RESTART_SLACK_SECONDS`, default 10) was running before that restart, so the sync restores it through the same guarded recreation. An exit before Docker began stopping, or after it was back, is still a manual stop. The installer's `docker.service` drop-in sets `TimeoutStopSec=180`, above qBittorrent's 90 s stop grace period, so systemd no longer kills the daemon while a client is still stopping; that kill is what left two clients exited on 2026-09-23 despite `unless-stopped`. The longer stop timeout also applies to Docker's stop during a host shutdown; the restore window does not reach back to a previous boot.
+
+The sync also treats recent Docker stop or network-disconnect events as a stop in progress for `QBT_MANUAL_STOP_EVENT_GRACE_SECONDS`, so a graceful qBittorrent shutdown is not mistaken for a wedged Web UI. Set `QBT_RESPECT_MANUAL_STOP=0` only if Proton should bring stopped qBittorrent containers back up automatically.
 
 A running container with no published ports is refused without rewriting the artifact or running Compose. This protects the host from the qBittorrent/s6 shutdown wedge where the old container still owns the Docker name and each recreate attempt produces a new `<shortid>_qbittorrent-<instance>` orphan.
 

@@ -45,6 +45,16 @@ EOF
 
   stub_systemd_cat
 
+  # docker.service stop/start times for the Docker-restart window; unset means
+  # Docker has not restarted since boot.
+  stub_command systemctl <<'EOF'
+case "$*" in
+  *ActiveExitTimestamp*) [[ -z "${QBT_TEST_DOCKER_STOP_BEGAN:-}" ]] || printf '@%s\n' "$QBT_TEST_DOCKER_STOP_BEGAN" ;;
+  *ActiveEnterTimestamp*) [[ -z "${QBT_TEST_DOCKER_STARTED:-}" ]] || printf '@%s\n' "$QBT_TEST_DOCKER_STARTED" ;;
+esac
+exit 0
+EOF
+
   cat > "$TMPBIN/stat" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == '-c' && "$2" == '%a' ]]; then

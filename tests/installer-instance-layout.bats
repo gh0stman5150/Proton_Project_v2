@@ -21,6 +21,7 @@
   grep -Fq 'mnt-data.mount' install-proton-systemd.sh
   grep -Fq 'mnt-plex.mount' install-proton-systemd.sh
   grep -Fq 'docker-proton-tunnels.conf' install-proton-systemd.sh
+  grep -Fq 'docker-proton-stop-timeout.conf' install-proton-systemd.sh
   grep -Fq '${SYSTEMD_DIR}/docker.service.d' install-proton-systemd.sh
   grep -Fq 'install_docker_tunnel_ordering' install-proton-systemd.sh
 }
@@ -247,4 +248,19 @@ EOF
     fi
   done
   grep -Fx 'ExecReload=/usr/local/bin/proton/proton-killswitch-dispatch.sh' proton-killswitch.service
+}
+
+@test "installer installs Docker's tunnel-ordering and stop-timeout drop-ins" {
+  run bash -c '
+    set -euo pipefail
+    SCRIPT_DIR="$PWD"
+    SYSTEMD_DIR="$1/systemd"
+    eval "$(sed -n "/^normalize_text_file() {/,/^}/p" install-proton-systemd.sh)"
+    eval "$(sed -n "/^install_docker_tunnel_ordering() {/,/^}/p" install-proton-systemd.sh)"
+    install_normalized_file() { normalize_text_file "$1" "$2"; chmod "$3" "$2"; }
+    install_docker_tunnel_ordering
+  ' _ "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  cmp <(awk 1 docker-proton-tunnels.conf) "$BATS_TEST_TMPDIR/systemd/docker.service.d/proton-tunnels.conf"
+  cmp <(awk 1 docker-proton-stop-timeout.conf) "$BATS_TEST_TMPDIR/systemd/docker.service.d/proton-stop-timeout.conf"
 }

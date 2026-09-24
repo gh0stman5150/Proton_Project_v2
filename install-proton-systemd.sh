@@ -241,6 +241,8 @@ validate_bundle() {
 	validate_shell_syntax "${SCRIPT_DIR}/tools/proton-fleet-services.sh"
 
 	ensure_source_file "${SCRIPT_DIR}/proton-qbittorrent-port.env"
+	ensure_source_file "${SCRIPT_DIR}/docker-proton-tunnels.conf"
+	ensure_source_file "${SCRIPT_DIR}/docker-proton-stop-timeout.conf"
 }
 
 canonical_path() {
@@ -370,6 +372,9 @@ install_docker_tunnel_ordering() {
 	install_normalized_file \
 		"${SCRIPT_DIR}/docker-proton-tunnels.conf" \
 		"${override_dir}/proton-tunnels.conf" 0644
+	install_normalized_file \
+		"${SCRIPT_DIR}/docker-proton-stop-timeout.conf" \
+		"${override_dir}/proton-stop-timeout.conf" 0644
 }
 
 load_instance_manifest() {

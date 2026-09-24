@@ -73,6 +73,8 @@ QBT_COMPOSE_RECREATE_RETRIES="${QBT_COMPOSE_RECREATE_RETRIES:-3}"
 QBT_COMPOSE_RECREATE_RETRY_DELAY="${QBT_COMPOSE_RECREATE_RETRY_DELAY:-5}"
 QBT_RESPECT_MANUAL_STOP="${QBT_RESPECT_MANUAL_STOP:-1}"
 QBT_MANUAL_STOP_EVENT_GRACE_SECONDS="${QBT_MANUAL_STOP_EVENT_GRACE_SECONDS:-180}"
+DOCKER_SERVICE_UNIT="${DOCKER_SERVICE_UNIT:-docker.service}"
+QBT_DOCKER_RESTART_SLACK_SECONDS="${QBT_DOCKER_RESTART_SLACK_SECONDS:-10}"
 QBT_FORCE_RECREATE="${QBT_FORCE_RECREATE:-0}"
 QBT_SYNC_LOCK_WAIT_SECONDS="${QBT_SYNC_LOCK_WAIT_SECONDS:-30}"
 QBT_DSTATE_SAMPLES="${QBT_DSTATE_SAMPLES:-3}"
@@ -384,6 +386,28 @@ recent_manual_stop_event() {
         '
 }
 
+# True when the container exited while the Docker service was stopping or
+# starting: it was running before that restart, not stopped by an operator.
+# Docker's unless-stopped policy does not restart a container that finished
+# after systemd killed the daemon, so the sync restores it. An exit outside
+# that window (plus a short slack for the daemon's own restore) is still
+# treated as a manual stop.
+container_stopped_by_docker_restart() {
+	local finished finished_epoch stop_began started
+
+	[[ "$QBT_DOCKER_RESTART_SLACK_SECONDS" =~ ^[0-9]+$ ]] || return 1
+	finished="$(compose_container_inspect '{{.State.FinishedAt}}' --all)" || return 1
+	[[ -n "$finished" && "$finished" != 0001-* ]] || return 1
+	finished_epoch="$(date -d "$finished" +%s 2>/dev/null)" || return 1
+	stop_began="$(systemctl show -P ActiveExitTimestamp --timestamp=unix "$DOCKER_SERVICE_UNIT" 2>/dev/null)" || return 1
+	started="$(systemctl show -P ActiveEnterTimestamp --timestamp=unix "$DOCKER_SERVICE_UNIT" 2>/dev/null)" || return 1
+	stop_began="${stop_began#@}"
+	started="${started#@}"
+	[[ "$stop_began" =~ ^[0-9]+$ && "$started" =~ ^[0-9]+$ ]] || return 1
+	((stop_began <= started)) || return 1
+	((finished_epoch >= stop_began && finished_epoch <= started + QBT_DOCKER_RESTART_SLACK_SECONDS))
+}
+
 pending_recreate_identity() {
 	local container_id finished_at
 	container_id="$(docker inspect -f '{{.Id}}' "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}")" || return 1
@@ -421,7 +445,15 @@ skip_sync_for_manual_stop() {
 		rm -f "$QBT_RECREATE_PENDING_FILE"
 	fi
 	case "$status" in
-	created | exited | dead | removing)
+	exited)
+		if container_stopped_by_docker_restart; then
+			log "qBittorrent container $container_label exited during the last $DOCKER_SERVICE_UNIT restart; restoring it"
+			return 1
+		fi
+		log "qBittorrent container $container_label is $status; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
+		return 0
+		;;
+	created | dead | removing)
 		log "qBittorrent container $container_label is $status; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
 		return 0
 		;;

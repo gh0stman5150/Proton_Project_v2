@@ -193,6 +193,13 @@ operator stopped. Why prowlarr and whisparr stayed exited while the other three
 returned under `unless-stopped` is not established. Both finished last, 20:56:44
 and 20:57:04, after the other three (20:56:18–20:56:30).
 
+Established on 2026-09-24: `docker.service` had the default
+`TimeoutStopSec` of 90 s, equal to qBittorrent's `stop_grace_period`. Docker
+stops every container at once, so systemd killed `dockerd` at 20:56:40
+(`code=killed, status=9/KILL`) while prowlarr and whisparr were still inside
+their grace period. They finished with no daemon running, and Docker did not
+restart them when it came back.
+
 ## Corrective changes
 
 Commit `9d98932`:
@@ -250,3 +257,16 @@ Open when this record was written:
    own rules, not assume the whole table.
 5. Before changing any unit that other units `Requires=`, check the effect of
    restart propagation on those dependents.
+
+## Follow-up, 2026-09-24
+
+Open item 3 is resolved in source at the operator's direction: a container
+that was running before a Docker restart must come back.
+
+- A `docker.service` drop-in, `proton-stop-timeout.conf`, sets
+  `TimeoutStopSec=180` so the daemon outlasts qBittorrent's 90 s grace period
+  and `unless-stopped` restarts every client.
+- The sync restores an `exited` container whose `FinishedAt` falls inside the
+  last `docker.service` stop/start window, through the normal guarded
+  recreation. Exits outside that window are still manual stops.
+- Behavioral tests cover both windows and the drop-in install.

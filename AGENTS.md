@@ -59,7 +59,7 @@ shfmt and `shellcheck -x`, then runs Bats.
 ## Host Storage And Boot Invariants
 
 - `cache=none` on `/mnt/data` is the active fleet-wide mitigation for all five clients; never attribute a past oops to it or treat it as a demonstrated kernel fix. Boot ordering (NAS mount, Docker-vs-tunnel) is startup sequencing only, not proof of tunnel health — the kill switch and runtime verifier remain required.
-- `install-proton-systemd.sh` owns the NAS mount and tunnel-ordering drop-ins; fix the installer source, not installed drop-ins.
+- `install-proton-systemd.sh` owns the NAS mount, tunnel-ordering, and Docker stop-timeout drop-ins; fix the installer source, not installed drop-ins.
 - Local incomplete storage is not capacity-safe. Treat any storage-layout change as shared fleet structure requiring all-five validation and rollback.
 - Full mount/oops timeline, dependency edges, and kernel-package evidence: `docs/architecture/qbittorrent-fleet-contract.md`.
 
