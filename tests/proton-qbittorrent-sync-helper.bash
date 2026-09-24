@@ -1,6 +1,8 @@
 # shellcheck shell=bash
 # Shared fixtures for proton-qbittorrent-sync-*.bats. Loaded with `load`.
 
+load common-stubs
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
@@ -39,11 +41,7 @@ CACHE_FILE=$CACHE_FILE
 DOCKER_CONFIG_DIR=$DOCKER_CONFIG_DIR
 EOF
 
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat - >/dev/null
-EOF
-  chmod +x "$TMPBIN/systemd-cat"
+  stub_systemd_cat
 
   cat > "$TMPBIN/stat" <<'EOF'
 #!/usr/bin/env bash
@@ -59,24 +57,7 @@ exec "$REAL_STAT" "$@"
 EOF
   chmod +x "$TMPBIN/stat"
 
-  cat > "$TMPBIN/curl" <<'EOF'
-#!/usr/bin/env bash
-output_file=""
-for ((i = 1; i <= $#; i++)); do
-  if [[ "${!i}" == "-o" ]]; then
-    next_index=$((i + 1))
-    output_file="${!next_index}"
-  fi
-done
-
-write_body() {
-  if [[ -n "$output_file" ]]; then
-    printf '%s' "$1" > "$output_file"
-  else
-    printf '%s' "$1"
-  fi
-}
-
+  stub_curl <<'EOF'
 printf '%s\n' "$*" >> "$CURL_LOG"
 case "$*" in
   *'/api/v2/auth/login'*)
@@ -294,14 +275,7 @@ EOF
 }
 
 write_lease() {
-  printf 'fixture-generation\n' > "${STATE_FILE%/*}/tunnel-generation"
-  cat > "$STATE_FILE" <<EOF
-CURRENT_PORT=$1
-CURRENT_IP=${2:-10.4.0.2}
-LEASE_EXPIRES_AT=$(( $(date +%s) + 600 ))
-LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
-LEASE_GENERATION=fixture-generation
-EOF
+  write_lease_fixture "$STATE_FILE" "$@"
 }
 
 write_qbt_env() {

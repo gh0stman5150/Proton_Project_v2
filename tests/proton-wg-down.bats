@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 export BATS_TEST_TIMEOUT=15
 
 setup() {
@@ -78,11 +80,8 @@ if [[ "$*" == *' -C '* ]]; then
 fi
 exit 0
 EOF
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat - >/dev/null
-EOF
-  chmod +x "$TMPBIN/ip" "$TMPBIN/docker" "$TMPBIN/wg" "$TMPBIN/wg-quick" "$TMPBIN/iptables" "$TMPBIN/systemd-cat"
+  stub_systemd_cat
+  chmod +x "$TMPBIN/ip" "$TMPBIN/docker" "$TMPBIN/wg" "$TMPBIN/wg-quick" "$TMPBIN/iptables"
 }
 
 @test "wg down removes Docker IPv6 owner rules before flushing the tunnel table" {

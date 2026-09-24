@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 export BATS_TEST_TIMEOUT=15
 
 setup() {
@@ -78,10 +80,7 @@ elif [[ "$1" == inspect ]]; then
 fi
 exit 0
 EOF
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat - >/dev/null
-EOF
+  stub_systemd_cat
   cat > "$TMPBIN/iptables" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${FAIL_FIREWALL_READ:-0}" == 1 ]]; then printf 'Permission denied\n' >&2; exit 1; fi
@@ -91,7 +90,7 @@ if [[ "$*" == *' -C '* ]]; then
 fi
 exit 0
 EOF
-  chmod +x "$TMPBIN/ip" "$TMPBIN/docker" "$TMPBIN/systemd-cat" "$TMPBIN/iptables"
+  chmod +x "$TMPBIN/ip" "$TMPBIN/docker" "$TMPBIN/iptables"
 }
 
 @test "firewall read failure prevents routing success cache publication" {

@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
@@ -7,27 +9,10 @@ setup() {
   export PATH="$TMPBIN:$PATH"
   export CURL_ARGS="$TEST_TMPDIR/curl-args.log"
 
-  cat > "$TMPBIN/curl" <<'EOF'
-#!/usr/bin/env bash
-output_file=""
+  stub_curl <<'EOF'
 for arg in "$@"; do
   printf '%s\n' "$arg" >> "$CURL_ARGS"
 done
-for ((i = 1; i <= $#; i++)); do
-  if [[ "${!i}" == "-o" ]]; then
-    next_index=$((i + 1))
-    output_file="${!next_index}"
-  fi
-done
-
-write_body() {
-  if [[ -n "$output_file" ]]; then
-    printf '%s' "$1" > "$output_file"
-  else
-    printf '%s' "$1"
-  fi
-}
-
 case "$*" in
   *'/api/v2/app/version'*)
     status="${QBT_TEST_VERSION_STATUS:-200}"
@@ -59,7 +44,6 @@ case "$*" in
     ;;
 esac
 EOF
-  chmod +x "$TMPBIN/curl"
 }
 
 @test "qbt_login uses data-urlencode so special-character credentials stay intact" {

@@ -4,8 +4,9 @@ setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
   export PROTON_COMMON_ENV="$TEST_TMPDIR/proton-common.env"
-  mkdir -p "$PROTON_INSTANCE_ROOT/sonarr" "$PROTON_INSTANCE_ROOT/prowlarr"
+  mkdir -p "$PROTON_INSTANCE_ROOT"
 
+  # Legacy global paths and a stale VPN_TABLE that per-instance values override.
   cat > "$PROTON_COMMON_ENV" <<'EOF'
 STATE_DIR=/run/proton
 STATE_FILE=/run/proton/proton-port.state
@@ -19,74 +20,120 @@ QBITTORRENT_ENV_FILE=/etc/proton/qbittorrent.env
 VPN_TABLE=51820
 EOF
 
-  cat > "$PROTON_INSTANCE_ROOT/sonarr/proton.env" <<'EOF'
-WG_PROFILE=pvsonarr
-VPN_INTERFACE=pvsonarr
-WG_CONFIG=/etc/proton/instances/sonarr/wireguard.conf
-WG_ADDRESS_SUBNET=4
+  local instance
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    create_instance "$instance"
+  done
+}
+
+# manifest_value INSTANCE COLUMN: a qbittorrent-instances.tsv field by header name.
+manifest_value() {
+  awk -F '\t' -v instance="$1" -v column="$2" '
+    NR == 1 { sub(/^# /, ""); for (i = 1; i <= NF; i++) if ($i == column) field = i; next }
+    $1 == instance { print $field; exit }
+  ' qbittorrent-instances.tsv
+}
+
+# Instance configs shaped like the installer's examples, from the manifest row.
+create_instance() {
+  local instance="$1"
+  local instance_dir="$PROTON_INSTANCE_ROOT/$instance"
+  local vpn_if
+  vpn_if="$(manifest_value "$instance" vpn_interface)"
+
+  mkdir -p "$instance_dir"
+  cat > "$instance_dir/proton.env" <<EOF
+INSTANCE_NAME=$instance
+WG_PROFILE=$vpn_if
+VPN_INTERFACE=$vpn_if
+WG_CONFIG=/etc/proton/instances/$instance/wireguard.conf
+WG_ADDRESS_SUBNET=$(manifest_value "$instance" address_subnet)
 EOF
 
-  cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
-QBT_INSTANCE_NAME=sonarr
-QBITTORRENT_URL=http://127.0.0.1:8083
-QBT_PORT_ENV_FILE=/etc/proton/instances/sonarr/qbittorrent-port.env
-EOF
-
-  cat > "$PROTON_INSTANCE_ROOT/prowlarr/proton.env" <<'EOF'
-WG_PROFILE=pvprowl
-VPN_INTERFACE=pvprowl
-WG_CONFIG=/etc/proton/instances/prowlarr/wireguard.conf
-WG_ADDRESS_SUBNET=6
-EOF
-
-  cat > "$PROTON_INSTANCE_ROOT/prowlarr/qbittorrent.env" <<'EOF'
-QBT_INSTANCE_NAME=prowlarr
-QBITTORRENT_URL=http://127.0.0.1:8085
-QBT_PORT_ENV_FILE=/etc/proton/instances/prowlarr/qbittorrent-port.env
+  cat > "$instance_dir/qbittorrent.env" <<EOF
+QBT_INSTANCE_NAME=$instance
+QBITTORRENT_URL=http://127.0.0.1:$(manifest_value "$instance" webui_port)
+QBT_CONTAINER_NAME=qbittorrent-$instance
+QBT_PORT_ENV_FILE=/etc/proton/instances/$instance/qbittorrent-port.env
 EOF
 }
 
-@test "instance loader rejects missing instance name" {
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init "" 2>&1'
+write_wireguard_config() {
+  cat > "$PROTON_INSTANCE_ROOT/$1/wireguard.conf" <<EOF
+[Interface]
+PrivateKey = test-private-key-$1
+Address = 10.2.0.2/32
+DNS = 10.2.0.1
 
+[Peer]
+PublicKey = test-public-key
+AllowedIPs = 0.0.0.0/0
+Endpoint = $2
+EOF
+}
+
+@test "instance loader accepts the five managed names and rejects everything else" {
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    run bash -c 'source ./proton-instance-common.sh; proton_validate_instance_name "$1"' _ "$instance"
+    [ "$status" -eq 0 ]
+  done
+
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init "" 2>&1'
   [ "$status" -ne 0 ]
   [[ "$output" == *"Instance name is required"* ]]
-}
 
-@test "instance loader rejects unsafe or unsupported instance name" {
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init "../sonarr" 2>&1'
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"Unsafe instance name"* ]]
+  for instance in "../sonarr" "sonarr.prod"; do
+    run bash -c 'source ./proton-instance-common.sh; proton_instance_init "$1" 2>&1' _ "$instance"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unsafe instance name"* ]]
+  done
 
   run bash -c 'source ./proton-instance-common.sh; proton_instance_init readarr 2>&1'
-
   [ "$status" -ne 0 ]
   [[ "$output" == *"Unsupported instance"* ]]
   [[ "$output" == *"Allowed instances: lidarr,radarr,sonarr,whisparr,prowlarr"* ]]
 }
 
-@test "instance loader rebases legacy global paths to the selected instance" {
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n%s\n%s\n%s\n%s\n%s\n%s\n" "$STATE_DIR" "$STATE_FILE" "$CACHE_FILE" "$RECOVERY_LOCK_FILE" "$SERVER_SELECTION_FILE" "$DOCKER_CONFIG_DIR" "$QBITTORRENT_URL"'
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"/run/proton/sonarr"* ]]
-  [[ "$output" == *"/run/proton/sonarr/proton-port.state"* ]]
-  [[ "$output" == *"/run/proton/sonarr/qbt-port.cache"* ]]
-  [[ "$output" == *"/run/proton/sonarr/recovery.lock"* ]]
-  [[ "$output" == *"/run/proton/sonarr/current-server.env"* ]]
-  [[ "$output" == *"/run/proton/sonarr/docker-config"* ]]
-  [[ "$output" == *"http://127.0.0.1:8083"* ]]
+@test "each managed instance loads only its own config" {
+  # Anchor the manifest lookup so an empty field cannot pass trivially.
+  [ "$(manifest_value prowlarr webui_port)" = 8082 ]
+  [ "$(manifest_value sonarr vpn_interface)" = pvsonarr ]
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    run bash -c 'source ./proton-instance-common.sh; proton_instance_init "$1"; printf "%s\n" "$INSTANCE" "$VPN_INTERFACE" "$STATE_DIR" "$QBITTORRENT_URL"' _ "$instance"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$instance"$'\n'"$(manifest_value "$instance" vpn_interface)"$'\n'"/run/proton/$instance"$'\n'"http://127.0.0.1:$(manifest_value "$instance" webui_port)" ]
+  done
 }
 
-@test "instance loader accepts prowlarr manual-download instance" {
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init prowlarr; printf "%s\n%s\n%s\n%s\n" "$INSTANCE" "$VPN_INTERFACE" "$STATE_DIR" "$QBITTORRENT_URL"'
+@test "instance loader rebases legacy global paths to the selected instance" {
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n" "$STATE_DIR" "$STATE_FILE" "$CACHE_FILE" "$RECOVERY_LOCK_FILE" "$SERVER_SELECTION_FILE" "$DOCKER_CONFIG_DIR" "$QBT_SYNC_LOCK_FILE"'
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"prowlarr"* ]]
-  [[ "$output" == *"pvprowl"* ]]
-  [[ "$output" == *"/run/proton/prowlarr"* ]]
-  [[ "$output" == *"http://127.0.0.1:8085"* ]]
+  [ "$output" = "$(printf '%s\n' /run/proton/sonarr /run/proton/sonarr/proton-port.state /run/proton/sonarr/qbt-port.cache \
+    /run/proton/sonarr/recovery.lock /run/proton/sonarr/current-server.env /run/proton/sonarr/docker-config \
+    /run/proton/sonarr/qbt-sync.lock)" ]
+}
+
+@test "a shared Proton server endpoint still keeps instance tunnels isolated" {
+  for instance in lidarr radarr; do
+    write_wireguard_config "$instance" "203.0.113.10:51820"
+    run bash -c 'source ./proton-instance-common.sh; proton_instance_init "$1"; printf "%s\n" "$WG_CONFIG" "$VPN_INTERFACE" "$STATE_FILE" "$QBT_PORT_ENV_FILE"' _ "$instance"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf '%s\n' "/etc/proton/instances/$instance/wireguard.conf" "pv$instance" \
+      "/run/proton/$instance/proton-port.state" "/etc/proton/instances/$instance/qbittorrent-port.env")" ]
+  done
+}
+
+@test "missing required instance env files fail safely" {
+  rm -f "$PROTON_INSTANCE_ROOT/radarr/proton.env"
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init radarr 2>&1'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Instance Proton env not found"* ]]
+
+  rm -f "$PROTON_INSTANCE_ROOT/lidarr/qbittorrent.env"
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init lidarr 2>&1'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Instance qBittorrent env not found"* ]]
 }
 
 @test "instance loader propagates failed env sourcing even in a conditional caller" {
@@ -107,21 +154,15 @@ EOF
 }
 
 @test "instance loader derives a distinct tunnel subnet, DNS, and NAT-PMP gateway" {
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n%s\n%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY" "$VPN_TABLE" "$QBT_VPN_RULE_PRIORITY"'
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"10.4.0.2/32"* ]]
-  [[ "$output" == *"10.4.0.1"* ]]
-  [[ "$output" == *"51804"* ]]
-  [[ "$output" == *"114"* ]]
-
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init prowlarr; printf "%s\n%s\n%s\n%s\n%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY" "$VPN_TABLE" "$QBT_VPN_RULE_PRIORITY"'
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"10.6.0.2/32"* ]]
-  [[ "$output" == *"10.6.0.1"* ]]
-  [[ "$output" == *"51806"* ]]
-  [[ "$output" == *"116"* ]]
+  [ "$(manifest_value sonarr address_subnet)" = 4 ]
+  [ "$(manifest_value sonarr vpn_table)" = 51804 ]
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    subnet="$(manifest_value "$instance" address_subnet)"
+    run bash -c 'source ./proton-instance-common.sh; proton_instance_init "$1"; printf "%s\n" "$WG_TUNNEL_ADDRESS" "$WG_TUNNEL_DNS" "$NATPMP_GATEWAY" "$VPN_TABLE" "$QBT_VPN_RULE_PRIORITY"' _ "$instance"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf '%s\n' "10.$subnet.0.2/32" "10.$subnet.0.1" "10.$subnet.0.1" \
+      "$(manifest_value "$instance" vpn_table)" "$(manifest_value "$instance" qbt_rule_priority)")" ]
+  done
 }
 
 @test "instance loader rejects an out-of-range tunnel subnet" {

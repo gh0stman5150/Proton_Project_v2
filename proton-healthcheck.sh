@@ -18,6 +18,10 @@ QBITTORRENT_SYNC_SCRIPT="${QBITTORRENT_SYNC_SCRIPT:-/usr/local/bin/proton/proton
 PORT_FORWARD_SCRIPT="${PORT_FORWARD_SCRIPT:-/usr/local/bin/proton/proton-port-forward-safe.sh}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-qbittorrent-common.sh}"
+# proton-healthcheck.env is optional; these match its template values.
+CHECK_INTERVAL="${CHECK_INTERVAL:-60}"
+MIN_COMBINED_SPEED_BPS="${MIN_COMBINED_SPEED_BPS:-65536}"
+MAX_LOW_SPEED_CHECKS="${MAX_LOW_SPEED_CHECKS:-3}"
 PORT_STABILITY_GRACE_SECONDS="${PORT_STABILITY_GRACE_SECONDS:-180}"
 
 log() {

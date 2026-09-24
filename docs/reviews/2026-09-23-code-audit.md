@@ -544,39 +544,71 @@ mutation-checked: it fails when the change is reverted or the code is broken.
 
 ## 6. Tests
 
-- [ ] **6.1 Missing behavioral coverage (C).**
+- [x] **6.1 Missing behavioral coverage (C).**
   `tools/reconcile-qbittorrent-fleet.sh` (fleet D-state/zombie gate) is covered
   only by string greps; `nas-network-online.sh` only by greps;
   `proton-killswitch-dispatch.sh` has no test. Add PATH-stubbed behavioral
   tests.
-- [ ] **6.2 Healthcheck defaults (P — verify).** `CHECK_INTERVAL`,
+- [x] **6.2 Healthcheck defaults (P — verify).** `CHECK_INTERVAL`,
   `MIN_COMBINED_SPEED_BPS`, `MAX_LOW_SPEED_CHECKS` reportedly have no built-in
   defaults while the env file is optional (`EnvironmentFile=-` and
   `proton_source_env_if_present`); under `set -u` a missing
   `/etc/proton/proton-healthcheck.env` would crash the loop. Add defaults
   matching the template, plus a test.
-- [ ] **6.3 Shared stubs (C).** `systemd-cat` stub recreated in ~10 files;
+- [x] **6.3 Shared stubs (C).** `systemd-cat` stub recreated in ~10 files;
   `flock`/`nft`/`ip`/`docker` stubs repeated; `write_body` duplicated in
   `proton-qbittorrent-auth.bats` and the sync helper; lease writers duplicated.
   Create `tests/common-stubs.bash` loaded with `load`.
-- [ ] **6.4 Instance tests (C).** `proton-instances.bats` and
+- [x] **6.4 Instance tests (C).** `proton-instances.bats` and
   `proton-instance-common.bats` have near-identical `setup()` and overlapping
   cases; fixture ports contradict the manifest (sonarr 8083/prowlarr 8085 vs
   TSV 8084/8082). Merge or share a TSV-driven helper.
-- [ ] **6.5 Grep-only installer/unit tests (C).** Most of
+- [x] **6.5 Grep-only installer/unit tests (C).** Most of
   `installer-instance-layout.bats` and `systemd-units.bats` assert source
   strings. Convert key ones (e.g. `upsert_instance_env_value`, port artifact
   normalization) to behavioral tests.
-- [ ] **6.6 `docs-archive-contract.bats` (C).** ~45 `grep -Fq` lines pin exact
+- [x] **6.6 `docs-archive-contract.bats` (C).** ~45 `grep -Fq` lines pin exact
   prose across seven documents, including a dated status note and the same
   kernel/`cache=none` facts in five places — enforcing duplication `AGENTS.md`
   says to avoid. Keep only true invariants, each pinned in its owning doc.
-- [ ] **6.7 Fixed sleeps (C, low).** `proton-port-forward.bats` (`sleep 1` ×2),
+- [x] **6.7 Fixed sleeps (C, low).** `proton-port-forward.bats` (`sleep 1` ×2),
   `proton-route-lock.bats` (`sleep 1`), `proton-killswitch-contract.bats`
   (0.2 s). Replace with marker files or polling.
-- [ ] **6.8 `all-scripts.bats` (C).** `find . -name '*.sh'` walks `bats-core/`,
+- [x] **6.8 `all-scripts.bats` (C).** `find . -name '*.sh'` walks `bats-core/`,
   `Archive/`, `.git/`. Use `git ls-files '*.sh'` or drop it (duplicates
   `bash -n` validation).
+
+Section 6 resolved, 2026-09-23 (canonical Linux checkout, source-only, not
+installed). Each new behavioral test was mutation-checked.
+
+- 6.1: the reconciler's gate became a behavioral fleet-preflight test under
+  5.4. `nas-network-online.sh` and `proton-killswitch-dispatch.sh` now have
+  PATH-stubbed tests, and the two NAS source greps were removed. The
+  dispatcher passes no arguments to its backend; the unit calls it with none.
+- 6.2: confirmed. `proton-healthcheck.sh` now defaults the three thresholds
+  to the template values (60, 65536, 3). A test runs it with no env file.
+  This is the only runtime change in section 6.
+- 6.3: `tests/common-stubs.bash` provides `stub_command`, `stub_systemd_cat`
+  (discard, stdout, or a log), `stub_curl` (the shared `-o`/`write_body`
+  prelude) and `write_lease_fixture`. Stubs whose output a test asserts
+  on stay in their own files.
+- 6.4: `proton-instances.bats` was merged into `proton-instance-common.bats`.
+  Its fixture is built from `qbittorrent-instances.tsv`, so the port
+  contradiction is gone, and the name, isolation and derivation tests cover
+  all five instances.
+- 6.5: config preservation, contract-key reconciliation and port-artifact
+  normalization run through the real `install_instance_examples` against a
+  temporary `/etc/proton`, including refusal of invalid artifacts. The unit
+  file greps stay: the unit files are the artifacts themselves.
+- 6.6: the file pins each safety invariant once, in `AGENTS.md`, and checks
+  that every path in its documentation map exists. Dated incident prose and
+  the repeated storage/kernel sentences are no longer pinned. Section 7.3
+  covers the duplicated text itself.
+- 6.7: the route-lock holder and the nft apply stub block on release markers
+  instead of sleeping. The concurrency test is now deterministic: a second
+  apply with no lock wait must time out before reaching `nft`. The sync
+  stubs' `sleep 1` did nothing and was removed.
+- 6.8: the test walks `git ls-files '*.sh'` and fails on an empty listing.
 
 ## 7. Documentation and instructions
 

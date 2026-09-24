@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 @test "both firewall backends refuse to touch the ruleset while the shared lock is held" {
   for backend in nft safe; do
     run bash -c '
@@ -25,17 +27,13 @@ setup() {
   export NFT_LOG="$TEST_TMPDIR/nft.log"
   export NFT_STDIN="$TEST_TMPDIR/nft.stdin"
   export SYSTEMD_LOG="$TEST_TMPDIR/systemd.log"
-  export NFT_CONCURRENCY_LOG="$TEST_TMPDIR/nft-concurrency.log"
-  export NFT_ACTIVE_DIR="$TEST_TMPDIR/nft-active"
+  export NFT_APPLY_ENTERED="$TEST_TMPDIR/nft-apply.entered"
+  export NFT_APPLY_RELEASE="$TEST_TMPDIR/nft-apply.release"
   export STATE_DIR="$TEST_TMPDIR/state"
   export KILLSWITCH_LOCK_FILE="$TEST_TMPDIR/killswitch.lock"
   mkdir -p "$STATE_DIR"
 
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat - >> "$SYSTEMD_LOG"
-EOF
-  chmod +x "$TMPBIN/systemd-cat"
+  stub_systemd_cat '$SYSTEMD_LOG'
 
   cat > "$TMPBIN/wg" <<'EOF'
 #!/usr/bin/env bash
@@ -96,12 +94,13 @@ EOF
   cat > "$TMPBIN/nft" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == '-f' ]]; then
-  if [[ "${TEST_NFT_CONCURRENCY:-0}" == 1 ]]; then
-    if ! mkdir "$NFT_ACTIVE_DIR" 2>/dev/null; then
-      printf '%s\n' overlap >> "$NFT_CONCURRENCY_LOG"
-    fi
-    /bin/sleep 0.2
-    rmdir "$NFT_ACTIVE_DIR" 2>/dev/null || true
+  # A blocking apply signals entry, then holds until the test releases it.
+  if [[ "${TEST_NFT_BLOCK_APPLY:-0}" == 1 ]]; then
+    : > "$NFT_APPLY_ENTERED"
+    for _ in {1..500}; do
+      [[ -f "$NFT_APPLY_RELEASE" ]] && break
+      /bin/sleep 0.02
+    done
   fi
   cat > "$NFT_STDIN"
   exit "${TEST_NFT_APPLY_FAIL:-0}"
@@ -178,18 +177,29 @@ EOF
   [ -f "$KILLSWITCH_LOCK_FILE" ]
 }
 
-@test "nft backend serializes concurrent watcher applies" {
-  run bash -c '
-    TEST_NFT_CONCURRENCY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh &
-    first=$!
-    TEST_NFT_CONCURRENCY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh &
-    second=$!
-    wait "$first"
-    wait "$second"
-  '
+@test "nft backend holds the firewall lock across its ruleset apply" {
+  TEST_NFT_BLOCK_APPLY=1 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton \
+    bash ./proton-killswitch-nft.sh &
+  first=$!
+  for _ in {1..500}; do
+    [[ -f "$NFT_APPLY_ENTERED" ]] && break
+    sleep 0.02
+  done
+  [ -f "$NFT_APPLY_ENTERED" ]
+  rm -f "$NFT_APPLY_ENTERED"
 
+  # A concurrent watcher apply must not reach nft while the first holds the lock.
+  run env PROTON_FIREWALL_LOCK_WAIT_SECONDS=0 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton \
+    bash ./proton-killswitch-nft.sh
+  [ "$status" -ne 0 ]
+  grep -F "Timed out waiting for kill-switch lock: $KILLSWITCH_LOCK_FILE" "$SYSTEMD_LOG"
+  [ ! -e "$NFT_STDIN" ]
+
+  : > "$NFT_APPLY_RELEASE"
+  wait "$first"
+
+  run env DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton bash ./proton-killswitch-nft.sh
   [ "$status" -eq 0 ]
-  [ ! -s "$NFT_CONCURRENCY_LOG" ]
 }
 
 @test "nft backend allows Docker IPv6 only through Proton and installs scoped NAT66" {

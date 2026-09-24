@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 setup() {
   export BATS_TEST_TIMEOUT=20
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
@@ -25,11 +27,7 @@ setup() {
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_POOL_DIR"
   : > "$PROTON_COMMON_ENV_FILE"
 
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat - >/dev/null
-EOF
-  chmod +x "$TMPBIN/systemd-cat"
+  stub_systemd_cat
 
   cat > "$TMPBIN/getent" <<'EOF'
 #!/usr/bin/env bash
@@ -216,10 +214,7 @@ EOF
 @test "an expired selection budget fails with its own reason instead of empty retries" {
   write_pool_config wg-a host-a
   printf 'wg-a\t1\t40000\n' > "$PF_CAPABLE_PROFILES_FILE"
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat - >> "$SELECTOR_LOG"
-EOF
+  stub_systemd_cat '$SELECTOR_LOG'
 
   run env SELECTOR_LOG="$TEST_TMPDIR/selector.log" SERVER_SELECTION_BUDGET_SECONDS=0 \
     bash ./proton-server-manager.sh select

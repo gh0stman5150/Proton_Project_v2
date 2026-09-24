@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 export BATS_TEST_TIMEOUT=20
 
 setup() {
@@ -56,11 +58,7 @@ DNS = 10.2.0.1
 AllowedIPs = 0.0.0.0/0
 EOF
 
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat -
-EOF
-  chmod +x "$TMPBIN/systemd-cat"
+  stub_systemd_cat stdout
 
   cat > "$TMPBIN/wg-quick" <<'EOF'
 #!/usr/bin/env bash
@@ -135,11 +133,7 @@ exit 0
 EOF
   chmod +x "$TMPBIN/iptables"
 
-  cat > "$TMPBIN/sleep" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$TMPBIN/sleep"
+  stub_command sleep 'exit 0'
 }
 
 @test "wg up filters the known false world-accessible warning noise for runtime configs" {

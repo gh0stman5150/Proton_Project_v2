@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 export BATS_TEST_TIMEOUT=15
 
 setup() {
@@ -49,17 +51,9 @@ SELECTED_WG_PROFILE=wg-good
 SELECTED_CONFIG=$TEST_TMPDIR/wg-good.conf
 EOF
 
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat - >/dev/null
-EOF
-  chmod +x "$TMPBIN/systemd-cat"
+  stub_systemd_cat
 
-  cat > "$TMPBIN/flock" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$TMPBIN/flock"
+  stub_command flock 'exit 0'
 
   cat > "$TMPBIN/ip" <<'EOF'
 #!/usr/bin/env bash
@@ -138,7 +132,6 @@ EOF
   cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
 kill -TERM "$PPID"
-sleep 1
 exit 0
 EOF
   chmod +x "$QBITTORRENT_SYNC_SCRIPT"
@@ -259,7 +252,6 @@ EOF
   cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
 kill -TERM "$PPID"
-sleep 1
 exit 0
 EOF
   chmod +x "$QBITTORRENT_SYNC_SCRIPT"
@@ -529,10 +521,7 @@ case "$1" in
   *) exit 0 ;;
 esac
 EOF
-  cat > "$TMPBIN/journalctl" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
+  stub_command journalctl 'exit 0'
   cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
 touch "$STATE_DIR/synced"

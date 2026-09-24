@@ -1,15 +1,11 @@
 #!/usr/bin/env bats
 
-setup() {
-  TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
-  TMPBIN="$TEST_TMPDIR/bin"
-  mkdir -p "$TMPBIN"
-  export PATH="$TMPBIN:$PATH"
-}
-
-@test "all shell scripts have a shebang and pass bash -n syntax check" {
+@test "all tracked shell scripts have a shebang and pass bash -n syntax check" {
+  cd "$BATS_TEST_DIRNAME/.."
   failed=0
+  checked=0
   while IFS= read -r -d '' script; do
+    checked=$((checked + 1))
     [ -f "$script" ] || { echo "MISSING: $script"; failed=1; continue; }
     first=$(sed -n '1p' "$script" 2>/dev/null || true)
     if [ "${first:0:2}" != "#!" ]; then
@@ -22,7 +18,9 @@ setup() {
       echo "SYNTAX_ERROR in $script: $output"
       failed=1
     fi
-  done < <(find . -type f -name '*.sh' -print0)
+  done < <(git ls-files -z '*.sh')
 
+  # An empty listing (for example outside a git checkout) must not pass.
+  [ "$checked" -gt 0 ]
   [ "$failed" -eq 0 ]
 }

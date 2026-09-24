@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 export BATS_TEST_TIMEOUT=15
 
 setup() {
@@ -61,23 +63,11 @@ esac
 EOF
   chmod +x "$TMPBIN/curl"
 
-  cat > "$TMPBIN/flock" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$TMPBIN/flock"
+  stub_command flock 'exit 0'
 
-  cat > "$TMPBIN/systemctl" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$TMPBIN/systemctl"
+  stub_command systemctl 'exit 0'
 
-  cat > "$TMPBIN/systemd-cat" <<'EOF'
-#!/usr/bin/env bash
-cat -
-EOF
-  chmod +x "$TMPBIN/systemd-cat"
+  stub_systemd_cat stdout
 
   cat > "$TEST_TMPDIR/qb-sync.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -99,15 +89,8 @@ EOF
 }
 
 write_health_lease() {
-  printf 'fixture-generation\n' > "$TEST_TMPDIR/tunnel-generation"
-  cat > "$TEST_TMPDIR/proton-port.state" <<EOF
-CURRENT_PORT=45678
-CURRENT_IP=10.2.0.2
-LEASE_EXPIRES_AT=$(( $(date +%s) + 600 ))
-LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
-LEASE_GENERATION=fixture-generation
-PORT_CHANGED_AT=$(( $(date +%s) - $1 ))
-EOF
+  write_lease_fixture "$TEST_TMPDIR/proton-port.state" 45678 10.2.0.2
+  printf 'PORT_CHANGED_AT=%s\n' "$(( $(date +%s) - $1 ))" >> "$TEST_TMPDIR/proton-port.state"
 }
 
 @test "recent forwarded-port changes suppress low-throughput recovery" {
@@ -160,6 +143,18 @@ EOF
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"Low throughput detected"* ]]
+}
+
+@test "missing healthcheck env file falls back to the template thresholds" {
+  rm -f "$PROTON_HEALTHCHECK_ENV"
+
+  run env -u CHECK_INTERVAL -u MIN_COMBINED_SPEED_BPS -u MAX_LOW_SPEED_CHECKS \
+    QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
+    QBT_COMMON_SCRIPT="$QBT_COMMON_SCRIPT" \
+    bash ./proton-healthcheck.sh sonarr
+
+  [ "$status" -eq 42 ]
+  [[ "$output" == *"Low throughput detected (0 B/s, 1/3, stage 0)"* ]]
 }
 
 @test "failed NAT-PMP recovery reports the real non-zero exit code" {

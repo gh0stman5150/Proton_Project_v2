@@ -34,21 +34,91 @@
   grep -Fq 'systemctl reset-failed "${LEGACY_SINGLETON_SERVICES[@]}"' install-proton-systemd.sh
 }
 
-@test "installer creates instance examples and preserves real configs" {
-  grep -Fq '${ETC_PROTON_DIR}/instances/${instance}' install-proton-systemd.sh
-  grep -Fq 'proton.env.example' install-proton-systemd.sh
-  grep -Fq 'qbittorrent.env.example' install-proton-systemd.sh
-  grep -Fq 'qbittorrent-port.env' install-proton-systemd.sh
-  grep -Fq 'Preserved ${instance_dir}/${real_config}' install-proton-systemd.sh
-  grep -Fq 'Preserved and normalized ${port_env} to one QBT_PUBLISHED_PORT assignment' install-proton-systemd.sh
-  grep -Fq 'chmod 0600 "${instance_dir}/${real_config}"' install-proton-systemd.sh
-  grep -Fq 'chmod 0600 "$temp_file"' install-proton-systemd.sh
+# Runs the installer's instance setup against a temporary /etc/proton with
+# chown and root-owned install stubbed out.
+run_install_instance_examples() {
+  run bash -c '
+    set -euo pipefail
+    SCRIPT_DIR="$PWD"
+    ETC_PROTON_DIR="$1"
+    INSTANCE_MANIFEST_SOURCE=qbittorrent-instances.tsv
+    for fn in load_instance_manifest instance_manifest_value instance_webui_port instance_vpn_interface \
+      instance_address_subnet instance_vpn_table instance_qbt_rule_priority normalize_text_file \
+      upsert_instance_env_value normalize_instance_qbittorrent_port_env install_instance_examples; do
+      eval "$(sed -n "/^${fn}() {/,/^}/p" install-proton-systemd.sh)"
+    done
+    chown() { :; }
+    install_normalized_file() {
+      normalize_text_file "$1" "$2.tmp"
+      install -m "$3" "$2.tmp" "$2"
+      rm -f "$2.tmp"
+    }
+    log() { printf "%s\n" "$*"; }
+    load_instance_manifest
+    install_instance_examples
+  ' _ "$ETC_FIXTURE"
 }
 
-@test "installer reconciles fleet contract keys in preserved instance configs" {
-  grep -Fq 'upsert_instance_env_value "$proton_env" VPN_TABLE "$vpn_table"' install-proton-systemd.sh
-  grep -Fq 'upsert_instance_env_value "$proton_env" QBT_VPN_RULE_PRIORITY "$qbt_rule_priority"' install-proton-systemd.sh
-  grep -Fq 'upsert_instance_env_value "$qb_env" QBT_INSTANCE_NAME "$instance"' install-proton-systemd.sh
+@test "installer preserves real configs while reconciling contract keys and port artifacts" {
+  ETC_FIXTURE="$BATS_TEST_TMPDIR/etc-proton"
+  sonarr="$ETC_FIXTURE/instances/sonarr"
+  mkdir -p "$sonarr"
+  printf 'WG_CONFIG=/fixture/wg.conf\nVPN_TABLE=99\nVPN_TABLE=98\nWG_ADDRESS_SUBNET=4\n' > "$sonarr/proton.env"
+  printf 'QBITTORRENT_USER=fixture\nQBITTORRENT_PASS=synthetic\n' > "$sonarr/qbittorrent.env"
+  printf '# stale\nQBT_FORWARDED_PORT=1111\nQBT_PUBLISHED_PORT=51413\nQBT_PUBLISHED_PORT=2222\n' \
+    > "$sonarr/qbittorrent-port.env"
+  chmod 0644 "$sonarr/proton.env" "$sonarr/qbittorrent.env"
+
+  run_install_instance_examples
+
+  [ "$status" -eq 0 ]
+  expected_table="$(awk -F '\t' '$1 == "sonarr" { print $6 }' qbittorrent-instances.tsv)"
+  expected_priority="$(awk -F '\t' '$1 == "sonarr" { print $7 }' qbittorrent-instances.tsv)"
+  [ "$(cat "$sonarr/proton.env")" = "$(printf 'WG_CONFIG=/fixture/wg.conf\nVPN_TABLE=%s\nWG_ADDRESS_SUBNET=4\nQBT_VPN_RULE_PRIORITY=%s' "$expected_table" "$expected_priority")" ]
+  [ "$(cat "$sonarr/qbittorrent.env")" = "$(printf 'QBITTORRENT_USER=fixture\nQBITTORRENT_PASS=synthetic\nQBT_INSTANCE_NAME=sonarr')" ]
+  [ "$(cat "$sonarr/qbittorrent-port.env")" = "$(printf '# Managed by proton-qbittorrent-sync-safe.sh\nQBT_PUBLISHED_PORT=51413')" ]
+  [ "$(stat -c %a "$sonarr/proton.env")" = 600 ]
+  [ "$(stat -c %a "$sonarr/qbittorrent.env")" = 600 ]
+  [ "$(stat -c %a "$sonarr/qbittorrent-port.env")" = 600 ]
+  [[ "$output" == *"Preserved and normalized $sonarr/qbittorrent-port.env to one QBT_PUBLISHED_PORT assignment"* ]]
+  [[ "$output" == *"Preserved $sonarr/qbittorrent.env"* ]]
+
+  # Instances without real configs get examples and the port template only.
+  prowlarr="$ETC_FIXTURE/instances/prowlarr"
+  [ ! -e "$prowlarr/proton.env" ]
+  [ ! -e "$prowlarr/qbittorrent.env" ]
+  cmp proton-qbittorrent-port.env "$prowlarr/qbittorrent-port.env"
+  grep -Fx 'VPN_TABLE=51806' "$prowlarr/proton.env.example"
+  grep -Fx 'QBT_VPN_RULE_PRIORITY=116' "$prowlarr/proton.env.example"
+  for line in QBT_INSTANCE_NAME=prowlarr QBITTORRENT_URL=http://192.168.237.78:8082 \
+    QBT_CONTAINER_NAME=qbittorrent-prowlarr QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent-prowlarr \
+    QBT_COMPOSE_SERVICE=qbittorrent-prowlarr QBT_NETWORK_NAME=starr_network \
+    "QBT_PORT_ENV_FILE=$ETC_FIXTURE/instances/prowlarr/qbittorrent-port.env"; do
+    grep -Fx "$line" "$prowlarr/qbittorrent.env.example"
+  done
+  [ "$(stat -c %a "$prowlarr")" = 700 ]
+  [ "$(stat -c %a "$prowlarr/qbittorrent.env.example")" = 600 ]
+  ! grep -rq 'QBT_FORWARDED_PORT' "$ETC_FIXTURE"
+}
+
+@test "the port artifact template holds one published-port assignment" {
+  [ "$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' proton-qbittorrent-port.env)" = 'QBT_PUBLISHED_PORT=6881' ]
+  ! grep -Fq 'QBT_FORWARDED_PORT=' proton-qbittorrent-sync-safe.sh
+}
+
+@test "installer refuses to normalize a port artifact without a valid published port" {
+  ETC_FIXTURE="$BATS_TEST_TMPDIR/etc-proton"
+  for artifact in 'QBT_FORWARDED_PORT=51413' 'QBT_PUBLISHED_PORT=0' 'QBT_PUBLISHED_PORT=70000' 'QBT_PUBLISHED_PORT='; do
+    rm -rf "$ETC_FIXTURE"
+    mkdir -p "$ETC_FIXTURE/instances/lidarr"
+    printf '%s\n' "$artifact" > "$ETC_FIXTURE/instances/lidarr/qbittorrent-port.env"
+
+    run_install_instance_examples
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"invalid or missing QBT_PUBLISHED_PORT"* ]]
+    [ "$(cat "$ETC_FIXTURE/instances/lidarr/qbittorrent-port.env")" = "$artifact" ]
+  done
 }
 
 @test "installer manifest accessors read the columns named in the manifest header" {
@@ -124,17 +194,9 @@ EOF
   [ "$(cat "$BATS_TEST_TMPDIR/samples/qbittorrent-sonarr")" = 3 ]
 }
 
-@test "installer includes prowlarr manual-download instance defaults" {
+@test "manifest pins the prowlarr and whisparr identity rows" {
   grep -Fq $'prowlarr\t8082\t10.6.0.2\tpvprowlarr\t6\t51806\t116' qbittorrent-instances.tsv
   grep -Fq $'whisparr\t8085\t10.5.0.2\tpvwhisparr\t5\t51805\t115' qbittorrent-instances.tsv
-  grep -Fq 'QBT_CONTAINER_NAME=qbittorrent-${instance}' install-proton-systemd.sh
-  grep -Fq 'QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent-${instance}' install-proton-systemd.sh
-  grep -Fq 'QBT_COMPOSE_SERVICE=qbittorrent-${instance}' install-proton-systemd.sh
-  grep -Fq 'QBT_PORT_ENV_FILE=${ETC_PROTON_DIR}/instances/${instance}/qbittorrent-port.env' install-proton-systemd.sh
-  grep -Fq 'QBT_NETWORK_NAME=starr_network' install-proton-systemd.sh
-  grep -Fq 'normalize_instance_qbittorrent_port_env "$port_env"' install-proton-systemd.sh
-  grep -Fq 'QBT_PUBLISHED_PORT=%s' install-proton-systemd.sh
-  ! grep -Fq 'QBT_FORWARDED_PORT=' install-proton-systemd.sh
 }
 
 @test "cleanup scripts install at the existing flat runtime paths" {

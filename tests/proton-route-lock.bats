@@ -6,6 +6,7 @@ setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   export ROUTE_LOCK_FILE="$TEST_TMPDIR/policy-routing.lock"
   export ROUTE_LOCK_READY="$TEST_TMPDIR/holder.ready"
+  export ROUTE_LOCK_RELEASE="$TEST_TMPDIR/holder.release"
 }
 
 @test "the global policy-route lock excludes concurrent route mutation" {
@@ -15,7 +16,11 @@ setup() {
     source ./proton-instance-common.sh
     proton_route_lock_acquire
     : > "$ROUTE_LOCK_READY"
-    sleep 1
+    # Hold the lock until the contended attempt below has run.
+    for _ in {1..500}; do
+      [[ -f "$ROUTE_LOCK_RELEASE" ]] && break
+      sleep 0.02
+    done
     proton_route_lock_release
   ) &
   holder_pid=$!
@@ -33,6 +38,7 @@ setup() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"Timed out"* ]]
 
+  : > "$ROUTE_LOCK_RELEASE"
   wait "$holder_pid"
 
   run env \

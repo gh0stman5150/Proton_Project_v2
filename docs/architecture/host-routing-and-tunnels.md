@@ -140,6 +140,9 @@ Shared template thresholds:
 3. `MAX_LOW_SPEED_CHECKS=3`
 4. `PORT_STABILITY_GRACE_SECONDS=180`
 
+`/etc/proton/proton-healthcheck.env` is optional. The script falls back to these
+same values when a key is unset.
+
 The healthcheck also pauses its low-throughput recovery ladder for a short
 stabilization window after each forwarded-port update so normal NAT-PMP churn
 and qBittorrent port reconfiguration do not immediately trigger another round
