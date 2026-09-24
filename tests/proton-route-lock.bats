@@ -169,3 +169,60 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(stat -c %i "$KILLSWITCH_LOCK_FILE")" = "$inode" ]
 }
+
+write_stateful_rule_stub() {
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/ip" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$RULE_LOG"
+if [[ "${1:-}" == -6 ]]; then shift; fi
+if [[ "$1 $2" == "rule show" ]]; then
+  [[ "${SHOW_FAIL:-0}" == 1 ]] && exit 1
+  awk -v table="$4" '$NF == table' "$RULES"
+  exit 0
+fi
+if [[ "$1 $2" == "rule del" && "$3" == lookup && "$5" == priority ]]; then
+  match="$(awk -v table="$4" -v priority="$6" '$NF == table && $1 == priority ":" { print NR; exit }' "$RULES")"
+  if [[ -z "$match" ]]; then
+    printf 'RTNETLINK answers: No such file or directory' >&2
+    exit 2
+  fi
+  sed -i "${match}d" "$RULES"
+  exit 0
+fi
+exit 1
+STUB
+  chmod +x "$TEST_TMPDIR/bin/ip"
+}
+
+@test "table sweep removes rules at unowned priorities for any source and keeps owned and foreign-table rules" {
+  write_stateful_rule_stub
+  export RULES="$TEST_TMPDIR/rules" RULE_LOG="$TEST_TMPDIR/rule.log"
+  printf '%s\n' \
+    $'100:\tfrom all fwmark 0xca6c lookup 51806' \
+    $'110:\tfrom 192.168.96.8 lookup 51806' \
+    $'110:\tfrom 192.168.96.0/20 lookup 51806' \
+    $'115:\tfrom 192.168.96.8 lookup 51805' \
+    $'116:\tfrom 192.168.96.7 lookup 51806' \
+    $'117:\tfrom 192.168.111.250 lookup 51806' \
+    $'130:\tfrom 192.168.96.0/20 lookup 51806' > "$RULES"
+  run env PATH="$TEST_TMPDIR/bin:$PATH" bash -c 'source ./proton-instance-common.sh; proton_delete_unowned_table_rules 4 51806 116 130'
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' $'115:\tfrom 192.168.96.8 lookup 51805' $'116:\tfrom 192.168.96.7 lookup 51806' $'130:\tfrom 192.168.96.0/20 lookup 51806')" = "$(cat "$RULES")" ]
+  [ "${#lines[@]}" -eq 4 ]
+  [[ "$output" == *$'117:\tfrom 192.168.111.250 lookup 51806'* ]]
+  grep -Fx 'rule show table 51806' "$RULE_LOG"
+}
+
+@test "table sweep fails closed on a failed listing or missing owned priorities" {
+  write_stateful_rule_stub
+  export RULES="$TEST_TMPDIR/rules" RULE_LOG="$TEST_TMPDIR/rule.log"
+  printf '110:\tfrom 192.168.96.8 lookup 51806\n' > "$RULES"
+  run env PATH="$TEST_TMPDIR/bin:$PATH" SHOW_FAIL=1 bash -c 'source ./proton-instance-common.sh; proton_delete_unowned_table_rules 4 51806 116 130'
+  [ "$status" -ne 0 ]
+  for args in '4 51806' '4 main 116' '5 51806 116'; do
+    run env PATH="$TEST_TMPDIR/bin:$PATH" bash -c "source ./proton-instance-common.sh; proton_delete_unowned_table_rules $args"
+    [ "$status" -ne 0 ]
+  done
+  [ "$(cat "$RULES")" = $'110:\tfrom 192.168.96.8 lookup 51806' ]
+}

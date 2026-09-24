@@ -162,13 +162,21 @@ Any healthcheck driven recovery must preserve:
 
 ## Docker Network Watcher
 
-If qBittorrent or other Docker hosted application services run on a bridged Docker network and routing depends on Docker network CIDR or container IP discovery, enable the per-instance watcher service to keep routing and DNAT in sync with Docker events.
+If qBittorrent or other Docker hosted application services run on a bridged Docker network and routing depends on Docker network CIDR or container IP discovery, enable the per-instance watcher service to keep routing in sync with Docker events.
 
 The watcher listens for Docker network and container events and can:
 
 1. Reapply Docker source-routing and raw-table return rules when the Docker network subnet changes
 2. Reapply the Docker kill-switch state after Docker restarts or network changes
-3. Refresh qBittorrent port state so compose-recreate or legacy-DNAT mode stays in sync
+3. Refresh qBittorrent port state so the Compose-published port stays in sync
+
+Each instance owns two priorities in its route table: its qBittorrent host
+rule at `QBT_VPN_RULE_PRIORITY` and, for the fallback owner, the Docker subnet
+rule at `DOCKER_FALLBACK_VPN_RULE_PRIORITY` (130). WireGuard bring-up and every
+watcher pass remove any other rule that routes into the instance's table,
+whatever its source or selector, and log each one. This clears rules left at
+retired priorities, such as the old 110 default, the priority-100 fwmark rules,
+or a source nothing recognizes, which the exact per-rule deletes never match.
 
 The watcher also reconciles periodically when no event arrives. Every pass
 reasserts policy routes and the kill switch; a periodic pass queues

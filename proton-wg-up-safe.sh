@@ -26,7 +26,6 @@ SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
 KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-/usr/local/bin/proton/proton-killswitch-dispatch.sh}"
-VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
 DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
@@ -753,12 +752,20 @@ if ((!KEEP_TUNNEL)); then
 	configure_resolved_dns "$VPN_INTERFACE" "$DNS_SERVERS_CSV"
 fi
 
+remove_unowned_table_rules() {
+	local family="$1" removed
+	removed="$(proton_delete_unowned_table_rules "$family" "$VPN_TABLE" "$QBT_VPN_RULE_PRIORITY" "$DOCKER_FALLBACK_VPN_RULE_PRIORITY")"
+	if [[ -n "$removed" ]]; then
+		log "Removed IPv$family policy rules at unowned priorities in table $VPN_TABLE: ${removed//$'\n'/; }"
+	fi
+}
+
 inject_routes() {
-	proton_delete_ip_rule_all 4 fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
-	proton_delete_ip_rule_all 4 not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+	remove_unowned_table_rules 4
 	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	if ipv6_enabled; then
 		ip -6 route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
+		remove_unowned_table_rules 6
 		proton_replace_ip_rule 6 oif "$VPN_INTERFACE" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 	fi
 	# NATPMP gateway must be reachable inside the tunnel table too.
@@ -802,7 +809,6 @@ inject_routes() {
 				proton_replace_ip_rule 4 from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
 			fi
 
-			proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
 			proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 			if docker_ipv4_fallback_enabled; then
 				ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"

@@ -102,6 +102,10 @@ if [[ "$1" == "-4" && "$2" == "addr" && "$3" == "show" ]]; then
   exit 0
 fi
 printf '%s\n' "$*" >> "$IP_LOG"
+if [[ "$*" == *"rule show table "* && -n "${STALE_RULES:-}" ]]; then
+  awk -v table="${*: -1}" '$NF == table' <<<"$STALE_RULES"
+  exit 0
+fi
 if [[ "$*" == *"rule add from 192.168.96.44/32"* && "${FAIL_OWNER_RULE:-0}" == 1 ]]; then exit 1; fi
 if [[ "$*" == *"rule del"* || "$*" == *"rule del "* ]]; then
   printf 'RTNETLINK answers: No such file or directory\n' >&2
@@ -403,4 +407,15 @@ EOF
   run env TEST_DOCKER_INACTIVE=1 bash ./proton-wg-up-safe.sh sonarr
   [ "$status" -eq 0 ]
   ! grep -q 'unexpected Docker query' "$IP_LOG"
+}
+
+@test "bring-up removes rules in its table at unowned priorities for any source" {
+  run env STALE_RULES=$'100:\tfrom all fwmark 0xca6c lookup 51804\n110:\tfrom 192.168.96.8 lookup 51804\n114:\tfrom 192.168.96.44 lookup 51804\n117:\tfrom 192.168.111.250 lookup 51804\n130:\tfrom 192.168.96.0/20 lookup 51804\n110:\tfrom 192.168.96.9 lookup 51805' bash ./proton-wg-up-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Removed IPv4 policy rules at unowned priorities in table 51804'*'117:'*'from 192.168.111.250 lookup 51804'* ]]
+  for priority in 100 110 117; do
+    grep -Fx "rule del lookup 51804 priority $priority" "$IP_LOG"
+  done
+  run grep -E 'rule del lookup 51804 priority (114|130)$|rule del lookup 51805' "$IP_LOG"
+  [ "$status" -eq 1 ]
 }
