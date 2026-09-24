@@ -275,7 +275,7 @@ source-only, not installed):
 
 ## 4. Obsolete modes and migration shims
 
-- [ ] **4.1 Remove `legacy-dnat` mode (C, *shared*).** In
+- [x] **4.1 Remove `legacy-dnat` mode (C, *shared*).** In
   `proton-qbittorrent-sync-safe.sh`: `restart_qbt_container_legacy`,
   `container_network_mode`, `resolve_container_ip`, `replace_qbt_dnat_rules`,
   `refresh_qbt_dnat_legacy`, `DNAT_CHANGED`, and `QBT_INTERNAL_PORT`
@@ -292,7 +292,7 @@ source-only, not installed):
   its installer `SCRIPTS` entry, `tests/proton-qbt-dnat-cleanup.bats`, and the
   related assertions in `systemd-units.bats` and `installer-instance-layout.bats`.
   Keep the nft helpers `proton-killswitch-reset.sh` uses.
-- [ ] **4.3 Retire `deploy-live-ipv6-firewall.sh` (P).** It copies seven
+- [x] **4.3 Retire `deploy-live-ipv6-firewall.sh` (P).** It copies seven
   scripts directly into `/usr/local/bin/proton`, bypassing the installer; all
   seven are already in installer `SCRIPTS`, and `proton-ipv6-rollout.sh
   snapshot`/rollback covers recovery. Replace with installer + rollout
@@ -325,11 +325,48 @@ source-only, not installed):
 - [ ] **4.7 `proton-killswitch-reset.sh` legacy chains (P).** Removes
   `PROTON_INPUT`/`PROTON_OUTPUT`, which nothing creates since commit `937d876`.
   Keep only if upgraded hosts may still carry them.
-- [ ] **4.8 `Archive/` fallbacks (C).** `SCRIPT_DIR/..` helper fallback in
+- [x] **4.8 `Archive/` fallbacks (C).** `SCRIPT_DIR/..` helper fallback in
   `proton-killswitch-reset.sh` and `proton-qbt-dnat-cleanup.sh` existed only
   for running from `Archive/`. Remove.
-- [ ] **4.9 `proton-qbittorrent.env.example` (C).** Unreferenced near-duplicate
+- [x] **4.9 `proton-qbittorrent.env.example` (C).** Unreferenced near-duplicate
   of `proton-qbittorrent.env`. Delete.
+
+Section 4 progress, 2026-09-23 (canonical Linux checkout, source-only, not
+installed). Resolved: 4.1, 4.3, 4.8, and 4.9. 4.4 is partly done. 4.2 and
+4.5–4.7 are deferred on host evidence.
+
+- 4.1: the sync script has no DNAT refresh, `docker restart`, or
+  `QBT_INTERNAL_PORT` path left. `QBT_PORT_APPLY_MODE=legacy-dnat` exits with
+  an explicit error before any API, Docker, or nft call, and a mutation-checked
+  test covers this. The "Legacy DNAT mode only" comments were wrong:
+  `QBT_CONTAINER_NAME` and `QBT_NETWORK_NAME` are also used by the route
+  scripts, so those keys stay. The docs were updated.
+- 4.3: the helper and its test were removed. The IPv6 runbook now takes a
+  rollout snapshot before running the installer, and names the seven scripts.
+  With the helper gone, `docker-preflight` holds the only copy of the list.
+- 4.4, done:
+  - The singleton values were removed from the `proton-common.env`,
+    `proton-port-forward.env`, and `proton-healthcheck.env` templates.
+  - The installer no longer writes the singleton `qbittorrent.env` or
+    `qbittorrent-port.env`, and its `--qb-*` flags were removed.
+  - The singleton `proton-qbittorrent.env` template was deleted (4.9 deleted
+    its `.example`). The per-instance example now carries the manual-stop keys.
+  - The duplicate `QBITTORRENT_ENV_FILE` block was removed. So were the dead
+    post-init path fallbacks in port-forward, sync, and both healthchecks, and
+    the same fallbacks in wg-up, wg-down, and the watcher.
+- 4.4, not done: shrinking the shim. On 2026-09-23 the installed
+  `/etc/proton/proton-common.env` (dated Jul 23) still set `STATE_DIR`,
+  `VPN_TABLE`, `VPN_INTERFACE`, and `SERVER_SELECTION_FILE`. The installed
+  role env files still carried their singleton paths. The installer preserves
+  those files, so the shim is required until they are cleaned by hand.
+- 4.5 and 4.6 deferred on live evidence from 2026-09-23. `ip rule` showed a
+  priority-110 rule, `from 192.168.96.8 lookup 51806`, which is prowlarr's
+  table at the old `QBT_VPN_RULE_PRIORITY` fallback. The manifest priority is
+  116, and the installed `proton-instance-common.sh` differed from source.
+  The fallback and the 110 cleanup deletes are still reachable on this host.
+  Re-check after installing and restarting.
+- 4.2 and 4.7 deferred: `nft`/`iptables` listing needs root and was not run.
+  With 4.1 in place, current source cannot create `qbt-dnat-*` rules.
 
 ## 5. Duplication to consolidate
 

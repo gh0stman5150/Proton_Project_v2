@@ -208,10 +208,6 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
     printf '%s\n' "${QBT_TEST_FINISHED_AT:-2026-09-12T00:00:00Z}"
     exit 0
   fi
-  if [[ "$3" == '{{.HostConfig.NetworkMode}}' ]]; then
-    echo 'bridge'
-    exit 0
-  fi
   if [[ "$3" == *'.NetworkSettings.Ports'* ]]; then
     if [[ "${QBT_TEST_DOCKER_NO_PORTS:-}" == "1" ]] ||
       { [[ "${QBT_TEST_DOCKER_NO_PORTS:-}" == "until-compose" ]] && ! compgen -G "${DOCKER_LOG}.compose-*.count" >/dev/null; }; then
@@ -320,7 +316,6 @@ QBT_COMPOSE_PROJECT_DIR=$PROJECT_DIR
 QBT_COMPOSE_SERVICE=$container
 QBT_PORT_ENV_FILE=$PORT_ENV_FILE
 QBT_CONTAINER_NAME=$container
-QBT_INTERNAL_PORT=6881
 QBT_NETWORK_NAME=starr
 EOF
 }

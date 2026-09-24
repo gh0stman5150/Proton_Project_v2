@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ ! -f "$SCRIPT_DIR/proton-instance-common.sh" ]]; then SCRIPT_DIR="$(dirname "$SCRIPT_DIR")"; fi
 # shellcheck source=proton-instance-common.sh
 source "$SCRIPT_DIR/proton-instance-common.sh"
 

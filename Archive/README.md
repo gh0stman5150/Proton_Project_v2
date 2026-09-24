@@ -52,3 +52,9 @@ the repository root. The installer, synchronizer, IPv6 preflight, bundle helper,
 and tests now use flat source paths; installed paths under `/usr/local/bin/proton`
 are unchanged. The table above records the original 2026-09-10 move. The six
 remaining legacy helpers are git-ignored and exist only on the host checkout.
+
+Source update, 2026-09-23 (code audit 4.3): `deploy-live-ipv6-firewall.sh` and
+its test were removed. The installer already installs all seven bundle scripts,
+and `proton-ipv6-rollout.sh snapshot`/`rollback` covers `/usr/local/bin/proton`;
+see `docs/runbooks/ipv6-rollout.md`. Existing snapshots under
+`/var/backups/proton-ipv6-firewall` are not touched.

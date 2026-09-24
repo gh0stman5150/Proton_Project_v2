@@ -10,12 +10,6 @@ WG_RUNTIME_DIR="/etc/wireguard/proton-runtime"
 QBT_COMPOSE_COMMON_DIR="/opt/qbittorrent-common"
 INSTANCE_MANIFEST_SOURCE="${SCRIPT_DIR}/qbittorrent-instances.tsv"
 FORCE_ENV=0
-QBITTORRENT_URL_VALUE=""
-QBITTORRENT_USER_VALUE=""
-QBITTORRENT_PASS_VALUE=""
-QBT_CONTAINER_NAME_VALUE=""
-QBT_INTERNAL_PORT_VALUE=""
-QBT_NETWORK_NAME_VALUE=""
 
 SERVICES=(
 	proton-killswitch.service
@@ -103,12 +97,6 @@ usage() {
 Usage: install-proton-systemd.sh [options]
 
 Options:
-  --qb-url URL        Set QBITTORRENT_URL in /etc/proton/qbittorrent.env
-  --qb-user USER      Set QBITTORRENT_USER in /etc/proton/qbittorrent.env
-  --qb-pass PASS      Set QBITTORRENT_PASS in /etc/proton/qbittorrent.env
-  --qb-container NAME Set QBT_CONTAINER_NAME in /etc/proton/qbittorrent.env
-  --qb-int-port PORT  Set QBT_INTERNAL_PORT in /etc/proton/qbittorrent.env
-  --qb-network NAME   Set QBT_NETWORK_NAME in /etc/proton/qbittorrent.env
   --force-env         Overwrite env files in /etc/proton instead of writing *.new
   --help              Show this help text
 EOF
@@ -251,7 +239,6 @@ validate_bundle() {
 	ensure_source_file "${SCRIPT_DIR}/tools/recreate-qbittorrent-fleet.sh"
 	validate_shell_syntax "${SCRIPT_DIR}/tools/recreate-qbittorrent-fleet.sh"
 
-	ensure_source_file "${SCRIPT_DIR}/proton-qbittorrent.env"
 	ensure_source_file "${SCRIPT_DIR}/proton-qbittorrent-port.env"
 }
 
@@ -333,122 +320,6 @@ install_env_template() {
 	fi
 
 	install_normalized_file "${source_file}" "${target_file}" "$mode"
-}
-
-install_qbittorrent_env() {
-	local source_file target_file tmp_file current_url current_user current_pass
-	local current_apply_mode current_compose_project_dir current_compose_service current_port_env
-	local current_container current_internal_port current_network
-
-	source_file="${SCRIPT_DIR}/proton-qbittorrent.env"
-	target_file="${ETC_PROTON_DIR}/qbittorrent.env"
-	tmp_file="${ETC_PROTON_DIR}/qbittorrent.env.tmp"
-	ensure_source_file "$source_file"
-
-	if same_path "$source_file" "$target_file"; then
-		chown root:root "$target_file"
-		chmod 0600 "$target_file"
-		log "Using existing ${target_file}"
-		return 0
-	fi
-
-	if [[ "$FORCE_ENV" -eq 0 &&
-		-z "$QBITTORRENT_URL_VALUE" && -z "$QBITTORRENT_USER_VALUE" && -z "$QBITTORRENT_PASS_VALUE" &&
-		-z "$QBT_CONTAINER_NAME_VALUE" && -z "$QBT_INTERNAL_PORT_VALUE" && -z "$QBT_NETWORK_NAME_VALUE" &&
-		-f "${target_file}" ]]; then
-		install -o root -g root -m 0600 "${source_file}" "${target_file}.new"
-		log "Preserved ${target_file}; wrote updated template to ${target_file}.new"
-		chown root:root "${target_file}"
-		chmod 0600 "${target_file}"
-		return 0
-	fi
-
-	install -o root -g root -m 0600 "${source_file}" "${tmp_file}"
-
-	if [[ -f "$target_file" ]]; then
-		current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${target_file}")"
-		current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${target_file}")"
-		current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${target_file}")"
-		current_apply_mode="$(awk -F= '/^QBT_PORT_APPLY_MODE=/ {print $2; exit}' "${target_file}")"
-		current_compose_project_dir="$(awk -F= '/^QBT_COMPOSE_PROJECT_DIR=/ {print $2; exit}' "${target_file}")"
-		current_compose_service="$(awk -F= '/^QBT_COMPOSE_SERVICE=/ {print $2; exit}' "${target_file}")"
-		current_port_env="$(awk -F= '/^QBT_PORT_ENV_FILE=/ {print $2; exit}' "${target_file}")"
-		current_container="$(awk -F= '/^QBT_CONTAINER_NAME=/ {print $2; exit}' "${target_file}")"
-		current_internal_port="$(awk -F= '/^QBT_INTERNAL_PORT=/ {print $2; exit}' "${target_file}")"
-		current_network="$(awk -F= '/^QBT_NETWORK_NAME=/ {print $2; exit}' "${target_file}")"
-	else
-		current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${tmp_file}")"
-		current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${tmp_file}")"
-		current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${tmp_file}")"
-		current_apply_mode="$(awk -F= '/^QBT_PORT_APPLY_MODE=/ {print $2; exit}' "${tmp_file}")"
-		current_compose_project_dir="$(awk -F= '/^QBT_COMPOSE_PROJECT_DIR=/ {print $2; exit}' "${tmp_file}")"
-		current_compose_service="$(awk -F= '/^QBT_COMPOSE_SERVICE=/ {print $2; exit}' "${tmp_file}")"
-		current_port_env="$(awk -F= '/^QBT_PORT_ENV_FILE=/ {print $2; exit}' "${tmp_file}")"
-		current_container="$(awk -F= '/^QBT_CONTAINER_NAME=/ {print $2; exit}' "${tmp_file}")"
-		current_internal_port="$(awk -F= '/^QBT_INTERNAL_PORT=/ {print $2; exit}' "${tmp_file}")"
-		current_network="$(awk -F= '/^QBT_NETWORK_NAME=/ {print $2; exit}' "${tmp_file}")"
-	fi
-
-	current_url="${QBITTORRENT_URL_VALUE:-$current_url}"
-	current_user="${QBITTORRENT_USER_VALUE:-$current_user}"
-	current_pass="${QBITTORRENT_PASS_VALUE:-$current_pass}"
-	current_apply_mode="${current_apply_mode:-compose-recreate}"
-	current_compose_project_dir="${current_compose_project_dir:-}"
-	current_compose_service="${current_compose_service:-qbittorrent}"
-	current_port_env="${current_port_env:-/etc/proton/qbittorrent-port.env}"
-	current_container="${QBT_CONTAINER_NAME_VALUE:-${current_container:-qbittorrent}}"
-	current_internal_port="${QBT_INTERNAL_PORT_VALUE:-${current_internal_port:-6881}}"
-	current_network="${QBT_NETWORK_NAME_VALUE:-$current_network}"
-
-	cat >"${tmp_file}" <<EOF
-# qBittorrent credentials for the host-side Proton services.
-# These scripts run on the host, so point QBITTORRENT_URL at the host-published
-# Web UI port rather than the Docker-internal starr_network address.
-
-QBITTORRENT_URL=${current_url}
-QBITTORRENT_USER=${current_user}
-QBITTORRENT_PASS=${current_pass}
-# Default path: update qBittorrent's listen port, persist the published port,
-# and recreate the Compose service only when the forwarded port changes.
-QBT_PORT_APPLY_MODE=${current_apply_mode}
-# Directory containing the qBittorrent docker-compose.yml / compose.yaml file.
-QBT_COMPOSE_PROJECT_DIR=${current_compose_project_dir}
-QBT_COMPOSE_SERVICE=${current_compose_service}
-QBT_PORT_ENV_FILE=${current_port_env}
-# Legacy DNAT mode only: container identity and container-network lookup.
-QBT_CONTAINER_NAME=${current_container}
-QBT_INTERNAL_PORT=${current_internal_port}
-# Optional: Docker network name where qBittorrent runs (used to lookup container IP). If blank, the first network IP will be used.
-QBT_NETWORK_NAME=${current_network}
-EOF
-
-	install -o root -g root -m 0600 "${tmp_file}" "${target_file}"
-	rm -f "${tmp_file}"
-}
-
-install_qbittorrent_port_env() {
-	local source_file target_file
-
-	source_file="${SCRIPT_DIR}/proton-qbittorrent-port.env"
-	target_file="${ETC_PROTON_DIR}/qbittorrent-port.env"
-	ensure_source_file "$source_file"
-
-	if same_path "$source_file" "$target_file"; then
-		chown root:root "$target_file"
-		chmod 0600 "$target_file"
-		log "Using existing ${target_file}"
-		return 0
-	fi
-
-	if [[ "$FORCE_ENV" -eq 0 && -f "${target_file}" ]]; then
-		install -o root -g root -m 0600 "${source_file}" "${target_file}.new"
-		log "Preserved ${target_file}; wrote updated template to ${target_file}.new"
-		chown root:root "${target_file}"
-		chmod 0600 "${target_file}"
-		return 0
-	fi
-
-	install -o root -g root -m 0600 "${source_file}" "${target_file}"
 }
 
 install_qbittorrent_compose_common() {
@@ -643,7 +514,10 @@ QBT_CONTAINER_NAME=qbittorrent-${instance}
 QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent-${instance}
 QBT_COMPOSE_SERVICE=qbittorrent-${instance}
 QBT_PORT_APPLY_MODE=compose-recreate
-QBT_INTERNAL_PORT=6881
+# Respect docker stop / docker compose stop instead of self-healing the container back up.
+QBT_RESPECT_MANUAL_STOP=1
+# Recent Docker stop/disconnect events are treated as a manual stop in progress.
+QBT_MANUAL_STOP_EVENT_GRACE_SECONDS=180
 QBT_PORT_ENV_FILE=${ETC_PROTON_DIR}/instances/${instance}/qbittorrent-port.env
 QBT_NETWORK_NAME=starr_network
 EOF
@@ -689,30 +563,6 @@ ensure_root
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-	--qb-url)
-		QBITTORRENT_URL_VALUE="${2:?Missing value for --qb-url}"
-		shift 2
-		;;
-	--qb-user)
-		QBITTORRENT_USER_VALUE="${2:?Missing value for --qb-user}"
-		shift 2
-		;;
-	--qb-pass)
-		QBITTORRENT_PASS_VALUE="${2:?Missing value for --qb-pass}"
-		shift 2
-		;;
-	--qb-container)
-		QBT_CONTAINER_NAME_VALUE="${2:?Missing value for --qb-container}"
-		shift 2
-		;;
-	--qb-int-port)
-		QBT_INTERNAL_PORT_VALUE="${2:?Missing value for --qb-int-port}"
-		shift 2
-		;;
-	--qb-network)
-		QBT_NETWORK_NAME_VALUE="${2:?Missing value for --qb-network}"
-		shift 2
-		;;
 	--force-env)
 		FORCE_ENV=1
 		shift
@@ -770,8 +620,6 @@ for env_file in "${ENV_FILES[@]}"; do
 	install_env_template "$env_file" 0644
 done
 
-install_qbittorrent_env
-install_qbittorrent_port_env
 install_qbittorrent_compose_common
 install_qbittorrent_fleet_verifier
 install_nas_mount_readiness

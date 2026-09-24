@@ -32,21 +32,13 @@ If the active backend is `iptables`, inspect the dedicated Proton chains and any
 
 ## qBittorrent state and mapping
 
-If the active mode is `compose-recreate`:
+`compose-recreate` is the only supported port apply mode; the sync script
+rejects `legacy-dnat`.
 
 ```bash
 cat /run/proton/prowlarr/proton-port.state
 cat /run/proton/prowlarr/qbt-port.cache
 cat /etc/proton/instances/prowlarr/qbittorrent-port.env
-```
-
-If the active mode is `legacy-dnat`:
-
-```bash
-cat /run/proton/prowlarr/proton-port.state
-cat /run/proton/prowlarr/qbt-port.cache
-docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' qbittorrent-prowlarr
-sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
 ```
 
 ## DNS behavior

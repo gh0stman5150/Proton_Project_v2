@@ -358,16 +358,14 @@ Both nftables and iptables backends use:
 ```
 
 The rulesets are host-wide, so per-instance kill-switch locks would not provide
-mutual exclusion. The same lock covers legacy DNAT refresh/cleanup, maintenance
+mutual exclusion. The same lock covers legacy DNAT cleanup, maintenance
 reset, and raw return-path/MSS-clamp changes. Lock waits are bounded; failure
 does not authorize mutation or lock-file deletion.
 
 When locks are nested, the order is instance lifecycle, global policy route,
 then global firewall. Raw/mangle helpers may take the firewall lock under the
 route lock; they do not call routing or selector code. Full kill-switch applies
-run outside the route critical section. Legacy DNAT resolves Docker state before
-taking the firewall lock and does not recursively invoke the cleanup executable
-while holding it. Raw-rule reconciliation restores the exact ACCEPT rule ahead
+run outside the route critical section. Raw-rule reconciliation restores the exact ACCEPT rule ahead
 of Docker drops; unexpected inspection/deletion/insertion errors propagate.
 
 Both backends cover `pvlidarr`, `pvprowlarr`, `pvradarr`, `pvsonarr`, and
@@ -385,10 +383,10 @@ cross-table transaction. Raw/mangle changes are serialized command sequences,
 not atomic with route updates or the full firewall apply. Docker and unrelated
 administrators do not participate in this project lock.
 
-Legacy DNAT uses the owning VPN interface, destination port, and exact
-`qbt-dnat-<instance>` comment. TCP/UDP replacement is one nft transaction, so
-equal numeric ports on different tunnels remain isolated. Cleanup deletes only
-handles with that exact comment. A successful table/chain snapshot establishes
+The `legacy-dnat` apply mode was removed on 2026-09-23 and the sync script
+rejects it. `proton-qbt-dnat-cleanup.sh` remains as the port-forward `ExecStop`
+until hosts are confirmed free of `qbt-dnat-<instance>` rules; it deletes only
+handles with that exact comment, in one transaction. A successful table/chain snapshot establishes
 absence; a failed read is never interpreted as absence. The manual kill-switch
 reset removes Proton filter protection and owned masquerade rules, but preserves
 shared NAT tables, DNAT, unrelated rules, and host default policies. It is still

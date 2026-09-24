@@ -354,10 +354,6 @@ proton_rebase_legacy_runtime_paths() {
 		STATE_DIR="$default_state_dir"
 	fi
 
-	if [[ -z "${QBITTORRENT_ENV_FILE:-}" || "${QBITTORRENT_ENV_FILE}" == "/etc/proton/qbittorrent.env" ]]; then
-		QBITTORRENT_ENV_FILE="${INSTANCE_DIR}/qbittorrent.env"
-	fi
-
 	if [[ -z "${STATE_FILE:-}" || "${STATE_FILE}" == "/run/proton/proton-port.state" ]]; then
 		STATE_FILE="${STATE_DIR}/proton-port.state"
 	fi

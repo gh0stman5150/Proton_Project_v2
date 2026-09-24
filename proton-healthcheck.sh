@@ -14,10 +14,6 @@ PROTON_HEALTHCHECK_ENV="${PROTON_HEALTHCHECK_ENV:-/etc/proton/proton-healthcheck
 proton_instance_init "${1:-}" "$PROTON_HEALTHCHECK_ENV"
 
 LOG_TAG="${LOG_TAG:-proton-healthcheck}"
-STATE_DIR="${STATE_DIR:-/run/proton}"
-STATE_FILE="${STATE_FILE:-${STATE_DIR}/proton-port.state}"
-RECOVERY_LOCK_FILE="${RECOVERY_LOCK_FILE:-${STATE_DIR}/recovery.lock}"
-QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
 QBITTORRENT_SYNC_SCRIPT="${QBITTORRENT_SYNC_SCRIPT:-/usr/local/bin/proton/proton-qbittorrent-sync-safe.sh}"
 PORT_FORWARD_SCRIPT="${PORT_FORWARD_SCRIPT:-/usr/local/bin/proton/proton-port-forward-safe.sh}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"

@@ -85,10 +85,18 @@ This command requires an explicit `KILLSWITCH_BACKEND=nftables`, confirms the te
 
 Docker IPv4 and IPv6 fallback routing each have one stable owner so ordinary application traffic cannot change tunnels while a connection is active. `DOCKER_FALLBACK_INSTANCE` names the IPv4 owner and `DOCKER_IPV6_FALLBACK_INSTANCE` names the IPv6-capable owner; both default to `sonarr`. Each qBittorrent container receives a higher-priority per-container source rule for its own instance tunnel. Docker-to-Docker traffic remains in the main table. The network watcher refreshes these rules after container recreation, and WireGuard teardown removes instance-owned rules before flushing the tunnel table.
 
-Deploy the complete inert firewall and routing bundle before a maintenance window:
+Deploy the complete inert firewall and routing bundle before a maintenance window
+by taking a rollout snapshot and then running the installer:
 
 ```bash
-sudo /usr/local/bin/proton_project/deploy-live-ipv6-firewall.sh deploy
+sudo ./proton-ipv6-rollout.sh snapshot &&
+  sudo ./install-proton-systemd.sh
 ```
 
-The helper creates a root-only timestamped snapshot of all six installed scripts and prints its exact rollback path. It does not restart services or activate Docker IPv6.
+The snapshot includes `/usr/local/bin/proton` and logs its path; restore it with
+the `rollback` command above. The installer copies the seven firewall and routing
+scripts that `docker-preflight` compares (`proton-instance-common.sh`, both
+kill-switch backends, `proton-killswitch-reset.sh`, `proton-wg-up-safe.sh`,
+`proton-wg-down-safe.sh`, and `proton-docker-network-watcher.sh`) with the rest of
+the bundle. It restarts `proton-killswitch.service` but leaves instance services
+running, and it does not activate Docker IPv6.

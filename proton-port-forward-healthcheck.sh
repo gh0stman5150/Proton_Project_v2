@@ -12,8 +12,6 @@ fi
 source "$INSTANCE_COMMON_SCRIPT"
 proton_instance_init "${1:-}" "/etc/proton/proton-port-forward.env"
 
-QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-${INSTANCE_DIR}/qbittorrent.env}"
-
 require_command() {
 	local cmd="$1"
 

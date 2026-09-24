@@ -124,7 +124,7 @@ VPN bound containers must not be able to reach WAN directly outside the intended
 
 `proton-healthcheck@<instance>.service` watches qBittorrent only when there are active transfers. If combined download and upload throughput stays below the configured threshold for multiple checks, the recovery ladder is:
 
-1. qBittorrent port and DNAT refresh
+1. qBittorrent port sync refresh
 2. One shot NAT PMP refresh
 3. Bad server mark plus Proton service restart
 

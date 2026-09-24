@@ -116,7 +116,7 @@ The installer checks its Proton Debian package list and may download the Proton 
 
 Each protected `qbittorrent.env` supplies `QBITTORRENT_URL`, `QBITTORRENT_USER`, and `QBITTORRENT_PASS` for that instance’s Web API. Use its published host Web UI endpoint and enter credentials through an operator-controlled editor such as `sudoedit`. Keep the file root-owned with mode `0600`; it is sourced as shell code, so quote values correctly and treat write access as privileged. Never put real credentials in command examples, shell history, tickets, or this repository.
 
-The installer retains `/etc/proton/qbittorrent.env` and `--qb-*` options for singleton compatibility. Those options do not configure all five named clients. Use the per-instance files below for fleet configuration; obsolete singleton services are disabled during installation.
+The installer no longer writes the singleton `/etc/proton/qbittorrent.env` or `/etc/proton/qbittorrent-port.env`, and the old `--qb-*` options are gone. Existing singleton files are left in place but unused; runtime scripts rebase that path to the per-instance file. Use the per-instance files below for fleet configuration; obsolete singleton services are disabled during installation.
 
 ## Named qBittorrent Instances
 
@@ -377,13 +377,7 @@ This command requires an explicit `KILLSWITCH_BACKEND=nftables`, confirms the te
 
 Docker IPv4 and IPv6 fallback routing each have one stable owner so ordinary application traffic cannot change tunnels while a connection is active. `DOCKER_FALLBACK_INSTANCE` names the IPv4 owner and `DOCKER_IPV6_FALLBACK_INSTANCE` names the IPv6-capable owner; both default to `sonarr`. Each qBittorrent container receives a higher-priority per-container source rule for its own instance tunnel. Docker-to-Docker traffic remains in the main table. The network watcher refreshes these rules after container recreation, and WireGuard teardown removes instance-owned rules before flushing the tunnel table.
 
-Deploy the complete inert firewall and routing bundle before a maintenance window:
-
-```bash
-sudo /usr/local/bin/proton_project/Archive/deploy-live-ipv6-firewall.sh deploy
-```
-
-The helper creates a root-only timestamped snapshot of all six installed scripts and prints its exact rollback path. It does not restart services or activate Docker IPv6.
+Deploy the inert firewall and routing bundle before a maintenance window with a rollout snapshot followed by the installer; see [IPv6 rollout](docs/runbooks/ipv6-rollout.md).
 
 ## DNS Policy
 
@@ -420,7 +414,7 @@ VPN bound containers must not be able to reach WAN directly outside the intended
 
 `proton-healthcheck@<instance>.service` watches qBittorrent only when there are active transfers. If combined download and upload throughput stays below the configured threshold for multiple checks, the recovery ladder is:
 
-1. qBittorrent port and DNAT refresh
+1. qBittorrent port sync refresh
 2. One shot NAT PMP refresh
 3. Bad server mark plus Proton service restart
 
@@ -486,21 +480,13 @@ If the active backend is `iptables`, inspect the dedicated Proton chains and any
 
 ### qBittorrent state and mapping
 
-If the active mode is `compose-recreate`:
+`compose-recreate` is the only supported port apply mode; the sync script
+rejects `legacy-dnat`.
 
 ```bash
 cat /run/proton/prowlarr/proton-port.state
 cat /run/proton/prowlarr/qbt-port.cache
 cat /etc/proton/instances/prowlarr/qbittorrent-port.env
-```
-
-If the active mode is `legacy-dnat`:
-
-```bash
-cat /run/proton/prowlarr/proton-port.state
-cat /run/proton/prowlarr/qbt-port.cache
-docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' qbittorrent-prowlarr
-sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
 ```
 
 ### DNS behavior

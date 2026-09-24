@@ -175,25 +175,16 @@ EOF
   ! grep -Fq 'QBT_FORWARDED_PORT=' "$PORT_ENV_FILE"
 }
 
-@test "legacy-dnat mode refreshes nft DNAT rules without invoking docker compose" {
+@test "removed legacy-dnat mode is rejected before touching qBittorrent, Docker, or nft" {
   write_qbt_env legacy-dnat
   write_lease 45000
   printf '45000' > "$CURL_STATE"
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
-  [ "$status" -eq 0 ]
-  grep -F 'add rule ip proton_nat prerouting iifname "pvsonarr" tcp dport 45000 dnat to 172.18.0.10:6881 comment "qbt-dnat-sonarr"' "$NFT_LOG"
-  grep -F 'add rule ip proton_nat prerouting iifname "pvsonarr" udp dport 45000 dnat to 172.18.0.10:6881 comment "qbt-dnat-sonarr"' "$NFT_LOG"
-  ! grep -F 'CMD=compose ' "$DOCKER_LOG"
-}
-
-@test "legacy DNAT read or transaction failure does not publish success cache" {
-  write_qbt_env legacy-dnat
-  write_lease 45000
-  printf '45000' > "$CURL_STATE"
-  for failure in QBT_TEST_NFT_READ_FAIL QBT_TEST_NFT_APPLY_FAIL; do
-    run env "$failure=1" QBITTORRENT_ENV_FILE="$ENV_FILE" QBT_COMMON_SCRIPT=./proton-qbittorrent-common.sh bash ./proton-qbittorrent-sync-safe.sh sonarr
-    [ "$status" -ne 0 ]
-    [ ! -e "$CACHE_FILE" ]
-  done
+  [ "$status" -ne 0 ]
+  [ ! -e "$CURL_LOG" ]
+  [ ! -e "$DOCKER_LOG" ]
+  [ ! -e "$NFT_LOG" ]
+  [ ! -e "$CACHE_FILE" ]
+  [ ! -e "$PORT_ENV_FILE" ]
 }

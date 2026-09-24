@@ -21,11 +21,7 @@ WG_IPV6_ENABLED="${WG_IPV6_ENABLED:-off}"
 # goes idle between port-forward polls. A PersistentKeepalive keeps the session
 # warm so natpmpc stops timing out intermittently. Set to 0/empty to disable.
 WG_PERSISTENT_KEEPALIVE="${WG_PERSISTENT_KEEPALIVE:-25}"
-STATE_DIR="${STATE_DIR:-/run/proton}"
 WG_RUNTIME_DIR="${WG_RUNTIME_DIR:-/etc/wireguard/proton-runtime}"
-DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
-SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
-SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
 SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"

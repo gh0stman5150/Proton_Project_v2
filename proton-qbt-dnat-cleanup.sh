@@ -2,9 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ ! -f "$SCRIPT_DIR/proton-instance-common.sh" && -f "$SCRIPT_DIR/../proton-instance-common.sh" ]]; then
-	SCRIPT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-fi
 INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-instance-common.sh}"
 if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
 	echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
