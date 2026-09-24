@@ -313,7 +313,7 @@ boot ID, or generation fields from a persistent port artifact.
 Before activation, obtain maintenance approval, pass the protected all-five
 preflight, and retain a coherent rollback bundle of helpers, callers, cleanup
 scripts, and units. The installer copies files while templated services remain
-running and restarts the global kill switch. An old loop can invoke newly copied
+running and reapplies the global kill switch with a unit reload. An old loop can invoke newly copied
 helpers, so file copying is itself an operational change, not inert staging.
 Include `proton-instance-common.sh` in firewall copy and rollback bundles.
 

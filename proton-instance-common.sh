@@ -252,40 +252,6 @@ proton_replace_ip_rule() {
 	"${ip_command[@]}" rule add "$@"
 }
 
-# Remove every policy rule that routes into TABLE at a priority other than the
-# OWNED_PRIORITY arguments, whatever its source or selector. The exact deletes
-# elsewhere only match current priorities, so a rule left by an older priority
-# scheme would otherwise outrank the owner rule indefinitely (on 2026-09-23 a
-# priority-110 rule sent whisparr's address through prowlarr's table). Prints
-# each removed rule. Callers hold the policy-route lock.
-proton_delete_unowned_table_rules() {
-	local family="${1:-}" table="${2:-}" rules line priority
-	local -a ip_command=(ip)
-	shift 2 || return 1
-
-	case "$family" in
-	4) ;;
-	6) ip_command+=(-6) ;;
-	*)
-		printf 'ERROR: Invalid IP family for policy rule sweep: %s\n' "$family" >&2
-		return 1
-		;;
-	esac
-	if [[ ! "$table" =~ ^[0-9]+$ ]] || (($# == 0)); then
-		printf 'ERROR: Policy rule sweep needs a numeric table and its owned priorities.\n' >&2
-		return 1
-	fi
-
-	rules="$(LC_ALL=C "${ip_command[@]}" rule show table "$table")" || return 1
-	while IFS= read -r line; do
-		priority="${line%%:*}"
-		[[ "$priority" =~ ^[0-9]+$ ]] || continue
-		[[ " $* " != *" $priority "* ]] || continue
-		proton_delete_ip_rule_all "$family" lookup "$table" priority "$priority" || return 1
-		printf '%s\n' "$line"
-	done <<<"$rules"
-}
-
 proton_persist_route_state() (
 	local file="$1" value="$2" temporary
 	if [[ -z "$value" ]]; then

@@ -9,6 +9,9 @@ StartLimitBurst=5
 Type=oneshot
 EnvironmentFile=-/etc/proton/proton-common.env
 ExecStart=/usr/local/bin/proton/proton-killswitch-dispatch.sh
+# Reapplies the idempotent firewall in place. Installs use reload, never
+# restart: docker.service Requires= this unit, so a restart restarts Docker.
+ExecReload=/usr/local/bin/proton/proton-killswitch-dispatch.sh
 RemainAfterExit=yes
 TimeoutStartSec=90
 Restart=on-failure

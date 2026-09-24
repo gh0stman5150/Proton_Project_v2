@@ -98,5 +98,5 @@ the `rollback` command above. The installer copies the seven firewall and routin
 scripts that `docker-preflight` compares (`proton-instance-common.sh`, both
 kill-switch backends, `proton-killswitch-reset.sh`, `proton-wg-up-safe.sh`,
 `proton-wg-down-safe.sh`, and `proton-docker-network-watcher.sh`) with the rest of
-the bundle. It restarts `proton-killswitch.service` but leaves instance services
-running, and it does not activate Docker IPv6.
+the bundle. It reloads `proton-killswitch.service` (never restarts it, which
+would restart Docker) and leaves instance services running, and it does not activate Docker IPv6.

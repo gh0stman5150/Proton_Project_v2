@@ -49,10 +49,6 @@ EOF
 cat > "$TMPBIN/ip" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$IP_LOG"
-if [[ "$*" == *"rule show table "* && -n "${STALE_RULES:-}" ]]; then
-  awk -v table="${*: -1}" '$NF == table' <<<"$STALE_RULES"
-  exit 0
-fi
 if [[ "$*" == *"route replace default"* && "${FAIL_DEFAULT_ROUTE:-0}" == 1 ]]; then
   exit 1
 fi
@@ -297,15 +293,4 @@ call_count() {
   [ "$status" -eq 0 ]
   [ "$(call_count killswitch)" -eq 2 ]
   [ "$(call_count allocate)" -eq 1 ]
-}
-
-@test "reconciliation removes rules in its table at unowned priorities for any source" {
-  run env STALE_RULES=$'100:\tfrom all fwmark 0xca6c lookup 51804\n110:\tfrom 192.168.96.8 lookup 51804\n114:\tfrom 192.168.96.44 lookup 51804\n117:\tfrom 192.168.111.250 lookup 51804\n130:\tfrom 192.168.96.0/20 lookup 51804\n110:\tfrom 192.168.96.9 lookup 51805' bash -c 'source ./proton-docker-network-watcher.sh sonarr; reapply_routes_serialized 192.168.96.0/20 fdca:6c19:2096::/64'
-  [ "$status" -eq 0 ]
-  for priority in 100 110 117; do
-    grep -Fx "rule del lookup 51804 priority $priority" "$IP_LOG"
-  done
-  run grep -E 'rule del lookup 51804 priority (114|130)$|rule del lookup 51805' "$IP_LOG"
-  [ "$status" -eq 1 ]
-  grep -Fx -- '-6 rule show table 51804' "$IP_LOG"
 }

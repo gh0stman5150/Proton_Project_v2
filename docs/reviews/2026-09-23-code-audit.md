@@ -351,7 +351,7 @@ source-only, not installed):
 - [ ] **4.5 `VPN_TABLE==51820` rewrite / `QBT_VPN_RULE_PRIORITY` default (P).**
   Installer now reconciles both keys and the verifier requires them; the
   fallback in `proton-instance-common.sh` could become a hard error.
-- [x] **4.6 Policy-rule cleanup for rules nothing creates (P).** wg-up/wg-down
+- [ ] **4.6 Policy-rule cleanup for rules nothing creates (P).** wg-up/wg-down
   delete priority-100 `fwmark` rules and `DOCKER_VPN_RULE_PRIORITY` (110) rules;
   the watcher does so every tick. `VPN_FWMARK` is read only by these deletes;
   `RULE_PRIORITY` is a legacy alias. Remove once every host is past migration
@@ -366,8 +366,8 @@ source-only, not installed):
   of `proton-qbittorrent.env`. Delete.
 
 Section 4 progress, 2026-09-23 (canonical Linux checkout, source-only, not
-installed). Resolved: 4.1, 4.2, 4.3, 4.6, 4.7, 4.8, and 4.9. 4.4 is partly
-done. 4.5 is deferred.
+installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done.
+4.5 and 4.6 are deferred on host evidence.
 
 - 4.1: the sync script has no DNAT refresh, `docker restart`, or
   `QBT_INTERNAL_PORT` path left. `QBT_PORT_APPLY_MODE=legacy-dnat` exits with
@@ -393,32 +393,43 @@ done. 4.5 is deferred.
   `VPN_TABLE`, `VPN_INTERFACE`, and `SERVER_SELECTION_FILE`. The installed
   role env files still carried their singleton paths. The installer preserves
   those files, so the shim is required until they are cleaned by hand.
-- 4.6 resolved later on 2026-09-23, differently from the plan. After the
-  install and a sequential restart, `ip rule` still showed
-  `110: from 192.168.96.8 lookup 51806`. 192.168.96.8 now belongs to
-  whisparr, and rule 110 outranked whisparr's own rule 115, so whisparr's
-  traffic took prowlarr's tunnel. Every delete matched only current
-  priorities, so nothing could remove it. It also showed
-  `117: from 192.168.111.250 lookup 51806`, whose source is unknown.
-  - The operator chose to clean up any source address.
-    `proton_delete_unowned_table_rules` removes every rule in the instance's
-    table except at `QBT_VPN_RULE_PRIORITY` and
-    `DOCKER_FALLBACK_VPN_RULE_PRIORITY`, and fails closed if the listing fails.
-  - WireGuard bring-up and every watcher pass call it for IPv4, and for IPv6
-    when enabled.
-  - It replaces the legacy priority-100 fwmark and priority-110 subnet deletes
-    in wg-up and the watcher. wg-up no longer reads `VPN_FWMARK`.
-  - wg-down keeps its exact teardown deletes.
-  - Mutation checks on the owned-priority filter, the listing failure, and
-    each call site fail a test.
-- 4.5 deferred. The earlier observation below explains where rule 110 came
-  from. With the sweep in place, a changed priority now cleans up after itself.
-- Earlier observation, before the install: 4.5 and 4.6 were deferred on live
-  evidence from 2026-09-23. `ip rule` showed a priority-110 rule, `from 192.168.96.8 lookup 51806`, which is prowlarr's
+- 4.5 and 4.6 deferred on live evidence from 2026-09-23. `ip rule` showed a
+  priority-110 rule, `from 192.168.96.8 lookup 51806`, which is prowlarr's
   table at the old `QBT_VPN_RULE_PRIORITY` fallback. The manifest priority is
   116, and the installed `proton-instance-common.sh` differed from source.
   The fallback and the 110 cleanup deletes are still reachable on this host.
   Re-check after installing and restarting.
+- Correction, later on 2026-09-23: rule 110 is not a leftover of the old
+  fallback. `/opt/mousehole/docker-compose.yml`, a separate host-network
+  service with `NET_ADMIN`, adds
+  `from 192.168.96.8/32 lookup 51806 priority 110` and
+  `from 192.168.111.250/32 lookup 51806 priority 117` to route mousehole
+  through prowlarr's tunnel.
+  - 192.168.96.8 now belongs to whisparr, so the hard-coded 110 rule
+    misroutes whisparr. The fix belongs in mousehole's configuration.
+  - Commit `1ce8ae1` added a sweep that deleted every rule in an instance's
+    table at an unowned priority. The operator chose "any source" after being
+    told 117 had no known owner, which was wrong: no one had looked for rule
+    owners outside this repo. The sweep conflicts with mousehole's
+    intentional rules, so it was reverted.
+  - Instance scripts again delete only the rules they create. 4.6 stays open.
+    Any future cleanup must identify this project's own rules, not assume it
+    owns the table.
+- Finding, 2026-09-23: the installer restarted Docker.
+  - `enable_and_start_services` ran `systemctl restart
+    proton-killswitch.service`. The installer's `docker-proton-tunnels.conf`
+    drop-in makes `docker.service` `Requires=` that unit, and systemd restarts
+    every running unit that requires a restarted unit.
+  - The 20:55 install therefore stopped Docker at 20:55:10 and started it
+    again at 20:57:06, taking all five clients down together.
+  - prowlarr and whisparr stayed exited, and their sync skipped them as
+    manual stops.
+  - The unit now has an `ExecReload` that re-runs the idempotent dispatcher.
+    The installer reloads the unit when it is active and starts it otherwise,
+    and never restarts it. A behavioral test checks both states, and it fails
+    if the restart is put back.
+  - The `Requires=` edge stays, so Docker still cannot run without the kill
+    switch.
 - 4.2 and 4.7 resolved later on 2026-09-23 from root checks on the live host:
   - `nft -a list chain ip proton_nat prerouting` failed with "No such file or
     directory". The chain does not exist; only `legacy-dnat` ever created it,

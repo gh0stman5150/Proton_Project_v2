@@ -109,7 +109,7 @@ This deployment targets a Debian/Ubuntu Linux host with systemd, root administra
 
 Before first activation, provide independent port-forward-capable WireGuard identities, the external `starr_network`, writable NAS mounts, and the five Compose projects and qBittorrent config directories. The installer installs common Compose policy and examples; it does not provision the NAS, Docker network, or all five project wrappers. See the [fleet contract](docs/architecture/qbittorrent-fleet-contract.md) for the required shape. If the qBittorrent containers have been removed, use the installed [fleet recreate bootstrap](docs/runbooks/qbittorrent-port-sync.md#recreating-a-fleet-whose-containers-were-removed); do not use `docker run` or bare `docker compose up`.
 
-The installer checks its Proton Debian package list and may download the Proton apt repository package and install `protonvpn`. That package step is not a complete host dependency provisioner. Review host routing and management access before approving installation: it restarts the host kill switch.
+The installer checks its Proton Debian package list and may download the Proton apt repository package and install `protonvpn`. That package step is not a complete host dependency provisioner. Review host routing and management access before approving installation: it reapplies the host kill switch in place (a unit reload, or a start if inactive). It never restarts that unit, because `docker.service` requires it and a restart would restart Docker and every container.
 
 ## Authentication Requirements
 

@@ -242,14 +242,6 @@ docker_ipv6_fallback_enabled() {
 	docker_fallback_vpn_routing_enabled && [[ "$INSTANCE" == "$DOCKER_IPV6_FALLBACK_INSTANCE" ]]
 }
 
-remove_unowned_table_rules() {
-	local family="$1" removed
-	removed="$(proton_delete_unowned_table_rules "$family" "$VPN_TABLE" "$QBT_VPN_RULE_PRIORITY" "$DOCKER_FALLBACK_VPN_RULE_PRIORITY")" || return 1
-	if [[ -n "$removed" ]]; then
-		log "Removed IPv$family policy rules at unowned priorities in table $VPN_TABLE: ${removed//$'\n'/; }"
-	fi
-}
-
 reapply_routes() {
 	local new_cidr="$1"
 	local new_cidr6="${2:-}"
@@ -282,14 +274,13 @@ reapply_routes() {
 	fi
 
 	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE" || return 1
-	remove_unowned_table_rules 4 || return 1
 	if [[ -n "$new_cidr6" ]]; then
 		ip -6 route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE" || return 1
-		remove_unowned_table_rules 6 || return 1
 	fi
 
 	if [[ -n "$old_cidr" && "$old_cidr" != "$new_cidr" ]]; then
 		log "Removing old Docker policy rules for $old_cidr"
+		proton_delete_ip_rule_all 4 from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" || return 1
 		proton_delete_ip_rule_all 4 from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		if command -v iptables >/dev/null 2>&1; then
 			proton_iptables_rule remove raw PREROUTING -i "$VPN_INTERFACE" -d "$old_cidr" -j ACCEPT || return 1
@@ -302,6 +293,7 @@ reapply_routes() {
 		if [[ -n "$LAN_CIDR" ]]; then
 			proton_replace_ip_rule 4 from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" || return 1
 		fi
+		proton_delete_ip_rule_all 4 from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" || return 1
 		proton_delete_ip_rule_all 4 from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		if docker_ipv4_fallback_enabled; then
 			ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1

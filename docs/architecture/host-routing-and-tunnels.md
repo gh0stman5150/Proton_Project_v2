@@ -170,13 +170,10 @@ The watcher listens for Docker network and container events and can:
 2. Reapply the Docker kill-switch state after Docker restarts or network changes
 3. Refresh qBittorrent port state so the Compose-published port stays in sync
 
-Each instance owns two priorities in its route table: its qBittorrent host
-rule at `QBT_VPN_RULE_PRIORITY` and, for the fallback owner, the Docker subnet
-rule at `DOCKER_FALLBACK_VPN_RULE_PRIORITY` (130). WireGuard bring-up and every
-watcher pass remove any other rule that routes into the instance's table,
-whatever its source or selector, and log each one. This clears rules left at
-retired priorities, such as the old 110 default, the priority-100 fwmark rules,
-or a source nothing recognizes, which the exact per-rule deletes never match.
+The route tables are not exclusively owned by this project. Other host
+services may add their own rules into an instance's table (on this host,
+mousehole routes itself through prowlarr's tunnel), so instance scripts delete
+only the exact rules they create.
 
 The watcher also reconciles periodically when no event arrives. Every pass
 reasserts policy routes and the kill switch; a periodic pass queues
@@ -208,7 +205,7 @@ The installer:
 11. Installs units that have systemd recreate `/run/proton` before applying sandboxed writable paths
 12. Resets failed unit state without restarting active templated instance chains
 13. Runs `systemctl daemon-reload`
-14. Disables the obsolete singleton units, enables/restarts the host kill switch, and leaves templated instance startup/reconciliation to the operator
+14. Disables the obsolete singleton units, enables the host kill switch and reapplies it with a reload (start if inactive, never restart, which would restart Docker through its `Requires=`), and leaves templated instance startup/reconciliation to the operator
 
 After installation, run the protected fleet preflight and explicitly restart/reconcile the affected instance chains. A shared qBittorrent change is not complete until all five instances pass the runtime verifier.
 

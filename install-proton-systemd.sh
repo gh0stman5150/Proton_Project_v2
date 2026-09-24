@@ -560,7 +560,15 @@ enable_and_start_services() {
 	systemctl reset-failed "${LEGACY_SINGLETON_SERVICES[@]}" >/dev/null 2>&1 || true
 	systemctl enable proton-killswitch.service
 	systemctl reset-failed "${OPTIONAL_SERVICES[@]}" "${SERVICES[@]}" >/dev/null 2>&1 || true
-	systemctl restart proton-killswitch.service
+	# Never restart the kill switch here. docker.service Requires= it, and
+	# systemd restarts every running unit that requires a restarted unit, so a
+	# restart takes Docker and every container down. A reload reapplies the
+	# firewall in place and does not propagate; start is a no-op for Docker.
+	if systemctl is-active --quiet proton-killswitch.service; then
+		systemctl reload proton-killswitch.service
+	else
+		systemctl start proton-killswitch.service
+	fi
 }
 
 ensure_root

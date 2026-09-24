@@ -125,3 +125,32 @@
   ' _ "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
 }
+
+@test "installer reapplies the kill switch without restarting it so Docker is never restarted" {
+  for state in active inactive; do
+    run bash -c '
+      set -euo pipefail
+      state="$1"
+      log_file="$2"
+      : > "$log_file"
+      systemctl() {
+        printf "%s\n" "$*" >> "$log_file"
+        if [[ "$1" == is-active ]]; then [[ "$state" == active ]]; fi
+      }
+      LEGACY_SINGLETON_SERVICES=(proton-legacy.service)
+      OPTIONAL_SERVICES=()
+      SERVICES=()
+      eval "$(sed -n "/^enable_and_start_services() {/,/^}/p" install-proton-systemd.sh)"
+      enable_and_start_services
+    ' _ "$state" "$BATS_TEST_TMPDIR/systemctl.log"
+    [ "$status" -eq 0 ]
+    run grep -E '(^| )(restart|try-restart|reload-or-restart) proton-killswitch' "$BATS_TEST_TMPDIR/systemctl.log"
+    [ "$status" -eq 1 ]
+    if [[ "$state" == active ]]; then
+      grep -Fx 'reload proton-killswitch.service' "$BATS_TEST_TMPDIR/systemctl.log"
+    else
+      grep -Fx 'start proton-killswitch.service' "$BATS_TEST_TMPDIR/systemctl.log"
+    fi
+  done
+  grep -Fx 'ExecReload=/usr/local/bin/proton/proton-killswitch-dispatch.sh' proton-killswitch.service
+}
