@@ -44,7 +44,7 @@ Useful knobs:
 6. `PING_TIMEOUT_SECONDS=1`
 7. `PING_COUNT=1`
 8. `SERVER_POOL_STRICT_LINT=on`
-9. `WG_EXPECTED_DNS=10.2.0.1`
+9. `WG_EXPECTED_DNS=10.2.0.1` (script default; the template sets `10.2.0.1,2a07:b944::2:1`, and the IPv6 entry applies only with WireGuard IPv6 enabled)
 10. `WG_LINT_ALLOW_MISSING_DNS=off`
 11. `PORT_FORWARD_REQUIRED=on`
 12. `PF_CAPABLE_PROFILES_FILE=/etc/proton/pf-capable-profiles.tsv`

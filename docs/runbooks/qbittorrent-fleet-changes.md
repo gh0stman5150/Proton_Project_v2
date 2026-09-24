@@ -216,22 +216,7 @@ For qBittorrent preferences, do not copy entire `qBittorrent.conf` files across 
 
 ### 5. Run repository validation
 
-From the repository root:
-
-```bash
-for script in ./*.sh tools/*.sh; do bash -n "$script" || exit; done
-timeout --kill-after=5s 300s env BATS_TEST_TIMEOUT=30 ./bats-core/bin/bats tests &&
-shellcheck -x ./*.sh tools/*.sh &&
-shfmt -d ./*.sh tools/*.sh || exit
-git diff --check
-```
-
-CI also requires shfmt formatting and ShellCheck with sourced-file analysis:
-
-```bash
-shfmt -d ./*.sh tools/*.sh
-shellcheck -x ./*.sh tools/*.sh
-```
+Run the source validation commands in [AGENTS.md → Validation](../../AGENTS.md#validation).
 
 Tests for a shared fix must be table-driven over all five instances or exercise the shared implementation directly. A grep that happens to find another instance's value is not an adequate per-instance assertion.
 
@@ -306,8 +291,9 @@ A canary is allowed as an observation step only if the change plan explicitly re
 
 #### Fresh-lease schema migration
 
-The 2026-09-11 audit changes are source changes, not evidence of an upgraded
-installation. Old two-field port state is rejected. Never manufacture expiry,
+Source changes are not evidence of an upgraded installation; see
+[Deployment status](../README.md#deployment-status) for what this host runs.
+Old two-field port state is rejected. Never manufacture expiry,
 boot ID, or generation fields from a persistent port artifact.
 
 Before activation, obtain maintenance approval, pass the protected all-five

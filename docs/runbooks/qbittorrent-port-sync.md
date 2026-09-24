@@ -79,11 +79,11 @@ Stopping just the producer leaves an unexpired lease to age out; its exit trap
 must not delete a newer one-shot writer's state. Tunnel teardown invalidates the
 lease and generation. A lock pathname is never removed to release a lock.
 
-Source status, 2026-09-11: these lease changes have not been installed or live
-validated as part of this work. Existing two-field state is rejected. Deployment
-requires separately authorized sequential activation and verification across all
-five instances; a running legacy tunnel needs a generation from the updated
-lifecycle before the updated producer can publish. Do not manufacture generation
+Existing two-field state is rejected. On a host still running the pre-lease
+code, deployment requires separately authorized sequential activation and
+verification across all five instances; a running legacy tunnel needs a
+generation from the updated lifecycle before the updated producer can publish.
+Installed status is in [Deployment status](../README.md#deployment-status). Do not manufacture generation
 files or copy another instance's lease to bypass this gate.
 
 ### Renewal and allocation budgets
@@ -137,11 +137,8 @@ tunnels are valid. The manual reset utility removes Proton filter protection and
 owned masquerade rules, but retains DNAT and host default policies; it is not a
 single-instance port-repair command and still needs fleet outage authorization.
 
-Source status, 2026-09-11: fixture and disposable-network-namespace tests passed.
-No host firewall, service, or installed script was changed. Deploy the shared
-instance helper with the callers, not individual executables copied in isolation.
-The separate documentation/deployment gates and all-five live validation remain
-required before accepting this behavior on the host.
+Install the shared instance helper with its callers through the installer, not
+individual executables copied in isolation.
 
 ### Last applied Docker port
 
@@ -201,7 +198,7 @@ the port it restored after a failed recreation. No script reads it back.
 
 An unchanged lease does not normally recreate the container when the artifact and both Docker mappings match. Stale mappings or an unreachable Web UI can trigger guarded recreation. Forced fleet sync can repair absent port mappings after lifecycle checks, but never bypasses zombie or persistent `D`-state refusal. If the artifact is in the legacy two-key format, the script canonicalizes it to one key without an unnecessary restart.
 
-Source follow-up, 2026-09-12 (not deployed): recreation revalidates the live lease
+Recreation revalidates the live lease
 immediately before Compose startup and after post-start verification. A lease
 that expires or changes during shutdown cannot authorize replacement startup;
 expiry during startup cannot produce a success report. Previous port artifacts

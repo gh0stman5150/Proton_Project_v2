@@ -2,7 +2,15 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# From the checkout (tools/), the project is the parent directory. The
+# installed copy under /usr/local/bin/proton compares against the canonical
+# checkout instead.
+if [[ -r "${SCRIPT_DIR}/../qbittorrent-compose.common.yml" ]]; then
+	DEFAULT_PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+else
+	DEFAULT_PROJECT_DIR=/usr/local/bin/proton_project
+fi
+PROJECT_DIR="${PROTON_PROJECT_DIR:-$DEFAULT_PROJECT_DIR}"
 COMPOSE_ROOT="${QBT_COMPOSE_ROOT:-/opt}"
 PROTON_INSTANCE_ROOT="${PROTON_INSTANCE_ROOT:-/etc/proton/instances}"
 RUNTIME_ROOT="${PROTON_RUNTIME_ROOT:-/run/proton}"
@@ -127,14 +135,19 @@ fi
 if [[ ! -r "$COMMON_COMPOSE_FILE" ]]; then
 	fail "shared Compose policy is missing or unreadable: $COMMON_COMPOSE_FILE"
 fi
-if [[ -r "$SOURCE_COMMON_FILE" && -r "$COMMON_COMPOSE_FILE" ]]; then
+# Source parity is a required check, never silently skipped.
+if [[ ! -r "$SOURCE_COMMON_FILE" ]]; then
+	fail "repository Compose policy is unreadable: $SOURCE_COMMON_FILE (set PROTON_PROJECT_DIR to the canonical checkout)"
+elif [[ -r "$COMMON_COMPOSE_FILE" ]]; then
 	if cmp -s "$SOURCE_COMMON_FILE" "$COMMON_COMPOSE_FILE"; then
 		pass "deployed shared Compose policy matches repository source"
 	else
 		fail "$COMMON_COMPOSE_FILE differs from $SOURCE_COMMON_FILE"
 	fi
 fi
-if [[ -r "$SOURCE_MANIFEST_FILE" && -r "$MANIFEST_FILE" ]]; then
+if [[ ! -r "$SOURCE_MANIFEST_FILE" ]]; then
+	fail "repository instance manifest is unreadable: $SOURCE_MANIFEST_FILE (set PROTON_PROJECT_DIR to the canonical checkout)"
+elif [[ -r "$MANIFEST_FILE" ]]; then
 	if cmp -s "$SOURCE_MANIFEST_FILE" "$MANIFEST_FILE"; then
 		pass "deployed instance manifest matches repository source"
 	else

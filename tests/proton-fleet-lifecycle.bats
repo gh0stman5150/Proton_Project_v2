@@ -106,3 +106,34 @@ EOF
   [[ "$output" != *'expected QBT_HOST_BIND_IP='* ]]
   [[ "$output" != *'Web UI port must be'* ]]
 }
+
+@test "installed verifier compares against the canonical checkout and never skips source parity" {
+  local installed="$TEST_TMPDIR/usr-local-bin/proton" common="$TEST_TMPDIR/qbittorrent-common"
+  mkdir -p "$installed" "$common" "$TEST_TMPDIR/compose"
+  cp tools/verify-qbittorrent-fleet.sh "$installed/proton-qbt-fleet-verify.sh"
+  cp proton-qbittorrent-common.sh proton-instance-common.sh "$installed/"
+  TMPBIN="$TEST_TMPDIR/bin" stub_command docker 'exit 0'
+  cp qbittorrent-instances.tsv "$common/"
+  printf 'drifted: true\n' > "$common/docker-compose.common.yml"
+  verify() {
+    run env QBT_COMMON_DIR="$common" QBT_COMPOSE_ROOT="$TEST_TMPDIR/compose" "$@" \
+      bash "$installed/proton-qbt-fleet-verify.sh" --static-only
+  }
+
+  # Outside the checkout, the default source is the canonical checkout.
+  verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"/usr/local/bin/proton_project/qbittorrent-compose.common.yml"* ]]
+
+  # An unreadable source is a failure, not a skipped check.
+  verify PROTON_PROJECT_DIR="$TEST_TMPDIR/no-checkout"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"FAIL: repository Compose policy is unreadable: $TEST_TMPDIR/no-checkout/qbittorrent-compose.common.yml"* ]]
+  [[ "$output" == *"FAIL: repository instance manifest is unreadable: $TEST_TMPDIR/no-checkout/qbittorrent-instances.tsv"* ]]
+
+  # With a readable checkout, drift is reported and a matching manifest passes.
+  verify PROTON_PROJECT_DIR="$PWD"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"FAIL: $common/docker-compose.common.yml differs from $PWD/qbittorrent-compose.common.yml"* ]]
+  [[ "$output" == *"PASS: deployed instance manifest matches repository source"* ]]
+}

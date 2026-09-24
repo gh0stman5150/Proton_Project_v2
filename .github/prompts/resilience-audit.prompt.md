@@ -3,7 +3,8 @@ source of truth for this repo's conventions, safety boundaries, and the
 qBittorrent fleet contract. Do not propose anything that conflicts with it 
 (e.g. do not introduce a VPN sidecar container, do not add torrent queueing 
 or upload/seeding limits, do not bypass the lock files under /run/proton, 
-do not touch Archive/ as if it's dead code).
+do not run or revive the git-ignored legacy helpers in Archive/; see
+Archive/README.md).
 
 If any referenced file or README.md's "Active Service Path" list is missing,
 or if the referenced documents contradict each other, stop and report the

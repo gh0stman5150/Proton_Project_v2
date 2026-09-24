@@ -241,7 +241,6 @@ validate_bundle() {
 	validate_shell_syntax "${SCRIPT_DIR}/tools/proton-fleet-services.sh"
 
 	ensure_source_file "${SCRIPT_DIR}/proton-qbittorrent-port.env"
-	ensure_source_file "${SCRIPT_DIR}/docker-proton-tunnels.conf"
 	ensure_source_file "${SCRIPT_DIR}/docker-proton-stop-timeout.conf"
 }
 
@@ -365,13 +364,22 @@ install_nas_mount_readiness() {
 	done
 }
 
+# Docker requires the kill switch and wants, and starts after, every managed
+# tunnel. The tunnel list comes from qbittorrent-instances.tsv, so it cannot
+# drift from the manifest.
 install_docker_tunnel_ordering() {
 	local override_dir="${SYSTEMD_DIR}/docker.service.d"
+	local generated instance tunnels=""
 
+	for instance in "${INSTANCES[@]}"; do
+		tunnels+="${tunnels:+ }proton-wg@${instance}.service"
+	done
 	mkdir -p "$override_dir"
-	install_normalized_file \
-		"${SCRIPT_DIR}/docker-proton-tunnels.conf" \
-		"${override_dir}/proton-tunnels.conf" 0644
+	generated="$(mktemp)"
+	printf '[Unit]\nRequires=proton-killswitch.service\nAfter=proton-killswitch.service\nWants=%s\nAfter=%s\n' \
+		"$tunnels" "$tunnels" >"$generated"
+	install_normalized_file "$generated" "${override_dir}/proton-tunnels.conf" 0644
+	rm -f "$generated"
 	install_normalized_file \
 		"${SCRIPT_DIR}/docker-proton-stop-timeout.conf" \
 		"${override_dir}/proton-stop-timeout.conf" 0644

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Override these in /etc/default/nas-network-online, which
+# nas-network-online.service reads when present; no template is installed.
+# NAS_HOST is this host's NAS; set it there for another NAS.
 NAS_HOST="${NAS_HOST:-192.168.237.140}"
 NAS_PORT="${NAS_PORT:-445}"
 NAS_WAIT_SECONDS="${NAS_WAIT_SECONDS:-60}"

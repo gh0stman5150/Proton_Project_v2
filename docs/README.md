@@ -6,20 +6,28 @@ The canonical source is `/usr/local/bin/proton_project`. Do not use `/opt/proton
 
 ## Recorded recovered baseline
 
-This baseline reflects the August 2026 incident record and remains the required operating policy. Documentation review is not a fresh live-health or kernel-publication check.
+`cache=none` on `/mnt/data` is the active fleet-wide mitigation and remains required operating policy; it is not a demonstrated kernel fix. The [fleet contract](architecture/qbittorrent-fleet-contract.md) owns the storage and boot baseline and the oops timeline; the [wedge recovery runbook](runbooks/qbittorrent-wedge-recovery.md#kernel-upgrade-qualification) owns kernel qualification. Uploading and seeding stay enabled; do not add torrent queueing, active-upload or seeding limits, or a one-instance storage policy.
 
-- The live SMB 3.1.1 `/mnt/data` mount uses `cache=none` for all five clients and every other consumer of the share. The 2026-08-17 oops at 19:05 preceded the 20:01 fstab edit and 20:16 activation reboot; the mitigation has no observed recurrence yet, but it is not a demonstrated kernel fix.
-- Both NAS mount units require the route-and-TCP-445 `nas-network-online.service` gate. Docker wants and follows all five Proton WireGuard units; the kill switch and runtime verifier remain independent safety gates.
-- All five clients passed post-boot runtime verification with uploading and seeding enabled. Do not add torrent queueing, active-upload limits, seeding limits, or a Sonarr-only storage policy during follow-up work.
-- Ubuntu `7.0.0-30.30` has no relevant netfs change; `7.0.0-31.31` is proposed-only; Linux 7.1.8 and 7.2 contain related but unproven repairs. Use the incident record and wedge runbook before changing kernels.
+## Deployment status
+
+This is the one dated record of what is installed; other documents link here
+instead of carrying their own "not deployed" notes. Add a dated entry after each
+authorized install.
+
+- 2026-09-24: the canonical source through commit `4675079` is not yet
+  installed; everything through `7956a87` is. That covers the 2026-09-11 audit
+  (generation-bound leases, lifecycle and firewall serialization, selector
+  publication, recreation safety), the 2026-09-12 follow-ups, the 2026-09-13
+  single fallback owner, and code audit sections 1–6 and 4.4–4.6. Evidence: the
+  installed copies under `/usr/local/bin/proton` matched source byte for byte;
+  `proton-qbt-fleet-verify.sh --config` passed for all five instances; all 22
+  Proton units were active, and Docker and the kill switch were not restarted;
+  `ip rule` showed one qBittorrent rule per instance at 112–116 and a single
+  fallback rule (sonarr, 130). The runtime verifier (`--recreate`) was not run.
+  Source-only (not installed): `4675079` (Docker stop timeout and
+  restoring containers a Docker restart took down) and later commits.
 
 ## Start here
-
-The 2026-09-11 source audit adds fresh generation-bound leases, lifecycle and
-firewall serialization, checked selector publication, and recreation safety.
-No installation or live recovery was performed during that work. Follow the
-[fresh-lease migration](runbooks/qbittorrent-fleet-changes.md#fresh-lease-schema-migration)
-and its remaining acceptance gates before deploying the updated bundle.
 
 Dated documentation reviews live in [reviews/](reviews/); they are records,
 not operating guidance.

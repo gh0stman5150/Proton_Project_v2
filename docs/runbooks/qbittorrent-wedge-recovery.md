@@ -448,6 +448,14 @@ Do not select a kernel from its version number alone:
 - Linux 7.1.8 adds later netfs writeback error and `ENOMEM` iteration-state repairs;
 - Linux 7.2 adds asynchronous writeback exclusion held through result collection.
 
+Host observation, 2026-09-24 (`uname`, `dpkg-query`, `last`, `findmnt`; no
+external publication or patch review): the host runs Ubuntu `7.0.0-31.31`,
+booted since at least 2026-09-11, so the "proposed-only" note above is out of
+date for this host. `7.0.0-34.34` is installed but has not been booted. The
+2026-09-23 08:20 boot ended without a clean shutdown (`last` reports `crash`)
+before the 09:02 boot; its cause is not established here. `/mnt/data` is SMB
+3.1.1 with `cache=none`. None of this qualifies either kernel.
+
 The latter changes are relevant but do not prove prevention of this exact `netfs_read_gaps` oops. Keep `cache=none` in place while qualifying a normally published Ubuntu kernel. Before production adoption, verify exact patch provenance, boot the candidate only during a maintenance window, run all-five storage and runtime gates, exercise representative downloading and seeding I/O, and retain a known bootable rollback kernel.
 
 ## Incident closure criteria

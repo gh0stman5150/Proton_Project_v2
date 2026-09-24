@@ -64,17 +64,6 @@
   grep -Fq 'nc -z -w 2 "$NAS_HOST" "$NAS_PORT"' nas-network-online.sh
 }
 
-@test "Docker waits for every managed Proton tunnel before restoring containers" {
-  local instance
-
-  for instance in lidarr prowlarr radarr sonarr whisparr; do
-    grep -Fq "proton-wg@${instance}.service" docker-proton-tunnels.conf
-  done
-
-  grep -Fxq 'Wants=proton-wg@lidarr.service proton-wg@prowlarr.service proton-wg@radarr.service proton-wg@sonarr.service proton-wg@whisparr.service' docker-proton-tunnels.conf
-  grep -Fxq 'After=proton-wg@lidarr.service proton-wg@prowlarr.service proton-wg@radarr.service proton-wg@sonarr.service proton-wg@whisparr.service' docker-proton-tunnels.conf
-}
-
 @test "Docker's stop timeout outlasts qBittorrent's stop grace period" {
   grace="$(awk '$1 == "stop_grace_period:" { sub(/s$/, "", $2); print $2 }' qbittorrent-compose.common.yml)"
   timeout="$(awk -F= '$1 == "TimeoutStopSec" { print $2 }' docker-proton-stop-timeout.conf)"

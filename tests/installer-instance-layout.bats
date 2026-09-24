@@ -20,7 +20,6 @@
   grep -Fq 'nas-network-online.mount.conf' install-proton-systemd.sh
   grep -Fq 'mnt-data.mount' install-proton-systemd.sh
   grep -Fq 'mnt-plex.mount' install-proton-systemd.sh
-  grep -Fq 'docker-proton-tunnels.conf' install-proton-systemd.sh
   grep -Fq 'docker-proton-stop-timeout.conf' install-proton-systemd.sh
   grep -Fq '${SYSTEMD_DIR}/docker.service.d' install-proton-systemd.sh
   grep -Fq 'install_docker_tunnel_ordering' install-proton-systemd.sh
@@ -250,17 +249,24 @@ EOF
   grep -Fx 'ExecReload=/usr/local/bin/proton/proton-killswitch-dispatch.sh' proton-killswitch.service
 }
 
-@test "installer installs Docker's tunnel-ordering and stop-timeout drop-ins" {
+@test "installer generates Docker's tunnel ordering from the manifest and installs the stop timeout" {
   run bash -c '
     set -euo pipefail
     SCRIPT_DIR="$PWD"
     SYSTEMD_DIR="$1/systemd"
-    eval "$(sed -n "/^normalize_text_file() {/,/^}/p" install-proton-systemd.sh)"
-    eval "$(sed -n "/^install_docker_tunnel_ordering() {/,/^}/p" install-proton-systemd.sh)"
+    INSTANCE_MANIFEST_SOURCE=qbittorrent-instances.tsv
+    for fn in load_instance_manifest normalize_text_file install_docker_tunnel_ordering; do
+      eval "$(sed -n "/^${fn}() {/,/^}/p" install-proton-systemd.sh)"
+    done
     install_normalized_file() { normalize_text_file "$1" "$2"; chmod "$3" "$2"; }
+    load_instance_manifest
     install_docker_tunnel_ordering
   ' _ "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  cmp <(awk 1 docker-proton-tunnels.conf) "$BATS_TEST_TMPDIR/systemd/docker.service.d/proton-tunnels.conf"
+  tunnels="$(awk -F '\t' '$1 !~ /^#/ && $1 != "" { printf "%sproton-wg@%s.service", sep, $1; sep = " " }' qbittorrent-instances.tsv)"
+  [ "$tunnels" = 'proton-wg@lidarr.service proton-wg@prowlarr.service proton-wg@radarr.service proton-wg@sonarr.service proton-wg@whisparr.service' ]
+  [ "$(cat "$BATS_TEST_TMPDIR/systemd/docker.service.d/proton-tunnels.conf")" = "$(printf '%s\n' '[Unit]' \
+    'Requires=proton-killswitch.service' 'After=proton-killswitch.service' "Wants=$tunnels" "After=$tunnels")" ]
+  [ "$(stat -c %a "$BATS_TEST_TMPDIR/systemd/docker.service.d/proton-tunnels.conf")" = 644 ]
   cmp <(awk 1 docker-proton-stop-timeout.conf) "$BATS_TEST_TMPDIR/systemd/docker.service.d/proton-stop-timeout.conf"
 }

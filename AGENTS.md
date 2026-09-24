@@ -82,14 +82,22 @@ shfmt and `shellcheck -x`, then runs Bats.
 
 ## Validation
 
-From `/usr/local/bin/proton_project`:
+This is the one copy of the source validation commands; other documents link
+here. From `/usr/local/bin/proton_project`:
 
 ```bash
-./bats-core/bin/bats tests
-shellcheck ./*.sh tools/*.sh
-for script in ./*.sh tools/*.sh; do bash -n "$script" || exit; done
-git diff --check
+timeout --kill-after=5s 300s env BATS_TEST_TIMEOUT=30 ./bats-core/bin/bats tests &&
+shellcheck -x ./*.sh tools/*.sh &&
+shfmt -d ./*.sh tools/*.sh &&
+(for script in ./*.sh tools/*.sh; do bash -n "$script" || exit 1; done) &&
+git diff --check &&
+echo "validation passed"
 ```
+
+CI runs the same shfmt, ShellCheck, and Bats checks on every tracked `*.sh`
+(with the apt `bats` package), plus a line-ending renormalization check. Use
+the pinned `bats-core/bin/bats` locally and do not modify `bats-core/` to make a
+test pass.
 
 Fleet gates:
 

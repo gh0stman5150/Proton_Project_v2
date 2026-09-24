@@ -91,12 +91,15 @@ state errors abort publication, and failed firewall inspection is not absence.
 
 ## DNS Policy
 
-The repository source of truth requires:
+Required:
 
-1. `1.1.1.1` as the primary upstream DNS resolver
-2. `9.9.9.9` as the secondary upstream DNS resolver
-3. Docker hosted application DNS queries must follow the intended VPN path
-4. Docker hosted application DNS must not bypass the kill switch
+1. Docker hosted application DNS queries must follow the intended VPN path
+2. Docker hosted application DNS must not bypass the kill switch
+
+Containers use Docker's embedded resolver, which forwards to the host's
+systemd-resolved stub. With `RESOLVED_DNS_ROUTE_DOMAIN=~.`, each tunnel link
+claims all names, so those queries leave through the Proton tunnel DNS
+servers (`10.<subnet>.0.1`) rather than the LAN.
 
 When `MANAGE_RESOLVED_DNS=auto` and `resolvectl` is available, the up and down scripts may program and revert interface DNS. Treat that behavior as implementation detail, not policy by itself.
 They change only their own link and never run `resolvectl flush-caches`.
@@ -104,7 +107,7 @@ systemd-resolved already drops a link's cache when that link's servers change,
 and a global flush would also empty the host cache and the other four tunnels'
 caches on every tunnel start and stop.
 
-`WG_EXPECTED_DNS=10.2.0.1` is the WireGuard interface DNS provided by Proton inside the tunnel. The `1.1.1.1` and `9.9.9.9` values are external upstream resolvers used for DNS policy verification and are not substitutes for the tunnel DNS.
+`WG_EXPECTED_DNS` is the tunnel DNS the selector expects in pool profiles: `10.2.0.1` by default, and the template adds Proton's IPv6 resolver (`10.2.0.1,2a07:b944::2:1`); the IPv6 entry is compared only when WireGuard IPv6 is enabled. The host's own systemd-resolved global and fallback servers (`9.9.9.9` and `1.1.1.1` on this host, configured outside this repository) are neither set nor checked here and are not substitutes for the tunnel DNS.
 
 Do not assume DNS is correct only because WireGuard profile DNS values exist. Verify DNS behavior for:
 

@@ -13,25 +13,7 @@ protected routing path, but this repository does not manage their lifecycle.
 
 This README documents the source implementation, intended runtime behavior, installation flow, and validation steps. If this README and `AGENTS.md` ever differ, follow `AGENTS.md`.
 
-Source status, 2026-09-11: the audit fixes cover bootstrap/recreation safety,
-fresh leases and renewal, routing/lifecycle recovery, and selector/firewall
-ownership. They have not been deployed or verified on live host traffic during
-this work. Fixture and isolated network-namespace tests do not establish installed
-provenance, systemd recovery, or a kernel fix. Use the sequential source-version
-migration in the [fleet change runbook](docs/runbooks/qbittorrent-fleet-changes.md)
-before treating an existing installation as upgraded.
-
-Source follow-up, 2026-09-12: recreation now rechecks lease freshness before
-replacement startup and success, retries its own recorded stopped container
-after a failed recreation, and bounds complete WireGuard teardown below the
-systemd stop timeout. These changes are source-only and are not deployed.
-
-Source follow-up, 2026-09-13: a confirmed multi-owner IPv4 fallback-route defect
-caused ordinary Docker applications to change Proton tunnels during active TLS
-connections. The canonical source now assigns the subnet fallback to one stable
-owner while preserving every qBittorrent-specific tunnel. The change passed the
-complete source suite but still requires privileged deployment and live
-acceptance. See the [incident record](docs/incidents/2026-09-13-docker-proton-fallback-route-churn.md).
+What is installed on the host, and since when, is recorded in one place: [docs → Deployment status](docs/README.md#deployment-status). Tests do not establish installed provenance or live health.
 
 ## Detailed Documentation
 
@@ -49,15 +31,7 @@ Shared configuration changes must be implemented once and reconciled across `lid
 
 ## Recorded Storage, Boot, And Kernel Baseline
 
-The following summarizes the August 2026 incident evidence and required operating baseline. This documentation review did not revalidate live health or current kernel publication channels; use the runtime gates before an operational change.
-
-- `/mnt/data` is an SMB 3.1.1 CIFS mount with active `cache=none`. It is one shared policy for all five qBittorrent clients and all other consumers of that mount.
-- The third oops occurred at 19:05 CDT on 2026-08-17 while the mount still used `cache=strict`; fstab changed at 20:01, and the 20:16 reboot created the first live `cache=none` mount. The recorded post-reboot checks found no recurrence on the fresh mount; that observation does not establish current health or a demonstrated kernel fix.
-- `mnt-data.mount` and `mnt-plex.mount` require and follow `nas-network-online.service`, which waits for both a route to the NAS and a successful SMB connection on TCP port 445.
-- Docker wants and follows all five Proton WireGuard units. The ordering attempts tunnel activation before Docker; the kill switch and runtime verifier still decide whether application traffic is safe.
-- All five qBittorrent clients passed post-boot runtime verification. Torrent queueing remains disabled, and recovery introduced no active-upload or seeding limit. Shared changes remain sequential so four clients stay available while one is reconciled.
-
-There is no production kernel currently documented as a proven exact fix. In the recorded package review, Ubuntu `7.0.0-30.30` adds no relevant netfs correction, and `7.0.0-31.31` remains proposed-only. Linux 7.1.8 and 7.2 contain related netfs writeback and exclusion repairs, but they have not been demonstrated against this workload. Keep `cache=none` active and follow the [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) for candidate-kernel qualification. These are historical findings, not a new check of package publication channels.
+`cache=none` on `/mnt/data` is the active fleet-wide mitigation for the August 2026 CIFS/netfs wedge; no kernel is documented as a proven fix. The storage and boot baseline (mount policy, NAS readiness, Docker-after-tunnel ordering, and the oops timeline) is owned by the [fleet contract](docs/architecture/qbittorrent-fleet-contract.md), and kernel qualification by the [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md#kernel-upgrade-qualification). Read those before any storage or kernel change.
 
 ## Key Capabilities
 
@@ -92,9 +66,9 @@ The systemd units are wired to the hardened entrypoints below:
 9. `proton-healthcheck.sh`
 10. `install-proton-systemd.sh`
 
-The installer’s `SCRIPTS` list and the units’ `ExecStart`/`ExecStop` fields define installed entrypoints. Other root scripts include maintenance and deployment helpers; inspect their behavior before running them.
+The installer’s `SCRIPTS` list covers every root script, and the units’ `ExecStart`/`ExecStop` fields name the installed entrypoints. The `tools/` fleet scripts are installed under new names (for example `tools/verify-qbittorrent-fleet.sh` becomes `proton-qbt-fleet-verify.sh`). Run the installed copies, not the source checkout, and inspect a script's behavior before running it.
 
-The kill switch dispatcher defaults to `KILLSWITCH_BACKEND=auto`. It prefers `nftables` when `nft` is available and falls back to `iptables` otherwise.
+The kill switch dispatcher defaults to `KILLSWITCH_BACKEND=auto`, which prefers `nftables` when `nft` is available and falls back to `iptables` otherwise. The shipped `proton-common.env` template pins `KILLSWITCH_BACKEND=nftables`, because Docker IPv6 enforcement and the IPv6 rollout preflight require an explicit nftables backend.
 
 The installer treats `proton-docker-watch@INSTANCE.service` as opt-in. For this five-instance fleet, enable all five watchers; see the [Docker network watcher](docs/architecture/host-routing-and-tunnels.md#docker-network-watcher).
 
@@ -239,7 +213,7 @@ Useful knobs:
 6. `PING_TIMEOUT_SECONDS=1`
 7. `PING_COUNT=1`
 8. `SERVER_POOL_STRICT_LINT=on`
-9. `WG_EXPECTED_DNS=10.2.0.1`
+9. `WG_EXPECTED_DNS=10.2.0.1` (script default; the template sets `10.2.0.1,2a07:b944::2:1`, and the IPv6 entry applies only with WireGuard IPv6 enabled)
 10. `WG_LINT_ALLOW_MISSING_DNS=off`
 11. `PORT_FORWARD_REQUIRED=on`
 12. `PF_CAPABLE_PROFILES_FILE=/etc/proton/pf-capable-profiles.tsv`
@@ -381,26 +355,7 @@ Deploy the inert firewall and routing bundle before a maintenance window with a 
 
 ## DNS Policy
 
-The repository source of truth requires:
-
-1. `1.1.1.1` as the primary upstream DNS resolver
-2. `9.9.9.9` as the secondary upstream DNS resolver
-3. Docker hosted application DNS queries must follow the intended VPN path
-4. Docker hosted application DNS must not bypass the kill switch
-
-When `MANAGE_RESOLVED_DNS=auto` and `resolvectl` is available, the up and down scripts may program and revert interface DNS. Treat that behavior as implementation detail, not policy by itself.
-
-`WG_EXPECTED_DNS=10.2.0.1` is the WireGuard interface DNS provided by Proton inside the tunnel. The `1.1.1.1` and `9.9.9.9` values are external upstream resolvers used for DNS policy verification and are not substitutes for the tunnel DNS.
-
-Do not assume DNS is correct only because WireGuard profile DNS values exist. Verify DNS behavior for:
-
-1. host resolver configuration
-2. container `/etc/resolv.conf`
-3. Docker embedded DNS behavior
-4. WireGuard DNS settings
-5. any `systemd-resolved` integration
-6. VPN down and reconnect events
-7. container restarts
+Docker application DNS must follow the intended VPN path and must not bypass the kill switch. How queries reach the Proton tunnel resolvers, what `WG_EXPECTED_DNS` checks, and what to verify are in [host routing → DNS Policy](docs/architecture/host-routing-and-tunnels.md#dns-policy).
 
 ## Docker Egress Policy
 
@@ -603,15 +558,7 @@ keys, protected environment files, or unredacted API responses.
 
 Run from `/usr/local/bin/proton_project`:
 
-```bash
-timeout --kill-after=5s 300s env BATS_TEST_TIMEOUT=30 ./bats-core/bin/bats tests &&
-shellcheck -x ./*.sh tools/*.sh &&
-shfmt -d ./*.sh tools/*.sh || exit
-for script in ./*.sh tools/*.sh; do bash -n "$script" || exit; done
-git diff --check
-```
-
-CI additionally checks tracked shell formatting with shfmt and runs `shellcheck -x`. Use the pinned `bats-core/bin/bats` checkout for local tests; do not modify the upstream runner to accommodate a Proton failure. Keep tests isolated with temporary fixtures and mocked host commands.
+Run the source validation commands in [AGENTS.md → Validation](AGENTS.md#validation); that section is their only copy. Keep tests isolated with temporary fixtures and mocked host commands.
 
 ## Contribution and Support
 

@@ -29,19 +29,13 @@ fresh clone run `git submodule update --init bats-core`. CI uses the apt `bats`
 package instead. The suite assumes Linux, GNU
 coreutils, and bash 4+; many tests fail under macOS bash 3.2/BSD tools.
 
-```bash
-# Full suite (pinned runner; do not modify bats-core/ to make a test pass)
-timeout --kill-after=5s 300s env BATS_TEST_TIMEOUT=30 ./bats-core/bin/bats tests
+Full validation (suite plus static checks, as CI runs them) is in
+`AGENTS.md` → Validation. For a quicker loop while editing:
 
+```bash
 # One file, or one test by name regex
 ./bats-core/bin/bats tests/proton-qbittorrent-sync-recreate.bats
 ./bats-core/bin/bats tests/proton-wg-up.bats --filter 'kill switch'
-
-# Static checks (CI runs these on all tracked *.sh files)
-shellcheck -x ./*.sh tools/*.sh
-shfmt -d ./*.sh tools/*.sh        # CI fails on any shfmt -l output
-for script in ./*.sh tools/*.sh; do bash -n "$script" || exit; done
-git diff --check                  # CI also checks line-ending normalization
 ```
 
 Scripts use tab indentation (shfmt default). There is no build step.

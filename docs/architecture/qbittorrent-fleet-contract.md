@@ -152,8 +152,7 @@ A single bounded asynchronous sync child cannot delay subsequent renewals.
 An unchanged renewal re-runs the sync only at the drift interval; a port change
 or failed sync is synced on the next renewal.
 Allocation uses one overall deadline and verifies an active producer and fresh
-lease after queued startup. The timing defaults, migration requirements, and
-source-only deployment status are maintained in the
+lease after queued startup. The timing defaults and migration requirements are maintained in the
 [port synchronization runbook](../runbooks/qbittorrent-port-sync.md#renewal-and-allocation-budgets).
 
 ### Last successfully applied Docker port
@@ -348,10 +347,6 @@ Health recovery bounds sync and NAT-PMP child commands and queues full restarts
 with `systemctl --no-block`. The healthcheck follows both WireGuard and producer
 restarts through `PartOf=`. A queued restart is not proof of completed recovery.
 
-Source status, 2026-09-11: these routing/lifecycle changes are tested in isolated
-fixtures but have not been installed or validated against live host routing.
-Final deployment gates remain separate work.
-
 ### Shared kill-switch lock
 
 Both nftables and iptables backends use:
@@ -415,12 +410,10 @@ an unproven profile quarantine it without deleting pool configuration; transient
 failures of proven profiles trigger cooldown instead. Trappable exits remove
 owned temporary files; SIGKILL cannot guarantee temporary-file cleanup.
 
-Source status, 2026-09-11: selector and firewall changes passed fixture tests and
-real nft/iptables apply, repeatability, all-five concurrency, and reset tests in
-disposable unprivileged network namespaces. These tests did not change host
-networking. No installation, live traffic/leak test, or systemd activation was
-performed. The shared instance helper must be deployed with its callers; the
-legacy IPv6 copy/rollback bundle and parity preflight now include it.
+Selector and firewall changes are tested with fixtures and with real
+nft/iptables apply, repeatability, all-five concurrency, and reset runs in
+disposable unprivileged network namespaces. Install the shared instance helper
+with its callers; the installer does so.
 
 ### Per-instance locks
 
@@ -459,7 +452,7 @@ Transient `D` state can occur during ordinary CIFS I/O. Automation samples LWP I
 /usr/local/bin/proton/proton-qbt-fleet-verify.sh --static-only
 ```
 
-This verifies the shared policy, wrappers, one-key project `.env` files, Compose resolution, and identical init hooks.
+This verifies the shared policy, wrappers, one-key project `.env` files, Compose resolution, and identical init hooks. It also requires the deployed shared Compose policy and manifest to match the repository source byte for byte. The installed copy compares against the canonical checkout, `/usr/local/bin/proton_project`, which `PROTON_PROJECT_DIR` can override, and fails if that source is unreadable rather than skipping the check.
 
 ### Protected configuration layer
 

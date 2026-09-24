@@ -1,9 +1,10 @@
 # Archived scripts
 
-Nine scripts were moved here on 2026-09-10 at the operator's request; three
-active ones returned to the repository root on 2026-09-23 (see below).
-This source directory is distinct from the external `/archive` location used
-for historical incident comparisons.
+This directory holds six legacy helpers that nothing installs, no unit runs,
+and no test covers. They are git-ignored and exist only on the host checkout;
+this README is the only tracked file here (`.gitignore`: `Archive/*` with
+`!Archive/README.md`). This source directory is distinct from the external
+`/archive` location used for historical incident comparisons.
 
 | Script | Role |
 | --- | --- |
@@ -12,49 +13,22 @@ for historical incident comparisons.
 | `proton-runtime-refresh.sh` | Legacy runtime-config refresh; can expose WireGuard secrets and ignores restart failures |
 | `proton-instances-normalize.sh` | Legacy instance normalization from shared templates |
 | `proton-wg-pool-dedupe.sh` | Manual pool-profile deduplication |
-| `verify_serialized_sync.sh` | Manual allocation and synchronization with verification |
-| `proton-killswitch-reset.sh` | Installed manual firewall reset utility |
-| `deploy-live-ipv6-firewall.sh` | Documented IPv6 bundle deployment and rollback helper |
-| `proton-qbt-dnat-cleanup.sh` | Installed port-forward `ExecStop` and legacy-DNAT cleanup |
+| `verify_serialized_sync.sh` | Manual allocation and synchronization; can mutate runtime state despite its name |
 
-Archiving changes source location, not operational authorization. Existing
-runtime and deployment safety requirements in the root `AGENTS.md` still apply.
-Do not run these scripts merely to inspect them.
+Archiving changes source location, not operational authorization. The safety
+requirements in the root `AGENTS.md` still apply. Do not run these scripts
+merely to inspect them, and prefer the canonical installer and fleet runbooks
+for maintenance. Relocation does not repair the helpers' behavioral
+limitations.
 
-The installer continues to install `proton-killswitch-reset.sh` and
-`proton-qbt-dnat-cleanup.sh` from this directory to their existing flat paths
-under `/usr/local/bin/proton`. Units continue to use those installed paths.
-The source synchronizer, IPv6 deployment helper and preflight account for the
-new source layout. No installed production files were changed by this move.
+## History
 
-Prefer the canonical installer and fleet runbooks for normal maintenance.
-Relocation does not repair the historical helpers' behavioral limitations.
-
-Source update, 2026-09-11: the installed reset and DNAT cleanup sources now share
-the host firewall lock and fail on inspection or mutation errors. DNAT cleanup
-deletes only exact owning-instance handles in one transaction. Reset removes
-Proton filter protection and owned masquerade rules without deleting shared NAT
-tables, DNAT, foreign rules, or changing host default policies. Reset remains a
-disruptive fleet operation requiring authorization. The IPv6 copy/rollback bundle
-includes `proton-instance-common.sh`, which its firewall/lifecycle callers require.
-Older snapshots without that helper are incomplete for the updated bundle.
-
-These sources, the bundle helper, and this README are explicitly exempted from
-the archive ignore rule so reviewed changes are visible to Git. They remain
-unstaged until explicitly added. Fixture and isolated network-namespace tests do
-not establish installation provenance or live-host safety; no deployment was
-performed as part of this update.
-
-Source update, 2026-09-23: `proton-killswitch-reset.sh`, `proton-qbt-dnat-cleanup.sh`,
-and `deploy-live-ipv6-firewall.sh` were confirmed in use (installed entrypoint,
-port-forward `ExecStop`, and the documented IPv6 bundle helper) and moved back to
-the repository root. The installer, synchronizer, IPv6 preflight, bundle helper,
-and tests now use flat source paths; installed paths under `/usr/local/bin/proton`
-are unchanged. The table above records the original 2026-09-10 move. The six
-remaining legacy helpers are git-ignored and exist only on the host checkout.
-
-Source update, 2026-09-23 (code audit 4.3): `deploy-live-ipv6-firewall.sh` and
-its test were removed. The installer already installs all seven bundle scripts,
-and `proton-ipv6-rollout.sh snapshot`/`rollback` covers `/usr/local/bin/proton`;
-see `docs/runbooks/ipv6-rollout.md`. Existing snapshots under
-`/var/backups/proton-ipv6-firewall` are not touched.
+- 2026-09-10: nine scripts were moved here at the operator's request.
+- 2026-09-23: three were found in use and returned to the repository root.
+  `proton-killswitch-reset.sh` remains there and is installed to
+  `/usr/local/bin/proton`. `proton-qbt-dnat-cleanup.sh` was later removed with
+  the retired legacy-DNAT mode (code audit 4.2), and
+  `deploy-live-ipv6-firewall.sh` was removed in favor of
+  `proton-ipv6-rollout.sh snapshot`/`rollback` (code audit 4.3; see
+  `docs/runbooks/ipv6-rollout.md`). Existing snapshots under
+  `/var/backups/proton-ipv6-firewall` were not touched.

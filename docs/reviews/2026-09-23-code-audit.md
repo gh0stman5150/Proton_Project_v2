@@ -661,48 +661,92 @@ installed). Each new behavioral test was mutation-checked.
 
 ## 7. Documentation and instructions
 
-- [ ] **7.1 `Archive/README.md` (C).** Still lists the three moved scripts,
+- [x] **7.1 `Archive/README.md` (C).** Still lists the three moved scripts,
   says the installer installs them "from this directory", and claims an
   ignore-rule exemption `.gitignore` no longer has.
-- [ ] **7.2 Validation commands in four places (C).** `AGENTS.md`,
+- [x] **7.2 Validation commands in four places (C).** `AGENTS.md`,
   `README.md`, `CLAUDE.md`, `qbittorrent-fleet-changes.md` differ (`AGENTS.md`
   lacks `-x`, `shfmt`, timeout). Make `AGENTS.md` the owner and link.
-- [ ] **7.3 Storage/kernel baseline in five places (C).** `README.md`,
+- [x] **7.3 Storage/kernel baseline in five places (C).** `README.md`,
   `docs/README.md`, `AGENTS.md`, fleet contract, wedge runbook. Keep in the
   fleet contract and wedge runbook; link elsewhere (update 6.6 together).
-- [ ] **7.4 Dated "not deployed" notes in seven places (P).** `README.md`,
+- [x] **7.4 Dated "not deployed" notes in seven places (P).** `README.md`,
   `docs/README.md`, fleet contract, port-sync runbook, fleet-changes runbook.
   Consolidate into one dated status entry; add a dated update after the next
   authorized install.
-- [ ] **7.5 Template/doc mismatches (C/P).** `proton-common.env` pins
+- [x] **7.5 Template/doc mismatches (C/P).** `proton-common.env` pins
   `KILLSWITCH_BACKEND=nftables` while docs describe `auto` (the script
   default); `WG_EXPECTED_DNS` template includes an IPv6 resolver while script
   default and docs show only `10.2.0.1`; evicted-server comment says the pool
   config is deleted, but code and runbook keep it; `host-routing-and-tunnels.md`
   lists `1.1.1.1`/`9.9.9.9` as required resolvers that nothing references.
-- [ ] **7.6 Undocumented tunables (P).** `LAN_IF`/`LAN_CIDR`,
+- [x] **7.6 Undocumented tunables (P).** `LAN_IF`/`LAN_CIDR`,
   `DOCKER_FALLBACK_VPN_ROUTING`, `NATPMP_TIMEOUT_SECONDS`,
   `QBT_DSTATE_SAMPLES`/`QBT_DSTATE_DELAY`, `NAS_HOST`/`NAS_PORT`/`NAS_WAIT_SECONDS`
   (`/etc/default/nas-network-online` has no template; `nas-network-online.sh`
   hard-codes the NAS IP). Add commented template entries.
-- [ ] **7.7 README exception (C).** README says installer `SCRIPTS` plus units
+- [x] **7.7 README exception (C).** README says installer `SCRIPTS` plus units
   define installed entrypoints; `deploy-live-ipv6-firewall.sh` is an
   intentional exception (moot if 4.3 lands).
-- [ ] **7.8 Instance list duplication (P).** `docker-proton-tunnels.conf` and
+- [x] **7.8 Instance list duplication (P).** `docker-proton-tunnels.conf` and
   `tests/systemd-units.bats` hard-code the five instances in addition to the
   manifest; consider generating the drop-in from the TSV in the installer.
-- [ ] **7.9 Repo config (P).** `.gitignore` `.vscode-root/` matches nothing;
+- [x] **7.9 Repo config (P).** `.gitignore` `.vscode-root/` matches nothing;
   `.gitattributes` `*.lock.yml` rule and gh-aw scaffolding serve no existing
   workflow; `actions/checkout` is v4 in `lint-and-test.yml` but v6 in
   `copilot-setup-steps.yml`; `.github/prompts/resilience-audit.prompt.md`
   "do not touch Archive/" wording predates the move.
-- [ ] **7.10 Fleet-verify source parity (C).** `tools/verify-qbittorrent-fleet.sh`
+- [x] **7.10 Fleet-verify source parity (C).** `tools/verify-qbittorrent-fleet.sh`
   derives `PROJECT_DIR` from `SCRIPT_DIR/..`; installed as
   `/usr/local/bin/proton/proton-qbt-fleet-verify.sh` that is `/usr/local/bin`,
   so the source-vs-deployed `cmp` of the Compose policy and manifest is
   silently skipped. Default to `/usr/local/bin/proton_project` when installed,
   or fail when the source is unreadable. (Behavior fix, listed here because it
   affects documented verification claims.)
+
+Section 7 resolved, 2026-09-24 (canonical Linux checkout, source-only, not
+installed).
+
+- 7.1: `Archive/README.md` now lists only the six git-ignored helpers,
+  describes the real ignore rule, and keeps the moves as short history.
+- 7.2: `AGENTS.md` → Validation holds the only command block, chained with
+  `&&` and matching CI (`shellcheck -x`, `shfmt -d`, the pinned runner with a
+  timeout). `README.md` and the fleet-changes runbook link to it; `CLAUDE.md`
+  keeps only single-file test examples. The old `|| exit` loops, which close
+  an interactive shell, are gone.
+- 7.3: `README.md` and `docs/README.md` point to the fleet contract and wedge
+  runbook instead of restating the baseline; `AGENTS.md` keeps its invariant.
+  The wedge runbook gains a dated host observation: the host runs Ubuntu
+  `7.0.0-31.31` (booted since at least 2026-09-11), `7.0.0-34.34` is installed
+  but not booted, and the 2026-09-23 08:20 boot ended without a clean
+  shutdown. None of this qualifies a kernel.
+- 7.4: one dated "Deployment status" section in `docs/README.md` replaces the
+  scattered 2026-09-11/12/13 "not deployed" notes, which were stale: those
+  changes were installed on 2026-09-23 and 2026-09-24.
+- 7.5: the README states that the template pins `KILLSWITCH_BACKEND=nftables`
+  (IPv6 requires it) over the script's `auto` default; `WG_EXPECTED_DNS` docs
+  note the template's IPv6 resolver and that it applies only with IPv6; the
+  eviction comment says the pool config is kept; the DNS policy no longer
+  calls `1.1.1.1`/`9.9.9.9` repository requirements (they are the host's
+  systemd-resolved settings) and the README links to the owning section.
+- 7.6: commented defaults for `LAN_IF`, `LAN_CIDR`,
+  `DOCKER_FALLBACK_VPN_ROUTING`, `QBT_DSTATE_SAMPLES`/`QBT_DSTATE_DELAY`
+  (common template) and `NATPMP_TIMEOUT_SECONDS` (port-forward template);
+  `nas-network-online.sh` documents `/etc/default/nas-network-online`.
+- 7.7: the README no longer claims uninstalled root helpers; every root
+  script is in `SCRIPTS`, and the renamed `tools/` copies are described.
+- 7.8: the installer generates the tunnel-ordering drop-in from the manifest;
+  `docker-proton-tunnels.conf` is removed. The generated file is byte-for-byte
+  the old one. A behavioral test replaces the source greps.
+- 7.9: `lint-and-test.yml` uses `actions/checkout@v6` like the Copilot setup
+  workflow; the resilience prompt describes `Archive/` correctly. Kept by
+  choice: `.vscode-root/` (added deliberately as an editor ignore) and the
+  gh-aw scaffolding with its `*.lock.yml` attribute (operator agent tooling).
+- 7.10: the verifier compares against `/usr/local/bin/proton_project` when it
+  is not run from the checkout (`PROTON_PROJECT_DIR` overrides) and fails when
+  the source is unreadable. A test runs it from an installed-style directory.
+  Run from source on 2026-09-24, both parity checks passed against the live
+  deployment.
 
 ## Deployment and rollback
 
