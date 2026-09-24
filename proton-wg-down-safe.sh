@@ -88,8 +88,9 @@ teardown_resolved_dns() {
 	resolved_dns_enabled || return 0
 	[[ -n "$ifname" ]] || return 0
 
-	timeout --kill-after=2s 5s resolvectl revert "$ifname" >/dev/null 2>&1 || return 1
-	timeout --kill-after=2s 5s resolvectl flush-caches >/dev/null 2>&1
+	# resolved drops this link's cache on revert. A global flush-caches would
+	# also empty the other tunnels' caches, so there is none.
+	timeout --kill-after=2s 5s resolvectl revert "$ifname" >/dev/null 2>&1
 }
 
 for cmd in cat chmod flock ip mktemp rm timeout wg wg-quick; do

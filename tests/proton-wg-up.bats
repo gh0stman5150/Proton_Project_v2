@@ -164,6 +164,17 @@ EOF
   grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
 }
 
+@test "wg up programs only its own link in systemd-resolved and never flushes every cache" {
+  export RESOLVECTL_LOG="$TEST_TMPDIR/resolvectl.log"
+  stub_command resolvectl 'printf "%s\n" "$*" >> "$RESOLVECTL_LOG"'
+
+  run env PATH="$PATH" MANAGE_RESOLVED_DNS=on RESOLVED_DNS_ROUTE_DOMAIN='~.' \
+    bash ./proton-wg-up-safe.sh sonarr
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$RESOLVECTL_LOG")" = "$(printf '%s\n' 'dns wg-test 10.4.0.1' 'domain wg-test ~.' 'default-route wg-test yes')" ]
+}
+
 @test "wg up non-owner installs only its qBittorrent source rule" {
   run env \
     PATH="$PATH" \

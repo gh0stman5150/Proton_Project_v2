@@ -99,6 +99,10 @@ The repository source of truth requires:
 4. Docker hosted application DNS must not bypass the kill switch
 
 When `MANAGE_RESOLVED_DNS=auto` and `resolvectl` is available, the up and down scripts may program and revert interface DNS. Treat that behavior as implementation detail, not policy by itself.
+They change only their own link and never run `resolvectl flush-caches`.
+systemd-resolved already drops a link's cache when that link's servers change,
+and a global flush would also empty the host cache and the other four tunnels'
+caches on every tunnel start and stop.
 
 `WG_EXPECTED_DNS=10.2.0.1` is the WireGuard interface DNS provided by Proton inside the tunnel. The `1.1.1.1` and `9.9.9.9` values are external upstream resolvers used for DNS policy verification and are not substitutes for the tunnel DNS.
 

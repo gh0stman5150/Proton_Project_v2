@@ -237,8 +237,9 @@ teardown_resolved_dns() {
 	resolved_dns_enabled || return 0
 	[[ -n "$ifname" ]] || return 0
 
+	# resolved drops this link's cache on revert. Never flush-caches here: that
+	# empties the global cache and every other tunnel's cache too.
 	resolvectl revert "$ifname" >/dev/null 2>&1 || true
-	resolvectl flush-caches >/dev/null 2>&1 || true
 }
 
 configure_resolved_dns() {
@@ -273,8 +274,9 @@ configure_resolved_dns() {
 	if [[ -n "$RESOLVED_DNS_ROUTE_DOMAIN" ]]; then
 		resolvectl domain "$ifname" "$RESOLVED_DNS_ROUTE_DOMAIN"
 	fi
+	# Changing the link's servers drops only that link's cache; see
+	# teardown_resolved_dns for why there is no global flush.
 	resolvectl default-route "$ifname" yes
-	resolvectl flush-caches >/dev/null 2>&1 || true
 	log "Configured systemd-resolved DNS on $ifname: $dns_csv"
 }
 

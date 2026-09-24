@@ -99,6 +99,18 @@ EOF
   [ ! -e "$STATE_DIR/qbt-container-ip6" ]
 }
 
+@test "wg down reverts only its own link in systemd-resolved" {
+  export RESOLVECTL_LOG="$TEST_TMPDIR/resolvectl.log"
+  stub_command resolvectl 'printf "%s\n" "$*" >> "$RESOLVECTL_LOG"'
+  sed -i 's/^MANAGE_RESOLVED_DNS=off$/MANAGE_RESOLVED_DNS=on/' "$PROTON_COMMON_ENV"
+
+  run bash ./proton-wg-down-safe.sh sonarr
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$RESOLVECTL_LOG")" = 'revert pvsonarr' ]
+  [ "$(wc -l < "$WG_LOG")" -eq 1 ]
+}
+
 @test "repeated teardown preserves shared rules and does not stop an absent tunnel twice" {
   run bash ./proton-wg-down-safe.sh sonarr
   [ "$status" -eq 0 ]
