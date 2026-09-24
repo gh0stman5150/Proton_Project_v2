@@ -405,8 +405,16 @@ installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done.
   `from 192.168.96.8/32 lookup 51806 priority 110` and
   `from 192.168.111.250/32 lookup 51806 priority 117` to route mousehole
   through prowlarr's tunnel.
-  - 192.168.96.8 now belongs to whisparr, so the hard-coded 110 rule
-    misroutes whisparr. The fix belongs in mousehole's configuration.
+  - Rule 117 is intentional: mousehole is pinned to 192.168.111.250 and must
+    exit through prowlarr's tunnel.
+  - Rule 110 hard-coded a Docker-assigned address. Before the 20:55 Docker
+    restart, 192.168.96.8 belonged to whisparr's qBittorrent, which was
+    therefore misrouted through prowlarr's tunnel. After the restart it
+    belonged to the Sonarr app container.
+  - At the operator's request, the three 192.168.96.8 lines were removed from
+    the `mousehole-route` loop in `/opt/mousehole/docker-compose.yml`, outside
+    this repo. The live rule and the helper recreate are left to the
+    operator.
   - Commit `1ce8ae1` added a sweep that deleted every rule in an instance's
     table at an unowned priority. The operator chose "any source" after being
     told 117 had no known owner, which was wrong: no one had looked for rule
