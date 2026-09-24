@@ -6,19 +6,8 @@ setup() {
   export PROTON_COMMON_ENV="$TEST_TMPDIR/proton-common.env"
   mkdir -p "$PROTON_INSTANCE_ROOT"
 
-  # Legacy global paths and a stale VPN_TABLE that per-instance values override.
-  cat > "$PROTON_COMMON_ENV" <<'EOF'
-STATE_DIR=/run/proton
-STATE_FILE=/run/proton/proton-port.state
-CACHE_FILE=/run/proton/qbt-port.cache
-RECOVERY_LOCK_FILE=/run/proton/recovery.lock
-SERVER_SELECTION_FILE=/run/proton/current-server.env
-SERVER_RESELECT_FILE=/run/proton/reselect-server.flag
-DOCKER_NETWORK_CIDR_STATE_FILE=/run/proton/docker-network-cidr
-DOCKER_CONFIG_DIR=/run/proton/docker-config
-QBITTORRENT_ENV_FILE=/etc/proton/qbittorrent.env
-VPN_TABLE=51820
-EOF
+  # A stale shared VPN_TABLE that per-instance values override.
+  printf 'VPN_TABLE=51820\n' > "$PROTON_COMMON_ENV"
 
   local instance
   for instance in lidarr prowlarr radarr sonarr whisparr; do
@@ -105,13 +94,31 @@ EOF
   done
 }
 
-@test "instance loader rebases legacy global paths to the selected instance" {
-  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n" "$STATE_DIR" "$STATE_FILE" "$CACHE_FILE" "$RECOVERY_LOCK_FILE" "$SERVER_SELECTION_FILE" "$DOCKER_CONFIG_DIR" "$QBT_SYNC_LOCK_FILE"'
+@test "instance loader derives every runtime path under the instance state directory" {
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; printf "%s\n" "$STATE_DIR" "$STATE_FILE" "$CACHE_FILE" "$RECOVERY_LOCK_FILE" "$SERVER_SELECTION_FILE" "$SERVER_RESELECT_FILE" "$DOCKER_NETWORK_CIDR_STATE_FILE" "$DOCKER_CONFIG_DIR" "$LAST_FILE" "$QBT_SYNC_LOCK_FILE" "$QBITTORRENT_ENV_FILE"'
 
   [ "$status" -eq 0 ]
   [ "$output" = "$(printf '%s\n' /run/proton/sonarr /run/proton/sonarr/proton-port.state /run/proton/sonarr/qbt-port.cache \
-    /run/proton/sonarr/recovery.lock /run/proton/sonarr/current-server.env /run/proton/sonarr/docker-config \
-    /run/proton/sonarr/qbt-sync.lock)" ]
+    /run/proton/sonarr/recovery.lock /run/proton/sonarr/current-server.env /run/proton/sonarr/reselect-server.flag \
+    /run/proton/sonarr/docker-network-cidr /run/proton/sonarr/docker-config /run/proton/sonarr/docker-network-watcher.last \
+    /run/proton/sonarr/qbt-sync.lock "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env")" ]
+}
+
+@test "instance loader refuses retired shared paths instead of rewriting them" {
+  for legacy in STATE_DIR=/run/proton STATE_FILE=/run/proton/proton-port.state CACHE_FILE=/run/proton/qbt-port.cache \
+    RECOVERY_LOCK_FILE=/run/proton/recovery.lock SERVER_SELECTION_FILE=/run/proton/current-server.env \
+    DOCKER_CONFIG_DIR=/run/proton/docker-config QBT_SYNC_LOCK_FILE=/run/proton/qbt-sync.lock \
+    QBITTORRENT_ENV_FILE=/etc/proton/qbittorrent.env; do
+    for env_file in "$PROTON_COMMON_ENV" "$PROTON_INSTANCE_ROOT/sonarr/proton.env"; do
+      cp "$env_file" "$TEST_TMPDIR/env-before"
+      printf '%s\n' "$legacy" >> "$env_file"
+      run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; echo initialized'
+      cp "$TEST_TMPDIR/env-before" "$env_file"
+      [ "$status" -eq 1 ]
+      [[ "$output" == *"ERROR: ${legacy%%=*}="*"retired"* ]]
+      [[ "$output" != *initialized* ]]
+    done
+  done
 }
 
 @test "a shared Proton server endpoint still keeps instance tunnels isolated" {

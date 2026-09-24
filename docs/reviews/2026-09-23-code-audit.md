@@ -333,7 +333,7 @@ source-only, not installed):
   snapshot in `docs/runbooks/ipv6-rollout.md` (which also says "six" scripts;
   there are seven), and remove `tests/deploy-live-ipv6-firewall.bats`. Keep
   `proton-ipv6-rollout.sh`; de-duplicate its `firewall_scripts` list.
-- [ ] **4.4 Legacy singleton paths (P, *shared*).** Templates still ship
+- [x] **4.4 Legacy singleton paths (P, *shared*).** Templates still ship
   singleton values (`STATE_DIR`, `STATE_FILE`, `QBITTORRENT_ENV_FILE`,
   `SERVER_SELECTION_FILE`, `RECOVERY_LOCK_FILE`, `VPN_TABLE=51820`,
   `VPN_INTERFACE=proton`, `NATPMP_GATEWAY`) that
@@ -366,7 +366,8 @@ source-only, not installed):
   of `proton-qbittorrent.env`. Delete.
 
 Section 4 progress, 2026-09-23 (canonical Linux checkout, source-only, not
-installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done.
+installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done
+(finished later; see below).
 4.5 and 4.6 are deferred on host evidence.
 
 - 4.1: the sync script has no DNAT refresh, `docker restart`, or
@@ -393,6 +394,27 @@ installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done.
   `VPN_TABLE`, `VPN_INTERFACE`, and `SERVER_SELECTION_FILE`. The installed
   role env files still carried their singleton paths. The installer preserves
   those files, so the shim is required until they are cleaned by hand.
+- 4.4 finished later on 2026-09-23:
+  - The operator replaced `proton-common.env`, `proton-healthcheck.env`, and
+    `proton-port-forward.env` under `/etc/proton` with their templates and
+    deleted the singleton `qbittorrent*.env` leftovers. None of the three
+    now sets a shared runtime path or `QBITTORRENT_ENV_FILE`. The dropped
+    `MANAGEMENT_*` and `BYPASS_*` keys are read by no script, and `LAN_IF`
+    auto-detects `enp86s0`, its old value.
+  - `proton_rebase_legacy_runtime_paths` became
+    `proton_derive_runtime_paths`. Unset paths still default under
+    `/run/proton/<instance>`. A per-instance path directly under
+    `/run/proton`, `STATE_DIR=/run/proton`, or
+    `QBITTORRENT_ENV_FILE=/etc/proton/qbittorrent.env` is now refused with an
+    error instead of rewritten. `STATE_DIR` is no longer inferred from
+    `STATE_FILE` or `CACHE_FILE`.
+  - Refusing is used instead of plainly dropping the rewrite: a leftover
+    shared value would otherwise make all five instances share one lease,
+    cache, or lock. The root-only instance files could not be read from this
+    session; check them before installing.
+  - Tests cover the derived defaults and refusal of each retired value from
+    both the common and instance env. The fixtures that relied on inference
+    now set `STATE_DIR`.
 - 4.5 and 4.6 deferred on live evidence from 2026-09-23. `ip rule` showed a
   priority-110 rule, `from 192.168.96.8 lookup 51806`, which is prowlarr's
   table at the old `QBT_VPN_RULE_PRIORITY` fallback. The manifest priority is

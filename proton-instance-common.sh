@@ -553,59 +553,34 @@ proton_require_secure_real_env_file() {
 	fi
 }
 
-proton_rebase_legacy_runtime_paths() {
-	local default_state_dir="/run/proton/${INSTANCE}"
-	local inferred_state_dir=""
+# Per-instance runtime paths default under STATE_DIR. A path directly under the
+# shared /run/proton, or the retired singleton qBittorrent env, is refused: it
+# would make every instance share one lease, cache, or lock.
+proton_derive_runtime_paths() {
+	local name value
 
-	if [[ -z "${STATE_DIR:-}" || "${STATE_DIR}" == "/run/proton" ]]; then
-		if [[ -n "${STATE_FILE:-}" && "${STATE_FILE}" != "/run/proton/proton-port.state" && "$STATE_FILE" == */* ]]; then
-			inferred_state_dir="${STATE_FILE%/*}"
-		elif [[ -n "${CACHE_FILE:-}" && "${CACHE_FILE}" != "/run/proton/qbt-port.cache" && "$CACHE_FILE" == */* ]]; then
-			inferred_state_dir="${CACHE_FILE%/*}"
+	if [[ "${STATE_DIR:-}" == "/run/proton" || "${STATE_DIR:-}" == "/run/proton/" ]]; then
+		proton_instance_error "STATE_DIR=/run/proton is the retired shared state directory; remove it or set /run/proton/${INSTANCE}."
+	fi
+	STATE_DIR="${STATE_DIR:-/run/proton/${INSTANCE}}"
+
+	for name in STATE_FILE CACHE_FILE RECOVERY_LOCK_FILE SERVER_SELECTION_FILE SERVER_RESELECT_FILE \
+		DOCKER_NETWORK_CIDR_STATE_FILE DOCKER_CONFIG_DIR LAST_FILE QBT_SYNC_LOCK_FILE; do
+		value="${!name:-}"
+		if [[ -n "$value" && "${value%/*}" == "/run/proton" ]]; then
+			proton_instance_error "${name}=${value} is a retired shared path; remove it so it defaults under ${STATE_DIR}."
 		fi
-	fi
+	done
 
-	if [[ -n "$inferred_state_dir" ]]; then
-		STATE_DIR="$inferred_state_dir"
-	elif [[ -z "${STATE_DIR:-}" || "${STATE_DIR}" == "/run/proton" ]]; then
-		STATE_DIR="$default_state_dir"
-	fi
-
-	if [[ -z "${STATE_FILE:-}" || "${STATE_FILE}" == "/run/proton/proton-port.state" ]]; then
-		STATE_FILE="${STATE_DIR}/proton-port.state"
-	fi
-
-	if [[ -z "${CACHE_FILE:-}" || "${CACHE_FILE}" == "/run/proton/qbt-port.cache" ]]; then
-		CACHE_FILE="${STATE_DIR}/qbt-port.cache"
-	fi
-
-	if [[ -z "${RECOVERY_LOCK_FILE:-}" || "${RECOVERY_LOCK_FILE}" == "/run/proton/recovery.lock" ]]; then
-		RECOVERY_LOCK_FILE="${STATE_DIR}/recovery.lock"
-	fi
-
-	if [[ -z "${SERVER_SELECTION_FILE:-}" || "${SERVER_SELECTION_FILE}" == "/run/proton/current-server.env" ]]; then
-		SERVER_SELECTION_FILE="${STATE_DIR}/current-server.env"
-	fi
-
-	if [[ -z "${SERVER_RESELECT_FILE:-}" || "${SERVER_RESELECT_FILE}" == "/run/proton/reselect-server.flag" ]]; then
-		SERVER_RESELECT_FILE="${STATE_DIR}/reselect-server.flag"
-	fi
-
-	if [[ -z "${DOCKER_NETWORK_CIDR_STATE_FILE:-}" || "${DOCKER_NETWORK_CIDR_STATE_FILE}" == "/run/proton/docker-network-cidr" ]]; then
-		DOCKER_NETWORK_CIDR_STATE_FILE="${STATE_DIR}/docker-network-cidr"
-	fi
-
-	if [[ -z "${DOCKER_CONFIG_DIR:-}" || "${DOCKER_CONFIG_DIR}" == "/run/proton/docker-config" ]]; then
-		DOCKER_CONFIG_DIR="${STATE_DIR}/docker-config"
-	fi
-
-	if [[ -z "${LAST_FILE:-}" || "${LAST_FILE}" == "/run/proton/docker-network-watcher.last" ]]; then
-		LAST_FILE="${STATE_DIR}/docker-network-watcher.last"
-	fi
-
-	if [[ -z "${QBT_SYNC_LOCK_FILE:-}" || "${QBT_SYNC_LOCK_FILE}" == "/run/proton/qbt-sync.lock" ]]; then
-		QBT_SYNC_LOCK_FILE="${STATE_DIR}/qbt-sync.lock"
-	fi
+	STATE_FILE="${STATE_FILE:-${STATE_DIR}/proton-port.state}"
+	CACHE_FILE="${CACHE_FILE:-${STATE_DIR}/qbt-port.cache}"
+	RECOVERY_LOCK_FILE="${RECOVERY_LOCK_FILE:-${STATE_DIR}/recovery.lock}"
+	SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
+	SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
+	DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
+	DOCKER_CONFIG_DIR="${DOCKER_CONFIG_DIR:-${STATE_DIR}/docker-config}"
+	LAST_FILE="${LAST_FILE:-${STATE_DIR}/docker-network-watcher.last}"
+	QBT_SYNC_LOCK_FILE="${QBT_SYNC_LOCK_FILE:-${STATE_DIR}/qbt-sync.lock}"
 
 	export STATE_DIR QBITTORRENT_ENV_FILE STATE_FILE CACHE_FILE RECOVERY_LOCK_FILE
 	export SERVER_SELECTION_FILE SERVER_RESELECT_FILE DOCKER_NETWORK_CIDR_STATE_FILE
@@ -672,14 +647,15 @@ proton_instance_init() {
 	# shellcheck disable=SC1090
 	source "$INSTANCE_PROTON_ENV" || return 1
 
-	if [[ -z "${QBITTORRENT_ENV_FILE:-}" || "$QBITTORRENT_ENV_FILE" == /etc/proton/qbittorrent.env ]]; then
-		QBITTORRENT_ENV_FILE="${INSTANCE_DIR}/qbittorrent.env"
+	if [[ "${QBITTORRENT_ENV_FILE:-}" == /etc/proton/qbittorrent.env ]]; then
+		proton_instance_error "QBITTORRENT_ENV_FILE=/etc/proton/qbittorrent.env is the retired singleton config; remove it so it defaults to ${INSTANCE_DIR}/qbittorrent.env."
 	fi
+	QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-${INSTANCE_DIR}/qbittorrent.env}"
 	proton_require_env_file "$QBITTORRENT_ENV_FILE" "Instance qBittorrent env"
 	proton_require_secure_real_env_file "$QBITTORRENT_ENV_FILE"
 	# shellcheck disable=SC1090
 	source "$QBITTORRENT_ENV_FILE" || return 1
 
-	proton_rebase_legacy_runtime_paths
+	proton_derive_runtime_paths
 	proton_apply_tunnel_subnet
 }

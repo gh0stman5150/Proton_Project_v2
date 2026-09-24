@@ -116,7 +116,7 @@ The installer checks its Proton Debian package list and may download the Proton 
 
 Each protected `qbittorrent.env` supplies `QBITTORRENT_URL`, `QBITTORRENT_USER`, and `QBITTORRENT_PASS` for that instance’s Web API. Use its published host Web UI endpoint and enter credentials through an operator-controlled editor such as `sudoedit`. Keep the file root-owned with mode `0600`; it is sourced as shell code, so quote values correctly and treat write access as privileged. Never put real credentials in command examples, shell history, tickets, or this repository.
 
-The installer no longer writes the singleton `/etc/proton/qbittorrent.env` or `/etc/proton/qbittorrent-port.env`, and the old `--qb-*` options are gone. Existing singleton files are left in place but unused; runtime scripts rebase that path to the per-instance file. Use the per-instance files below for fleet configuration; obsolete singleton services are disabled during installation.
+The installer no longer writes the singleton `/etc/proton/qbittorrent.env` or `/etc/proton/qbittorrent-port.env`, and the old `--qb-*` options are gone. Runtime scripts refuse `QBITTORRENT_ENV_FILE=/etc/proton/qbittorrent.env`; remove that key so each instance uses its own file. Use the per-instance files below for fleet configuration; obsolete singleton services are disabled during installation.
 
 ## Named qBittorrent Instances
 
@@ -181,7 +181,7 @@ Do not use a Prowlarr-only redeploy sequence as a fleet upgrade. Follow the [fle
 
 Per-instance state lives under `/run/proton/<instance>/`, including `proton-port.state`, `qbt-port.cache`, `docker-network-cidr`, `current-server.env`, `reselect-server.flag`, `recovery.lock`, and `qbt-sync.lock`.
 
-Host-wide coordination remains under `/run/proton`, including `policy-routing.lock`, `killswitch.lock`, server selection locking, `bad-servers.tsv`, and `pf-incapable-strikes.tsv`. Shared profile capability lists persist under `/etc/proton`. The loader rebases legacy per-instance paths; do not copy singleton runtime paths into new instance examples.
+Host-wide coordination remains under `/run/proton`, including `policy-routing.lock`, `killswitch.lock`, server selection locking, `bad-servers.tsv`, and `pf-incapable-strikes.tsv`. Shared profile capability lists persist under `/etc/proton`. Per-instance runtime paths default under `/run/proton/<instance>`. The loader refuses a per-instance path set directly under `/run/proton` (for example `STATE_DIR=/run/proton` or `STATE_FILE=/run/proton/proton-port.state`) instead of rewriting it; remove the key or set an instance path.
 
 Do not store live state files in the repository.
 

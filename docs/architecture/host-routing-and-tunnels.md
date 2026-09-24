@@ -72,7 +72,7 @@ Server selection is described in the [server pool runbook](../runbooks/server-po
 
 Per-instance state lives under `/run/proton/<instance>/`, including `proton-port.state`, `qbt-port.cache`, `docker-network-cidr`, `current-server.env`, `reselect-server.flag`, `recovery.lock`, and `qbt-sync.lock`.
 
-Host-wide coordination remains under `/run/proton`, including `policy-routing.lock`, `killswitch.lock`, server selection locking, `bad-servers.tsv`, and `pf-incapable-strikes.tsv`. Shared profile capability lists persist under `/etc/proton`. The loader rebases legacy per-instance paths; do not copy singleton runtime paths into new instance examples.
+Host-wide coordination remains under `/run/proton`, including `policy-routing.lock`, `killswitch.lock`, server selection locking, `bad-servers.tsv`, and `pf-incapable-strikes.tsv`. Shared profile capability lists persist under `/etc/proton`. Per-instance runtime paths default under `/run/proton/<instance>`. The loader refuses a per-instance path set directly under `/run/proton` (for example `STATE_DIR=/run/proton` or `STATE_FILE=/run/proton/proton-port.state`) instead of rewriting it; remove the key or set an instance path.
 
 Do not store live state files in the repository.
 
