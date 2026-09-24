@@ -238,6 +238,8 @@ validate_bundle() {
 	validate_shell_syntax "${SCRIPT_DIR}/tools/reconcile-qbittorrent-fleet.sh"
 	ensure_source_file "${SCRIPT_DIR}/tools/recreate-qbittorrent-fleet.sh"
 	validate_shell_syntax "${SCRIPT_DIR}/tools/recreate-qbittorrent-fleet.sh"
+	ensure_source_file "${SCRIPT_DIR}/tools/proton-fleet-services.sh"
+	validate_shell_syntax "${SCRIPT_DIR}/tools/proton-fleet-services.sh"
 
 	ensure_source_file "${SCRIPT_DIR}/proton-qbittorrent-port.env"
 }
@@ -345,6 +347,9 @@ install_qbittorrent_fleet_verifier() {
 	install_normalized_file \
 		"${SCRIPT_DIR}/tools/recreate-qbittorrent-fleet.sh" \
 		"${BIN_DIR}/proton-qbt-fleet-recreate.sh" 0755
+	install_normalized_file \
+		"${SCRIPT_DIR}/tools/proton-fleet-services.sh" \
+		"${BIN_DIR}/proton-fleet-services.sh" 0755
 }
 
 install_nas_mount_readiness() {

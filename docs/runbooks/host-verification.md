@@ -55,6 +55,29 @@ Confirm all of the following:
 3. SSH and RDP remain reachable through WAN and LAN
 4. qBittorrent remains bound only to the intended VPN path
 
+## Starting and stopping instance services
+
+`proton-fleet-services.sh` (installed from `tools/proton-fleet-services.sh`)
+starts, stops, or restarts the per-instance chain. Pass one or more instance
+names, or none to act on all five. Starting or stopping an instance changes its
+live tunnel and port lease, so it needs explicit runtime authorization.
+
+```bash
+sudo /usr/local/bin/proton/proton-fleet-services.sh status
+sudo /usr/local/bin/proton/proton-fleet-services.sh --dry-run start
+sudo /usr/local/bin/proton/proton-fleet-services.sh start sonarr radarr
+sudo /usr/local/bin/proton/proton-fleet-services.sh stop whisparr
+sudo /usr/local/bin/proton/proton-fleet-services.sh restart
+```
+
+`start` first makes sure `proton-killswitch.service` is active. It then starts
+`proton-wg@`, `proton-docker-watch@`, `proton-port-forward@`, and
+`proton-healthcheck@` for each instance. Every unit must be active before the
+next instance starts. `stop` runs in reverse order and never stops the kill
+switch, so containers stay blocked from the WAN while their tunnel is down.
+Instances are handled one at a time, and the first failure ends the run without
+touching the instances after it.
+
 ## Disruptive failure test (explicit runtime authorization required)
 
 ```bash
