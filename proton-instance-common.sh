@@ -8,8 +8,16 @@ proton_docker_ready() {
 	timeout 5s systemctl is-active --quiet docker.service
 }
 
+# The boot ID cannot change while a process runs, so read it once per process.
+# Cleared on source so an inherited environment value is never trusted.
+PROTON_BOOT_ID=""
+proton_load_boot_id() {
+	[[ -n "$PROTON_BOOT_ID" ]] || read -r PROTON_BOOT_ID </proc/sys/kernel/random/boot_id
+	[[ -n "$PROTON_BOOT_ID" ]]
+}
+
 proton_lease_read() {
-	local file="${1:-$STATE_FILE}" generation current_boot now
+	local file="${1:-$STATE_FILE}" generation now
 	local key value count=0 octet seen="|"
 	local -a octets
 	PROTON_LEASE_EXPIRES_AT=""
@@ -54,9 +62,9 @@ proton_lease_read() {
 	done
 	if [[ -n "${WG_TUNNEL_ADDRESS:-}" && "$address" != "${WG_TUNNEL_ADDRESS%%/*}" ]]; then return 1; fi
 	generation="$(cat "${file%/*}/tunnel-generation" 2>/dev/null)" || return 1
-	current_boot="$(cat /proc/sys/kernel/random/boot_id)" || return 1
+	proton_load_boot_id || return 1
 	now="$(date +%s)" || return 1
-	[[ -n "$generation" && "$lease_generation" == "$generation" && "$boot" == "$current_boot" ]] || return 1
+	[[ -n "$generation" && "$lease_generation" == "$generation" && "$boot" == "$PROTON_BOOT_ID" ]] || return 1
 	((expires > now)) || return 1
 	export PROTON_LEASE_EXPIRES_AT="$expires"
 	printf '%s\n' "$port"

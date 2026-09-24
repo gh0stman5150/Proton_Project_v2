@@ -189,6 +189,10 @@ EOF
   cp "$TEST_TMPDIR/valid.state" "$STATE_FILE"
   run env WG_TUNNEL_ADDRESS=10.3.0.2/32 bash -c 'source ./proton-instance-common.sh; proton_lease_read'
   [ "$status" -ne 0 ]
+  sed -i 's/^LEASE_BOOT_ID=.*/LEASE_BOOT_ID=inherited-boot/' "$STATE_FILE"
+  run env PROTON_BOOT_ID=inherited-boot bash -c 'source ./proton-instance-common.sh; proton_lease_read'
+  [ "$status" -ne 0 ]
+  cp "$TEST_TMPDIR/valid.state" "$STATE_FILE"
   run bash -c 'source ./proton-instance-common.sh; proton_lease_read; printf "%s\n" "$PROTON_LEASE_EXPIRES_AT"'
   [ "$status" -eq 0 ]
   [ "${lines[1]}" = "$expiry" ]

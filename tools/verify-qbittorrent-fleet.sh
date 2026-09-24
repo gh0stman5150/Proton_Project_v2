@@ -145,7 +145,7 @@ fi
 reference_init=""
 instance_count=0
 
-while IFS=$'\t' read -r instance webui _legacy_port bind_ip vpn_interface subnet vpn_table rule_priority; do
+while IFS=$'\t' read -r instance webui bind_ip vpn_interface subnet vpn_table rule_priority; do
 	[[ -n "$instance" && "$instance" != \#* ]] || continue
 	instance_count=$((instance_count + 1))
 	instance_errors="$ERRORS"

@@ -87,3 +87,19 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *'Docker Compose is required for verification'* ]]
 }
+@test "verifier reads each wrapper's bind IP and Web UI port from the named manifest columns" {
+  local compose_root="$TEST_TMPDIR/compose" instance webui bind_ip
+  mkdir -p "$compose_root/qbittorrent-common"
+  while IFS=$'\t' read -r instance webui bind_ip; do
+    mkdir -p "$compose_root/qbittorrent-$instance"
+    printf 'QBT_HOST_BIND_IP=%s\n' "$bind_ip" > "$compose_root/qbittorrent-$instance/.env"
+    printf '  WEBUI_PORT: "%s"\n' "$webui" > "$compose_root/qbittorrent-$instance/docker-compose.yml"
+  done < <(awk -F '\t' '
+    NR == 1 { sub(/^# /, ""); for (i = 1; i <= NF; i++) column[$i] = i; next }
+    { print $1 "\t" $column["webui_port"] "\t" $column["bind_ip"] }
+  ' qbittorrent-instances.tsv)
+  run env QBT_COMPOSE_ROOT="$compose_root" QBT_INSTANCE_MANIFEST="$PWD/qbittorrent-instances.tsv" bash tools/verify-qbittorrent-fleet.sh --static-only
+  [[ "$output" == *'FAIL: '* ]]
+  [[ "$output" != *'expected QBT_HOST_BIND_IP='* ]]
+  [[ "$output" != *'Web UI port must be'* ]]
+}

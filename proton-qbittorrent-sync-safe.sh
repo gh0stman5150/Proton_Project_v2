@@ -303,6 +303,16 @@ respect_manual_stop_enabled() {
 	esac
 }
 
+# Prints the newest Compose container ID for the service; pass --all to
+# include stopped containers.
+compose_service_container_id() {
+	(
+		cd "$QBT_COMPOSE_PROJECT_DIR"
+		QBT_PUBLISHED_PORT="$PORT" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps "$@" -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
+			awk 'NF { last = $0 } END { print last }'
+	)
+}
+
 compose_container_ref_all() {
 	local container_id
 
@@ -311,21 +321,29 @@ compose_container_ref_all() {
 		return 0
 	fi
 
-	container_id="$(
-		cd "$QBT_COMPOSE_PROJECT_DIR"
-		QBT_PUBLISHED_PORT="$PORT" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps --all -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
-			awk 'NF { last = $0 } END { print last }'
-	)"
-
+	container_id="$(compose_service_container_id --all)"
 	[[ -n "$container_id" ]] || return 1
 	printf '%s\n' "$container_id"
 }
 
-compose_container_status() {
-	local container_ref
+# Renders TEMPLATE for the service container in one inspect when
+# QBT_CONTAINER_NAME resolves, falling back to a Compose lookup (extra
+# arguments go to compose_service_container_id).
+compose_container_inspect() {
+	local template="$1" container_id
+	shift
 
-	container_ref="$(compose_container_ref_all)" || return 1
-	docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true
+	if [[ -n "${QBT_CONTAINER_NAME:-}" ]] && docker inspect -f "$template" "$QBT_CONTAINER_NAME" 2>/dev/null; then
+		return 0
+	fi
+
+	container_id="$(compose_service_container_id "$@")"
+	[[ -n "$container_id" ]] || return 1
+	docker inspect -f "$template" "$container_id" 2>/dev/null || true
+}
+
+compose_container_status() {
+	compose_container_inspect '{{.State.Status}}' --all
 }
 
 recent_manual_stop_event() {
@@ -421,35 +439,16 @@ skip_sync_for_manual_stop() {
 	esac
 }
 
-compose_container_ref() {
-	local container_id
-
-	if [[ -n "${QBT_CONTAINER_NAME:-}" ]] && docker inspect "$QBT_CONTAINER_NAME" >/dev/null 2>&1; then
-		printf '%s\n' "$QBT_CONTAINER_NAME"
-		return 0
-	fi
-
-	container_id="$(
-		cd "$QBT_COMPOSE_PROJECT_DIR"
-		QBT_PUBLISHED_PORT="$PORT" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
-			awk 'NF { last = $0 } END { print last }'
-	)"
-
-	[[ -n "$container_id" ]] || return 1
-	printf '%s\n' "$container_id"
-}
-
+# Prints "<containerPort>/<proto> <hostPort>" lines. Callers read this once
+# per phase and pass it to the helpers below; re-read after a recreate.
 compose_published_ports() {
-	local container_ref
-
-	container_ref="$(compose_container_ref)" || return 1
-	docker inspect -f '{{range $containerPort, $bindings := .NetworkSettings.Ports}}{{if $bindings}}{{range $bindings}}{{printf "%s %s\n" $containerPort .HostPort}}{{end}}{{end}}{{end}}' "$container_ref" 2>/dev/null || true
+	# shellcheck disable=SC2016
+	compose_container_inspect '{{range $containerPort, $bindings := .NetworkSettings.Ports}}{{if $bindings}}{{range $bindings}}{{printf "%s %s\n" $containerPort .HostPort}}{{end}}{{end}}{{end}}'
 }
 
 compose_published_ports_summary() {
-	local ports
+	local ports="$1"
 
-	ports="$(compose_published_ports || true)"
 	if [[ -z "$ports" ]]; then
 		printf 'none'
 		return 0
@@ -526,12 +525,12 @@ compose_container_is_wedged_for_recreate() {
 		return 0
 	fi
 
+	ports="$(compose_published_ports || true)"
 	if compose_container_has_zombie_process "$container_ref"; then
-		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with a zombie process (published ports: $(compose_published_ports_summary)); refusing Compose recreate to avoid hanging on Docker stop. Capture every task state and follow the wedge-recovery runbook; do not force cgroup/shim cleanup if any task is in uninterruptible D state."
+		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with a zombie process (published ports: $(compose_published_ports_summary "$ports")); refusing Compose recreate to avoid hanging on Docker stop. Capture every task state and follow the wedge-recovery runbook; do not force cgroup/shim cleanup if any task is in uninterruptible D state."
 		return 0
 	fi
 
-	ports="$(compose_published_ports || true)"
 	[[ -z "$ports" ]] || return 1
 	if force_recreate_enabled; then
 		log "Running qBittorrent container has no published ports; explicit forced recreation is authorized after lifecycle safety checks"
@@ -543,9 +542,8 @@ compose_container_is_wedged_for_recreate() {
 }
 
 compose_current_published_port() {
-	local ports
+	local ports="$1"
 
-	ports="$(compose_published_ports || true)"
 	[[ -n "$ports" ]] || return 1
 
 	awk '
@@ -565,9 +563,8 @@ compose_current_published_port() {
 
 compose_service_publishes_port() {
 	local target_port="$1"
-	local ports
+	local ports="$2"
 
-	ports="$(compose_published_ports || true)"
 	[[ -n "$ports" ]] || return 1
 
 	awk -v target_port="$target_port" '
@@ -683,6 +680,7 @@ run_compose_recreate() {
 
 recreate_qbt_service_compose() {
 	local target_port="$1"
+	local ports
 
 	log "Recreating Compose service $QBT_COMPOSE_SERVICE in $QBT_COMPOSE_PROJECT_DIR for published port $target_port"
 	ensure_directory "$DOCKER_CONFIG_DIR" 700
@@ -710,8 +708,9 @@ recreate_qbt_service_compose() {
 		return 1
 	fi
 
-	if ! compose_service_publishes_port "$target_port"; then
-		log "ERROR: Docker did not publish qBittorrent TCP/UDP port $target_port after recreating $QBT_COMPOSE_SERVICE (actual: $(compose_published_ports_summary))"
+	ports="$(compose_published_ports || true)"
+	if ! compose_service_publishes_port "$target_port" "$ports"; then
+		log "ERROR: Docker did not publish qBittorrent TCP/UDP port $target_port after recreating $QBT_COMPOSE_SERVICE (actual: $(compose_published_ports_summary "$ports"))"
 		return 1
 	fi
 	if [[ "$(proton_lease_read)" != "$target_port" ]]; then
@@ -766,9 +765,10 @@ fi
 apply_qbt_listen_port
 
 require_compose_mode_ready || exit 1
-CURRENT_DOCKER_PUBLISHED_PORT="$(compose_current_published_port || true)"
+COMPOSE_PORTS="$(compose_published_ports || true)"
+CURRENT_DOCKER_PUBLISHED_PORT="$(compose_current_published_port "$COMPOSE_PORTS" || true)"
 COMPOSE_PORTS_MATCH=0
-if compose_service_publishes_port "$PORT"; then
+if compose_service_publishes_port "$PORT" "$COMPOSE_PORTS"; then
 	COMPOSE_PORTS_MATCH=1
 fi
 if [[ "$CURRENT_PUBLISHED_PORT" == "$PORT" ]] && ! published_port_artifact_is_canonical; then
@@ -784,7 +784,7 @@ if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]] || ((!COMPOSE_PORTS_MATCH)) || for
 		log "Updating qBittorrent published port artifact -> $PORT"
 		rollback_port="$CURRENT_PUBLISHED_PORT"
 	elif ((!COMPOSE_PORTS_MATCH)); then
-		log "Docker published ports are stale for qBittorrent; expected TCP/UDP $PORT, actual: $(compose_published_ports_summary)"
+		log "Docker published ports are stale for qBittorrent; expected TCP/UDP $PORT, actual: $(compose_published_ports_summary "$COMPOSE_PORTS")"
 		rollback_port="$CURRENT_DOCKER_PUBLISHED_PORT"
 	else
 		log "Forcing qBittorrent Compose recreation for a fleet-controlled configuration rollout"

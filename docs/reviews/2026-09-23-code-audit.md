@@ -136,11 +136,11 @@ Section 1 resolved, 2026-09-23 (canonical Linux checkout, source-only):
 - [x] **2.6 Healthcheck active-transfer probe (C/P).** `has_active_transfers`
   downloads the full active-torrent JSON to test emptiness; add `&limit=1`
   (verify the parameter on the deployed qBittorrent version).
-- [ ] **2.7 Repeated `docker inspect` in sync (C).**
+- [x] **2.7 Repeated `docker inspect` in sync (C).**
   `compose_container_status` (2 inspects), `compose_current_published_port`
   and `compose_service_publishes_port` (each ref lookup + ports inspect).
   Inspect once per phase with a combined template; refresh after recreate.
-- [ ] **2.8 Small per-renewal forks (C, low).** `proton-port-forward-safe.sh`:
+- [x] **2.8 Small per-renewal forks (C, low).** `proton-port-forward-safe.sh`:
   `get_ip` twice, three `awk` passes in `save_state`, `boot_id` read on every
   save/read, several `date +%s` forks, NAT-PMP output re-parsed. Use one `awk`
   pass, `printf '%(%s)T'`, cache `boot_id` per process.
@@ -169,8 +169,31 @@ installed):
 - 2.6: `limit=1` added; the fleet image `linuxserver/qbittorrent:libtorrentv1`
   is well past Web API 2.0, which introduced the parameter.
 - 2.9: `qbt_source_env_file` had no other callers and was removed.
-- 2.7 and 2.8 deferred by operator decision: after 2.1 the sync runs about 25
-  times less often, and 2.7 would rewrite many template-matching test stubs.
+- 2.7 and 2.8 were first deferred by operator decision, then resolved later
+  on 2026-09-23 at the operator's request.
+- 2.7: an unchanged sync now runs two `docker inspect` calls instead of six.
+  `compose_container_inspect` renders the template against
+  `QBT_CONTAINER_NAME` in one call and falls back to the Compose lookup only
+  when the name is unset or unknown. The published ports are read once for the
+  drift check, with a fresh read after a recreate and in the wedge check. The
+  templates are unchanged, so no test stubs were rewritten. A new test counts
+  the inspect calls, and it fails against the old code.
+- 2.8:
+  - NAT-PMP output is parsed by one builtin function instead of four `awk`
+    runs, one of them fed by `echo`.
+  - `save_state` reads the state file in one builtin pass instead of three
+    `awk` runs.
+  - The boot ID is read once per process into `PROTON_BOOT_ID`. That covers
+    the port-forward loop and `proton_lease_read` in the long-running loop.
+    The value is cleared when the helper is sourced, so an inherited value is
+    never trusted, and a new test covers that.
+  - `get_ip` dropped its `cut` stage.
+  - `date +%s` stays, because a safety test injects the clock through a
+    `date` stub to prove an expired lease is never saved.
+  - The second `get_ip` call stays too: it re-checks the tunnel address after
+    the NAT-PMP request.
+  - Mutation checks on the parser fields, the state-file keys, and the
+    boot-ID reset each fail a test.
 
 ## 3. Dead code and unused configuration
 
@@ -220,7 +243,7 @@ installed):
   sync (and overwritten with the rollback port on failure) but never read.
   Remove, or document as diagnostic-only and fix the port-sync runbook wording
   that implies it has a function.
-- [ ] **3.8 `legacy_reference_port` TSV column (C, *shared*).** No code reads
+- [x] **3.8 `legacy_reference_port` TSV column (C, *shared*).** No code reads
   column 3 of `qbittorrent-instances.tsv`. Dropping it means renumbering the
   installer's field reads, the verifier `read`, the test fixture, and the doc
   table in `qbittorrent-fleet-contract.md`.
@@ -261,9 +284,20 @@ source-only, not installed):
 - 3.7: kept as diagnostic-only and documented that way in the port-sync
   runbook and fleet contract. Its directory still anchors the
   `qbt-recreate.pending` record and legacy path inference.
-- 3.8 deferred: the fleet contract documents the column as a
-  pre-migration reference for incident comparison, and dropping it changes the
-  installed manifest format for all five instances.
+- 3.8: first deferred, then resolved later on 2026-09-23 at the operator's
+  request.
+  - The column was dropped from the manifest. The installer's field numbers,
+    the verifier's `read`, the fixture rows, and the fleet-contract table were
+    updated.
+  - The old port values are kept as a dated sentence in the fleet contract
+    for incident comparison.
+  - The installer's grep-only column-number checks were replaced by a test
+    that runs its accessors and checks each value against the column named in
+    the manifest header.
+  - A verifier test does the same for the bind IP and Web UI port. Both fail
+    against the old column numbers.
+  - This is a *shared* format change. The installer installs the manifest and
+    the tools that read it together.
 - 3.9: `proton_allowed_instances` is now the allowlist for instance
   validation, the error message, the nft interface list, and the fleet
   verifier's manifest check. `proton-killswitch-safe.sh`,

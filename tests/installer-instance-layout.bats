@@ -49,8 +49,36 @@
   grep -Fq 'upsert_instance_env_value "$proton_env" VPN_TABLE "$vpn_table"' install-proton-systemd.sh
   grep -Fq 'upsert_instance_env_value "$proton_env" QBT_VPN_RULE_PRIORITY "$qbt_rule_priority"' install-proton-systemd.sh
   grep -Fq 'upsert_instance_env_value "$qb_env" QBT_INSTANCE_NAME "$instance"' install-proton-systemd.sh
-  grep -Fq 'instance_manifest_value "$1" 7' install-proton-systemd.sh
-  grep -Fq 'instance_manifest_value "$1" 8' install-proton-systemd.sh
+}
+
+@test "installer manifest accessors read the columns named in the manifest header" {
+  run bash -c '
+    set -euo pipefail
+    INSTANCE_MANIFEST_SOURCE=qbittorrent-instances.tsv
+    for fn in instance_manifest_value instance_webui_port instance_vpn_interface instance_address_subnet instance_vpn_table instance_qbt_rule_priority; do
+      eval "$(sed -n "/^${fn}() {/,/^}/p" install-proton-systemd.sh)"
+    done
+    read -r -a header < <(sed -n "1s/^# //p" qbittorrent-instances.tsv)
+    column() {
+      local name="$1" instance="$2" index
+      for index in "${!header[@]}"; do
+        if [[ "${header[index]}" == "$name" ]]; then
+          awk -F "	" -v instance="$instance" -v field="$((index + 1))" "\$1 == instance { print \$field }" qbittorrent-instances.tsv
+          return 0
+        fi
+      done
+      return 1
+    }
+    for instance in lidarr prowlarr radarr sonarr whisparr; do
+      [[ "$(instance_webui_port "$instance")" == "$(column webui_port "$instance")" ]]
+      [[ "$(instance_vpn_interface "$instance")" == "$(column vpn_interface "$instance")" ]]
+      [[ "$(instance_address_subnet "$instance")" == "$(column address_subnet "$instance")" ]]
+      [[ "$(instance_vpn_table "$instance")" == "$(column vpn_table "$instance")" ]]
+      [[ "$(instance_qbt_rule_priority "$instance")" == "$(column qbt_rule_priority "$instance")" ]]
+    done
+    [[ "$(instance_vpn_interface prowlarr)" == pvprowlarr && "$(instance_qbt_rule_priority prowlarr)" == 116 ]]
+  '
+  [ "$status" -eq 0 ]
 }
 
 @test "fleet reconciler defaults to the installed verifier path" {
@@ -65,11 +93,8 @@
 }
 
 @test "installer includes prowlarr manual-download instance defaults" {
-  grep -Fq $'prowlarr\t8082\t51057\t10.6.0.2\tpvprowlarr\t6\t51806\t116' qbittorrent-instances.tsv
-  grep -Fq $'whisparr\t8085\t51054\t10.5.0.2\tpvwhisparr\t5\t51805\t115' qbittorrent-instances.tsv
-  grep -Fq 'instance_manifest_value "$1" 2' install-proton-systemd.sh
-  grep -Fq 'instance_manifest_value "$1" 5' install-proton-systemd.sh
-  grep -Fq 'instance_manifest_value "$1" 6' install-proton-systemd.sh
+  grep -Fq $'prowlarr\t8082\t10.6.0.2\tpvprowlarr\t6\t51806\t116' qbittorrent-instances.tsv
+  grep -Fq $'whisparr\t8085\t10.5.0.2\tpvwhisparr\t5\t51805\t115' qbittorrent-instances.tsv
   grep -Fq 'QBT_CONTAINER_NAME=qbittorrent-${instance}' install-proton-systemd.sh
   grep -Fq 'QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent-${instance}' install-proton-systemd.sh
   grep -Fq 'QBT_COMPOSE_SERVICE=qbittorrent-${instance}' install-proton-systemd.sh

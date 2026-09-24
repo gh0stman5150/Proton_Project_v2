@@ -58,15 +58,18 @@ Kernel package numbers are not part of the fleet contract. The following package
 
 The machine-readable source is `qbittorrent-instances.tsv`. The installed copy is `/opt/qbittorrent-common/qbittorrent-instances.tsv`.
 
-| Instance | Web UI | Legacy port reference | Tunnel bind IP | Interface | Address subnet | Route table | qB rule priority |
-| --- | ---: | ---: | --- | --- | ---: | ---: | ---: |
-| `lidarr` | 8081 | 51058 | 10.2.0.2 | `pvlidarr` | 2 | 51802 | 112 |
-| `prowlarr` | 8082 | 51057 | 10.6.0.2 | `pvprowlarr` | 6 | 51806 | 116 |
-| `radarr` | 8083 | 51056 | 10.3.0.2 | `pvradarr` | 3 | 51803 | 113 |
-| `sonarr` | 8084 | 51055 | 10.4.0.2 | `pvsonarr` | 4 | 51804 | 114 |
-| `whisparr` | 8085 | 51054 | 10.5.0.2 | `pvwhisparr` | 5 | 51805 | 115 |
+| Instance | Web UI | Tunnel bind IP | Interface | Address subnet | Route table | qB rule priority |
+| --- | ---: | --- | --- | ---: | ---: | ---: |
+| `lidarr` | 8081 | 10.2.0.2 | `pvlidarr` | 2 | 51802 | 112 |
+| `prowlarr` | 8082 | 10.6.0.2 | `pvprowlarr` | 6 | 51806 | 116 |
+| `radarr` | 8083 | 10.3.0.2 | `pvradarr` | 3 | 51803 | 113 |
+| `sonarr` | 8084 | 10.4.0.2 | `pvsonarr` | 4 | 51804 | 114 |
+| `whisparr` | 8085 | 10.5.0.2 | `pvwhisparr` | 5 | 51805 | 115 |
 
-The legacy port column records the pre-migration static values for incident comparison only. The wrappers do not use them as fallbacks. Compose refuses to render unless the synchronizer explicitly injects the current `QBT_PUBLISHED_PORT`; after boot or reconnect, only a successful NAT-PMP lease is authoritative.
+Until 2026-09-23 the manifest also had a `legacy_reference_port` column holding
+the pre-migration static ports, kept for incident comparison only: lidarr
+51058, prowlarr 51057, radarr 51056, sonarr 51055, whisparr 51054. No code read
+it, so it was dropped; these values are not fallbacks. Compose refuses to render unless the synchronizer explicitly injects the current `QBT_PUBLISHED_PORT`; after boot or reconnect, only a successful NAT-PMP lease is authoritative.
 
 ## Sources of truth
 

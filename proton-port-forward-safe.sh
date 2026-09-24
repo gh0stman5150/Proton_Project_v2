@@ -74,7 +74,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk cat chmod cut date flock grep ip mkdir mktemp mv natpmpc rm sleep systemd-cat timeout; do
+for cmd in awk cat chmod date flock grep ip mkdir mktemp mv natpmpc rm sleep systemd-cat timeout; do
 	require_command "$cmd"
 done
 
@@ -158,7 +158,7 @@ profile_is_known_capable() {
 
 get_ip() {
 	ip -4 addr show "$VPN_INTERFACE" 2>/dev/null |
-		awk '/inet / {print $2}' | cut -d/ -f1 || true
+		awk '/inet / { sub(/\/.*/, "", $2); print $2 }' || true
 }
 
 request_port() {
@@ -175,13 +175,17 @@ refresh_port() (
 	generation="$(cat "${STATE_DIR}/tunnel-generation")" || return 1
 	started="$(date +%s)" || return 1
 	udp_output="$(timeout --kill-after="${NATPMP_KILL_AFTER_SECONDS}s" "${NATPMP_TIMEOUT_SECONDS}s" natpmpc -a 1 "$port" udp "$PORT_LEASE_SECONDS" -g "$NATPMP_GATEWAY")" || return 1
-	udp_port="$(extract_port <<<"$udp_output")"
+	parse_natpmp_mapping "$udp_output"
+	udp_port="$NATPMP_MAPPED_PORT"
 	[[ "$udp_port" =~ ^[1-9][0-9]{0,4}$ ]] && ((udp_port <= 65535)) || return 1
-	udp_lifetime="$(extract_lifetime <<<"$udp_output")" || return 1
+	udp_lifetime="$NATPMP_MAPPED_LIFETIME"
+	valid_lifetime "$udp_lifetime" || return 1
 	tcp_output="$(timeout --kill-after="${NATPMP_KILL_AFTER_SECONDS}s" "${NATPMP_TIMEOUT_SECONDS}s" natpmpc -a 1 "$udp_port" tcp "$PORT_LEASE_SECONDS" -g "$NATPMP_GATEWAY")" || return 1
-	tcp_port="$(extract_port <<<"$tcp_output")"
+	parse_natpmp_mapping "$tcp_output"
+	tcp_port="$NATPMP_MAPPED_PORT"
 	[[ "$tcp_port" == "$udp_port" && "$generation" == "$(cat "${STATE_DIR}/tunnel-generation")" ]] || return 1
-	tcp_lifetime="$(extract_lifetime <<<"$tcp_output")" || return 1
+	tcp_lifetime="$NATPMP_MAPPED_LIFETIME"
+	valid_lifetime "$tcp_lifetime" || return 1
 	lifetime="$PORT_LEASE_SECONDS"
 	if ((udp_lifetime < lifetime)); then lifetime="$udp_lifetime"; fi
 	if ((tcp_lifetime < lifetime)); then lifetime="$tcp_lifetime"; fi
@@ -189,32 +193,55 @@ refresh_port() (
 	printf '%s\n' "$tcp_output"
 )
 
-extract_port() {
-	awk '/Mapped public port/ {print $4; exit}' || true
+# Sets NATPMP_MAPPED_PORT (fourth field) and NATPMP_MAPPED_LIFETIME (the
+# field after "lifetime") from the first "Mapped public port" line of natpmpc
+# output, without forking. Both are empty when no mapping line is present.
+parse_natpmp_mapping() {
+	local line field
+	local -a fields
+	NATPMP_MAPPED_PORT=""
+	NATPMP_MAPPED_LIFETIME=""
+	while IFS= read -r line; do
+		[[ "$line" == *"Mapped public port"* ]] || continue
+		read -r -a fields <<<"$line"
+		NATPMP_MAPPED_PORT="${fields[3]:-}"
+		for ((field = 0; field < ${#fields[@]} - 1; field++)); do
+			if [[ "${fields[field]}" == lifetime ]]; then
+				NATPMP_MAPPED_LIFETIME="${fields[field + 1]}"
+				break
+			fi
+		done
+		return 0
+	done <<<"$1"
 }
 
-extract_lifetime() {
-	local lifetime
-	lifetime="$(awk '/Mapped public port/ { for (field = 1; field < NF; field++) if ($field == "lifetime") { print $(field + 1); exit } }')" || return 1
-	[[ "$lifetime" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
-	printf '%s\n' "$lifetime"
+valid_lifetime() {
+	[[ "$1" =~ ^[1-9][0-9]{0,9}$ ]]
 }
 
 save_state() {
 	local new_port="$1"
 	local new_ip="$2"
 	local generation="$3" started="$4" lifetime="$5"
-	local current_port current_ip changed temporary boot now
+	local current_port="" current_ip="" changed="" temporary now key value seen="|"
 
 	now="$(date +%s)" || return 1
 	((started + lifetime > now + LEASE_RENEW_MARGIN_SECONDS)) || return 1
 	[[ -n "$new_ip" && "$new_ip" == "${WG_TUNNEL_ADDRESS%%/*}" ]] || return 1
-	boot="$(cat /proc/sys/kernel/random/boot_id)" || return 1
+	[[ -n "$PROTON_BOOT_ID" ]] || return 1
 
-	current_port="$(load_state_port)"
-	current_ip="$(load_state_ip)"
-
-	changed="$(awk -F= '$1 == "PORT_CHANGED_AT" { print $2; exit }' "$STATE_FILE" 2>/dev/null || true)"
+	# One builtin pass; the first occurrence of each key wins.
+	if [[ -r "$STATE_FILE" ]]; then
+		while IFS='=' read -r key value || [[ -n "$key" ]]; do
+			[[ "$seen" != *"|$key|"* ]] || continue
+			seen+="$key|"
+			case "$key" in
+			CURRENT_PORT) current_port="$value" ;;
+			CURRENT_IP) current_ip="$value" ;;
+			PORT_CHANGED_AT) changed="$value" ;;
+			esac
+		done <"$STATE_FILE"
+	fi
 	if [[ "$current_port" != "$new_port" || "$current_ip" != "$new_ip" || -z "$changed" ]]; then changed="$started"; fi
 
 	umask 077
@@ -223,7 +250,7 @@ save_state() {
 		echo "CURRENT_PORT=$new_port"
 		echo "CURRENT_IP=$new_ip"
 		echo "LEASE_EXPIRES_AT=$((started + lifetime))"
-		echo "LEASE_BOOT_ID=$boot"
+		echo "LEASE_BOOT_ID=$PROTON_BOOT_ID"
 		echo "LEASE_GENERATION=$generation"
 		echo "PORT_CHANGED_AT=$changed"
 	} >"$temporary" || {
@@ -234,10 +261,6 @@ save_state() {
 		rm -f "$temporary"
 		return 1
 	}
-}
-
-load_state_port() {
-	awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true
 }
 
 load_state_ip() {
@@ -275,6 +298,10 @@ else
 	log "Starting WireGuard port forward loop..."
 fi
 
+proton_load_boot_id || {
+	log "ERROR: Cannot read the kernel boot ID"
+	exit 1
+}
 LAST_IP="$(load_state_ip)"
 CURRENT_PORT="$(proton_lease_read || true)"
 FAILURES=0
@@ -305,7 +332,8 @@ if [[ "$MODE" == "once" ]]; then
 		OUT="$(request_port || true)"
 	fi
 
-	PORT="$(echo "$OUT" | extract_port)"
+	parse_natpmp_mapping "$OUT"
+	PORT="$NATPMP_MAPPED_PORT"
 
 	if [[ -z "$PORT" ]]; then
 		log "One-shot NAT-PMP refresh failed"
@@ -390,7 +418,8 @@ while true; do
 		OUT="$(request_port || true)"
 	fi
 
-	PORT="$(echo "$OUT" | extract_port)"
+	parse_natpmp_mapping "$OUT"
+	PORT="$NATPMP_MAPPED_PORT"
 
 	if [[ -n "$PORT" ]]; then
 		log "Got port: $PORT"

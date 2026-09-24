@@ -398,19 +398,19 @@ instance_webui_port() {
 }
 
 instance_vpn_interface() {
-	instance_manifest_value "$1" 5
+	instance_manifest_value "$1" 4
 }
 
 instance_address_subnet() {
-	instance_manifest_value "$1" 6
+	instance_manifest_value "$1" 5
 }
 
 instance_vpn_table() {
-	instance_manifest_value "$1" 7
+	instance_manifest_value "$1" 6
 }
 
 instance_qbt_rule_priority() {
-	instance_manifest_value "$1" 8
+	instance_manifest_value "$1" 7
 }
 
 upsert_instance_env_value() {
