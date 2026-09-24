@@ -384,10 +384,11 @@ not atomic with route updates or the full firewall apply. Docker and unrelated
 administrators do not participate in this project lock.
 
 The `legacy-dnat` apply mode was removed on 2026-09-23 and the sync script
-rejects it. `proton-qbt-dnat-cleanup.sh` remains as the port-forward `ExecStop`
-until hosts are confirmed free of `qbt-dnat-<instance>` rules; it deletes only
-handles with that exact comment, in one transaction. A successful table/chain snapshot establishes
-absence; a failed read is never interpreted as absence. The manual kill-switch
+rejects it. On 2026-09-23 the host had no `ip proton_nat prerouting` chain, so
+no `qbt-dnat-<instance>` rules remained, and `proton-qbt-dnat-cleanup.sh` and
+its port-forward `ExecStop` were removed. The kill switch creates only the
+`postrouting` chain in `proton_nat`. A successful table/chain snapshot
+establishes absence; a failed read is never interpreted as absence. The manual kill-switch
 reset removes Proton filter protection and owned masquerade rules, but preserves
 shared NAT tables, DNAT, unrelated rules, and host default policies. It is still
 a disruptive fleet operation requiring separate authorization, not routine

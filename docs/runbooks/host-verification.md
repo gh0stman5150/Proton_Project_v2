@@ -114,5 +114,4 @@ Verify watcher behavior:
 ```bash
 ip rule show | grep 51806
 ip route show table 51806
-sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
 ```

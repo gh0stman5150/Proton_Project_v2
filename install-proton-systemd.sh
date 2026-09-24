@@ -56,7 +56,6 @@ SCRIPTS=(
 	proton-qbittorrent-common.sh
 	proton-qbittorrent-sync-safe.sh
 	proton-qbt-allocate-and-sync.sh
-	proton-qbt-dnat-cleanup.sh
 	proton-docker-network-watcher.sh
 	proton-server-manager.sh
 	proton-wg-up-safe.sh

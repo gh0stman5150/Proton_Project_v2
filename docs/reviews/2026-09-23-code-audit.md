@@ -286,7 +286,7 @@ source-only, not installed):
   `docs/runbooks/host-verification.md`, the "Legacy DNAT mode only" comments in
   the installer template and `proton-qbittorrent.env`, and the healthcheck
   "DNAT refresh" wording in `host-routing-and-tunnels.md`.
-- [ ] **4.2 Retire `proton-qbt-dnat-cleanup.sh` (P, after 4.1).** On the host,
+- [x] **4.2 Retire `proton-qbt-dnat-cleanup.sh` (P, after 4.1).** On the host,
   confirm `nft -a list chain ip proton_nat prerouting` has no `qbt-dnat-*`
   rules. Then remove the script, the `ExecStop` in `proton-port-forward@.service`,
   its installer `SCRIPTS` entry, `tests/proton-qbt-dnat-cleanup.bats`, and the
@@ -322,7 +322,7 @@ source-only, not installed):
   the watcher does so every tick. `VPN_FWMARK` is read only by these deletes;
   `RULE_PRIORITY` is a legacy alias. Remove once every host is past migration
   (check `ip rule` on the host first).
-- [ ] **4.7 `proton-killswitch-reset.sh` legacy chains (P).** Removes
+- [x] **4.7 `proton-killswitch-reset.sh` legacy chains (P).** Removes
   `PROTON_INPUT`/`PROTON_OUTPUT`, which nothing creates since commit `937d876`.
   Keep only if upgraded hosts may still carry them.
 - [x] **4.8 `Archive/` fallbacks (C).** `SCRIPT_DIR/..` helper fallback in
@@ -332,8 +332,8 @@ source-only, not installed):
   of `proton-qbittorrent.env`. Delete.
 
 Section 4 progress, 2026-09-23 (canonical Linux checkout, source-only, not
-installed). Resolved: 4.1, 4.3, 4.8, and 4.9. 4.4 is partly done. 4.2 and
-4.5–4.7 are deferred on host evidence.
+installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done.
+4.5 and 4.6 are deferred on host evidence.
 
 - 4.1: the sync script has no DNAT refresh, `docker restart`, or
   `QBT_INTERNAL_PORT` path left. `QBT_PORT_APPLY_MODE=legacy-dnat` exits with
@@ -365,8 +365,19 @@ installed). Resolved: 4.1, 4.3, 4.8, and 4.9. 4.4 is partly done. 4.2 and
   116, and the installed `proton-instance-common.sh` differed from source.
   The fallback and the 110 cleanup deletes are still reachable on this host.
   Re-check after installing and restarting.
-- 4.2 and 4.7 deferred: `nft`/`iptables` listing needs root and was not run.
-  With 4.1 in place, current source cannot create `qbt-dnat-*` rules.
+- 4.2 and 4.7 resolved later on 2026-09-23 from root checks on the live host:
+  - `nft -a list chain ip proton_nat prerouting` failed with "No such file or
+    directory". The chain does not exist; only `legacy-dnat` ever created it,
+    and the kill switch creates only `postrouting`.
+  - `iptables -S` showed no `PROTON_INPUT` or `PROTON_OUTPUT` chains.
+  - The cleanup script, its test, the port-forward `ExecStop`, and the installer
+    entry were removed. The unit test now asserts that the unit does not
+    reference the script. The installer does not delete retired files, so an
+    installed `/usr/local/bin/proton/proton-qbt-dnat-cleanup.sh` stays behind
+    unused and can be removed by hand.
+  - The reset script no longer removes `PROTON_INPUT`/`PROTON_OUTPUT`. It still
+    removes `PROTON_DOCKER_FORWARD` and `PROTON_POSTROUTING`, which the
+    iptables backend creates.
 
 ## 5. Duplication to consolidate
 

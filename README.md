@@ -90,7 +90,6 @@ The systemd units are wired to the hardened entrypoints below:
 8. `proton-server-manager.sh`
 9. `proton-healthcheck.sh`
 10. `install-proton-systemd.sh`
-11. `proton-qbt-dnat-cleanup.sh` (`proton-port-forward@.service` `ExecStop`)
 
 The installer’s `SCRIPTS` list and the units’ `ExecStart`/`ExecStop` fields define installed entrypoints. Other root scripts include maintenance and deployment helpers; inspect their behavior before running them.
 
@@ -548,7 +547,6 @@ Verify watcher behavior:
 ```bash
 ip rule show | grep 51806
 ip route show table 51806
-sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
 ```
 
 The watcher also reconciles periodically when no event arrives. Every pass

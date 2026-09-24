@@ -63,7 +63,7 @@ Unit dependency chain:
   tunnel, policy routes/rules, server selection via `proton-server-manager.sh`.
 - `proton-port-forward@` (PartOf wg) → `proton-port-forward-safe.sh`: NAT-PMP lease
   loop, writes `CURRENT_PORT`/`CURRENT_IP` into the instance `STATE_FILE`, then
-  calls `proton-qbittorrent-sync-safe.sh`. `ExecStop` runs `proton-qbt-dnat-cleanup.sh`.
+  calls `proton-qbittorrent-sync-safe.sh`.
 - `proton-qbittorrent-sync-safe.sh` is the largest safety-critical path: pushes the
   port to the qBittorrent API, writes the one-key `QBT_PUBLISHED_PORT` artifact, and
   recreates only the owning container via Compose, with zombie/`D`-state gates.

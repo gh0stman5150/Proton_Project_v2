@@ -15,7 +15,6 @@ EnvironmentFile=-/etc/proton/instances/%i/proton.env
 EnvironmentFile=-/etc/proton/instances/%i/qbittorrent.env
 ExecStartPre=/usr/local/bin/proton/proton-port-forward-healthcheck.sh %i
 ExecStart=/usr/local/bin/proton/proton-port-forward-safe.sh %i
-ExecStop=/usr/local/bin/proton/proton-qbt-dnat-cleanup.sh %i
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=90

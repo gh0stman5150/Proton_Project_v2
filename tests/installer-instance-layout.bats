@@ -91,7 +91,7 @@
     same_path() { [[ "$1" == "$2" ]]; }
     install_normalized_file() { install -m "$3" "$1" "$2"; }
     log() { :; }
-    for source in proton-killswitch-reset.sh proton-qbt-dnat-cleanup.sh; do
+    for source in proton-killswitch-reset.sh; do
       install_script_file "$source"
       target="$BIN_DIR/${source##*/}"
       test -x "$target"

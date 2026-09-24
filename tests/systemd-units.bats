@@ -43,7 +43,8 @@
   grep -Fq 'Requires=proton-wg@%i.service' proton-port-forward@.service
   grep -Fq 'ExecStartPre=/usr/local/bin/proton/proton-port-forward-healthcheck.sh %i' proton-port-forward@.service
   grep -Fq 'ExecStart=/usr/local/bin/proton/proton-port-forward-safe.sh %i' proton-port-forward@.service
-  grep -Fq 'ExecStop=/usr/local/bin/proton/proton-qbt-dnat-cleanup.sh %i' proton-port-forward@.service
+  run grep -F 'proton-qbt-dnat-cleanup' proton-port-forward@.service
+  [ "$status" -eq 1 ]
 
   grep -Fq 'Requires=proton-wg@%i.service proton-port-forward@%i.service' proton-healthcheck@.service
   grep -Fxq 'PartOf=proton-wg@%i.service proton-port-forward@%i.service' proton-healthcheck@.service

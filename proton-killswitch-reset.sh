@@ -13,8 +13,6 @@ cleanup_iptables() {
 	nat_snapshot="$(iptables-save -t nat)" || return 1
 	batch="$(
 		printf '*filter\n'
-		render_chain_removal "$filter_snapshot" INPUT PROTON_INPUT
-		render_chain_removal "$filter_snapshot" OUTPUT PROTON_OUTPUT
 		render_chain_removal "$filter_snapshot" FORWARD PROTON_DOCKER_FORWARD
 		printf 'COMMIT\n*nat\n'
 		render_chain_removal "$nat_snapshot" POSTROUTING PROTON_POSTROUTING
