@@ -249,6 +249,32 @@ EOF
   [[ "$output" == *"not fully IPv6 capable"* ]]
 }
 
+@test "canary activation refuses a missing VPN_TABLE without restarting services" {
+  cat > "$COMMON_ENV" <<'EOF'
+KILLSWITCH_BACKEND=nftables
+WG_IPV6_ENABLED=off
+EOF
+  printf 'VPN_INTERFACE=pvsonarr\nWG_ADDRESS_SUBNET=4\n' > "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
+  cp "$PROTON_INSTANCE_ROOT/sonarr/proton.env" "$TEST_TMPDIR/env-before"
+  cat > "$PROTON_RUNTIME_ROOT/sonarr/current-server.env" <<EOF
+SELECTED_WG_PROFILE=wg-v6
+SELECTED_CONFIG=$WG_POOL_DIR/wg-v6.conf
+EOF
+  printf '[Interface]\nAddress = 10.2.0.2/32, 2a07:b944::2:2/128\nDNS = 10.2.0.1, 2a07:b944::2:1\n[Peer]\nAllowedIPs = 0.0.0.0/0, ::/0\n' \
+    > "$WG_POOL_DIR/wg-v6.conf"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$TMPBIN/curl"
+  chmod +x "$TMPBIN/curl"
+  : > "$COMMAND_LOG"
+
+  run bash -c 'source ./proton-ipv6-rollout.sh; require_root() { :; }; activate_canary sonarr'
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"VPN_TABLE is missing from $PROTON_INSTANCE_ROOT/sonarr/proton.env"* ]]
+  if grep -q '^systemctl \(start\|restart\|stop\)' "$COMMAND_LOG"; then return 1; fi
+  cmp "$TEST_TMPDIR/env-before" "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
+  [ ! -e "$PROTON_RUNTIME_ROOT/sonarr/proton.env.pre-ipv6" ]
+}
+
 @test "rollback service restoration starts instances sequentially by dependency order" {
   : > "$COMMAND_LOG"
 

@@ -21,8 +21,6 @@ log() { echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOGTAG"; }
 DEBOUNCE_SECONDS="${DEBOUNCE_SECONDS:-5}"
 POLL_INTERVAL="${POLL_INTERVAL:-60}"
 VPN_INTERFACE="${VPN_INTERFACE:-proton}"
-VPN_TABLE="${VPN_TABLE:-51820}"
-RULE_PRIORITY="${RULE_PRIORITY:-110}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
 QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
@@ -32,8 +30,6 @@ QBT_CONTAINER_IP6_STATE_FILE="${QBT_CONTAINER_IP6_STATE_FILE:-${STATE_DIR}/qbt-c
 DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
 DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
-DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-$RULE_PRIORITY}"
-QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
 DOCKER_FALLBACK_INSTANCE="${DOCKER_FALLBACK_INSTANCE:-sonarr}"
@@ -147,7 +143,6 @@ reapply_routes() {
 
 	if [[ -n "$old_cidr" && "$old_cidr" != "$new_cidr" ]]; then
 		log "Removing old Docker policy rules for $old_cidr"
-		proton_delete_ip_rule_all 4 from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" || return 1
 		proton_delete_ip_rule_all 4 from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		if command -v iptables >/dev/null 2>&1; then
 			proton_iptables_rule remove raw PREROUTING -i "$VPN_INTERFACE" -d "$old_cidr" -j ACCEPT || return 1
@@ -160,7 +155,6 @@ reapply_routes() {
 		if [[ -n "$LAN_CIDR" ]]; then
 			proton_replace_ip_rule 4 from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" || return 1
 		fi
-		proton_delete_ip_rule_all 4 from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" || return 1
 		proton_delete_ip_rule_all 4 from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1
 		if docker_ipv4_fallback_enabled; then
 			ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" || return 1

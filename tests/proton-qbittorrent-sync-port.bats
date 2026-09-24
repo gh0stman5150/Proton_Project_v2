@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 # proton-qbittorrent-sync-safe.sh: port changes, artifact schema, Docker mapping drift, and legacy DNAT.
 
 load proton-qbittorrent-sync-helper
@@ -54,6 +56,7 @@ DOCKER_PORT_FILE=$DOCKER_PORT_FILE
 DOCKER_LOG=$DOCKER_LOG
 PORT_ENV_FILE=$PORT_ENV_FILE
 EOF
+    append_manifest_routing "$instance" "$PROTON_INSTANCE_ROOT/$instance/proton.env"
     write_qbt_env compose-recreate "qbittorrent-$instance"
     write_lease "$port" "10.$subnet.0.2"
     printf 'QBT_PUBLISHED_PORT=%s\n' "$port" > "$PORT_ENV_FILE"

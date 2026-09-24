@@ -127,6 +127,6 @@ load proton-qbittorrent-sync-helper
     run env "$failure=1" QBITTORRENT_ENV_FILE="$ENV_FILE" QBT_COMMON_SCRIPT=./proton-qbittorrent-common.sh bash ./proton-qbittorrent-sync-safe.sh sonarr
     [ "$status" -ne 0 ]
     [ -f "$PROJECT_DIR/config/qBittorrent/lockfile" ]
-    ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+    if grep -F 'CMD=compose up ' "$DOCKER_LOG"; then return 1; fi
   done
 }

@@ -600,27 +600,36 @@ proton_apply_tunnel_subnet() {
 		proton_instance_error "Invalid WG_ADDRESS_SUBNET '$WG_ADDRESS_SUBNET' (expected an integer 1-254)."
 	fi
 
-	local subnet_number
-	subnet_number=$((10#$WG_ADDRESS_SUBNET))
-
 	# WG_ADDRESS_SUBNET is the single source of truth. Derive everything from it
 	# so the tunnel address, DNS, and NAT-PMP gateway can never drift apart.
 	WG_TUNNEL_ADDRESS="10.${WG_ADDRESS_SUBNET}.0.2/32"
 	WG_TUNNEL_DNS="10.${WG_ADDRESS_SUBNET}.0.1"
 	NATPMP_GATEWAY="10.${WG_ADDRESS_SUBNET}.0.1"
 
-	# The shared common env keeps the legacy singleton table at 51820. Instance
-	# services need a distinct table per tunnel so qBittorrent replies leave via
-	# the same WireGuard interface that owns the forwarded port.
-	if [[ -z "${VPN_TABLE:-}" || "$VPN_TABLE" == "51820" ]]; then
-		VPN_TABLE="$((51800 + subnet_number))"
-	fi
-
-	if [[ -z "${QBT_VPN_RULE_PRIORITY:-}" ]]; then
-		QBT_VPN_RULE_PRIORITY="$((110 + subnet_number))"
-	fi
-
 	export WG_ADDRESS_SUBNET WG_TUNNEL_ADDRESS WG_TUNNEL_DNS NATPMP_GATEWAY
+}
+
+# VPN_TABLE and QBT_VPN_RULE_PRIORITY come from qbittorrent-instances.tsv, and
+# the installer writes both into each instance proton.env. There is no
+# fallback: a guessed table or priority could route one instance's traffic
+# through another's tunnel.
+proton_require_policy_routing() {
+	if [[ ! "${VPN_TABLE:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		proton_instance_error "VPN_TABLE must be set to ${INSTANCE}'s routing table from qbittorrent-instances.tsv in ${INSTANCE_PROTON_ENV}."
+	fi
+	case "$VPN_TABLE" in
+	51820)
+		proton_instance_error "VPN_TABLE=51820 is the retired shared table; set ${INSTANCE}'s table from qbittorrent-instances.tsv in ${INSTANCE_PROTON_ENV}."
+		;;
+	253 | 254 | 255)
+		proton_instance_error "VPN_TABLE=${VPN_TABLE} is a reserved kernel routing table."
+		;;
+	esac
+
+	if [[ ! "${QBT_VPN_RULE_PRIORITY:-}" =~ ^[1-9][0-9]{0,4}$ ]] || ((QBT_VPN_RULE_PRIORITY > 32765)); then
+		proton_instance_error "QBT_VPN_RULE_PRIORITY must be set to ${INSTANCE}'s rule priority from qbittorrent-instances.tsv in ${INSTANCE_PROTON_ENV}."
+	fi
+
 	export VPN_TABLE QBT_VPN_RULE_PRIORITY
 }
 
@@ -658,4 +667,5 @@ proton_instance_init() {
 
 	proton_derive_runtime_paths
 	proton_apply_tunnel_subnet
+	proton_require_policy_routing
 }

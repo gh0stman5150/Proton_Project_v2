@@ -42,6 +42,7 @@ STATE_DIR=$STATE_DIR
 WG_RUNTIME_DIR=$WG_RUNTIME_DIR
 WG_ADDRESS_SUBNET=4
 EOF
+  append_manifest_routing sonarr "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
 QBITTORRENT_URL=http://127.0.0.1:8083
@@ -162,6 +163,8 @@ EOF
   grep -F 'route replace default dev wg-test table 51804' "$IP_LOG"
   grep -F 'rule add from 192.168.96.44/32 lookup 51804 priority 114' "$IP_LOG"
   grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
+  # Rules nothing creates (fwmark at 100, Docker subnet at 110) are not touched.
+  ! grep -E 'fwmark|priority (100|110)$' "$IP_LOG"
 }
 
 @test "wg up programs only its own link in systemd-resolved and never flushes every cache" {
@@ -194,7 +197,7 @@ EOF
 
   [ "$status" -eq 0 ]
   grep -F 'rule add from 192.168.96.44/32 lookup 51804 priority 114' "$IP_LOG"
-  ! grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
+  if grep -F 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"; then return 1; fi
   [[ "$output" == *"Docker fallback policy routing owned by radarr; qBittorrent-specific rules remain active for sonarr"* ]]
 }
 

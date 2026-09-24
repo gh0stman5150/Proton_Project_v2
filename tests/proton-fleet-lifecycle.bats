@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 setup() {
   export TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
@@ -13,6 +15,7 @@ setup() {
   for instance in lidarr prowlarr radarr sonarr whisparr; do
     mkdir -p "$PROTON_INSTANCE_ROOT/$instance" "$TEST_TMPDIR/state/$instance"
     printf 'STATE_DIR=%s/state/%s\nSTATE_FILE=%s/state/%s/proton-port.state\nWG_ADDRESS_SUBNET=4\n' "$TEST_TMPDIR" "$instance" "$TEST_TMPDIR" "$instance" > "$PROTON_INSTANCE_ROOT/$instance/proton.env"
+    append_manifest_routing "$instance" "$PROTON_INSTANCE_ROOT/$instance/proton.env"
     printf 'QBT_CONTAINER_NAME=qbittorrent-%s\n' "$instance" > "$PROTON_INSTANCE_ROOT/$instance/qbittorrent.env"
     printf 'generation-%s\n' "$instance" > "$TEST_TMPDIR/state/$instance/tunnel-generation"
     cat > "$TEST_TMPDIR/state/$instance/proton-port.state" <<EOF

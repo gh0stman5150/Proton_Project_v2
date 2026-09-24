@@ -73,7 +73,7 @@ proton-healthcheck@radarr.service" ]
   FAIL_START=proton-port-forward@lidarr.service run_as_root start lidarr prowlarr
   [ "$status" -ne 0 ]
   [[ "$output" == *"proton-port-forward@lidarr.service failed to start"* ]]
-  ! grep -q 'start proton-healthcheck@lidarr' "$SYSTEMCTL_LOG"
+  if grep -q 'start proton-healthcheck@lidarr' "$SYSTEMCTL_LOG"; then return 1; fi
   ! grep -q 'prowlarr' "$SYSTEMCTL_LOG"
 }
 

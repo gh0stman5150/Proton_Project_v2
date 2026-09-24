@@ -188,6 +188,12 @@ WireGuard start, stop, and the watcher share one container-address lookup in
 instance's policy rule. When the lookup fails, start and stop fall back to the
 last cached address, and the watcher skips that pass without changing rules.
 
+Each instance deletes only the policy rules it creates: its qBittorrent source
+rule, its Docker fallback rule, and the shared 108/109 rules it asserts. The
+retired priority-100 `fwmark` rules and priority-110 Docker-subnet rules are no
+longer deleted, because nothing creates them; live `ip rule` showed neither on
+2026-09-23.
+
 The watcher also reconciles periodically when no event arrives. Every pass
 reasserts policy routes and the kill switch; a periodic pass queues
 allocation and sync only when the Docker CIDRs or qBittorrent addresses changed
@@ -214,7 +220,7 @@ The installer:
 7. Secures each instance's `wireguard.conf`, `proton.env`, and `qbittorrent.env` as `root:root` with mode `600`, and keeps the shared pool directory `/etc/wireguard/proton-pool` `root:root` with mode `700`; it does not change the modes of individual pool configs
 8. Preserves existing secrets and writes replacement templates to `*.new` files rather than overwriting them
 9. Canonicalizes each existing per-instance port artifact to exactly one validated `QBT_PUBLISHED_PORT` assignment while preserving its value
-10. Reconciles `VPN_TABLE`, `QBT_VPN_RULE_PRIORITY`, and `QBT_INSTANCE_NAME` into existing protected instance configs without changing credentials or WireGuard secrets
+10. Reconciles `VPN_TABLE`, `QBT_VPN_RULE_PRIORITY`, and `QBT_INSTANCE_NAME` into existing protected instance configs without changing credentials or WireGuard secrets. Runtime scripts have no fallback for the first two: an instance whose `proton.env` lacks a valid `VPN_TABLE` or `QBT_VPN_RULE_PRIORITY`, or sets the retired shared table `51820`, refuses to start
 11. Installs units that have systemd recreate `/run/proton` before applying sandboxed writable paths
 12. Resets failed unit state without restarting active templated instance chains
 13. Runs `systemctl daemon-reload`

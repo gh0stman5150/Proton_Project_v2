@@ -32,6 +32,7 @@ WG_PROFILE=pvsonarr
 WG_CONFIG=$TEST_TMPDIR/pvsonarr.conf
 STATE_DIR=$STATE_DIR
 EOF
+  append_manifest_routing sonarr "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
   cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
 QBITTORRENT_URL=http://127.0.0.1:8083
 QBT_CONTAINER_NAME=qbittorrent-sonarr
@@ -96,6 +97,8 @@ EOF
   [ -n "$flush_line" ]
   [ "$qbt_line" -lt "$flush_line" ]
   [ "$fallback_line" -lt "$flush_line" ]
+  # Rules nothing creates (fwmark at 100, Docker subnet at 110) are not touched.
+  if grep -E 'fwmark|priority (100|110)$' "$IP_LOG"; then return 1; fi
   [ ! -e "$STATE_DIR/qbt-container-ip6" ]
 }
 

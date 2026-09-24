@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   export PROTON_INSTANCE_ROOT="$TEST_TMPDIR/instances"
@@ -13,14 +15,6 @@ setup() {
   for instance in lidarr prowlarr radarr sonarr whisparr; do
     create_instance "$instance"
   done
-}
-
-# manifest_value INSTANCE COLUMN: a qbittorrent-instances.tsv field by header name.
-manifest_value() {
-  awk -F '\t' -v instance="$1" -v column="$2" '
-    NR == 1 { sub(/^# /, ""); for (i = 1; i <= NF; i++) if ($i == column) field = i; next }
-    $1 == instance { print $field; exit }
-  ' qbittorrent-instances.tsv
 }
 
 # Instance configs shaped like the installer's examples, from the manifest row.
@@ -38,6 +32,7 @@ VPN_INTERFACE=$vpn_if
 WG_CONFIG=/etc/proton/instances/$instance/wireguard.conf
 WG_ADDRESS_SUBNET=$(manifest_value "$instance" address_subnet)
 EOF
+  append_manifest_routing "$instance" "$instance_dir/proton.env"
 
   cat > "$instance_dir/qbittorrent.env" <<EOF
 QBT_INSTANCE_NAME=$instance
@@ -170,6 +165,27 @@ EOF
     [ "$output" = "$(printf '%s\n' "10.$subnet.0.2/32" "10.$subnet.0.1" "10.$subnet.0.1" \
       "$(manifest_value "$instance" vpn_table)" "$(manifest_value "$instance" qbt_rule_priority)")" ]
   done
+}
+
+@test "instance loader requires the manifest routing table and rule priority" {
+  env_file="$PROTON_INSTANCE_ROOT/sonarr/proton.env"
+  cp "$env_file" "$TEST_TMPDIR/env-before"
+  for case in 'VPN_TABLE=' 'VPN_TABLE=51820' 'VPN_TABLE=254' 'VPN_TABLE=table' \
+    'QBT_VPN_RULE_PRIORITY=' 'QBT_VPN_RULE_PRIORITY=0' 'QBT_VPN_RULE_PRIORITY=40000'; do
+    grep -v "^${case%%=*}=" "$TEST_TMPDIR/env-before" > "$env_file"
+    [[ -z "${case#*=}" ]] || printf '%s\n' "$case" >> "$env_file"
+    run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; echo initialized'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"ERROR: ${case%%=*}"* ]]
+    [[ "$output" != *initialized* ]]
+  done
+
+  # The common env's retired shared table is fine when the instance sets its own.
+  cp "$TEST_TMPDIR/env-before" "$env_file"
+  grep -Fx 'VPN_TABLE=51820' "$PROTON_COMMON_ENV"
+  run bash -c 'source ./proton-instance-common.sh; proton_instance_init sonarr; echo "$VPN_TABLE $QBT_VPN_RULE_PRIORITY"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "51804 114" ]
 }
 
 @test "instance loader rejects an out-of-range tunnel subnet" {

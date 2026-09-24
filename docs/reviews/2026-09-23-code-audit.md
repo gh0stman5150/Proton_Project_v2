@@ -348,10 +348,10 @@ source-only, not installed):
   are cleaned). Also delete the duplicate `QBITTORRENT_ENV_FILE` block in
   `proton_instance_init` (C) and the dead `${VAR:-default}` fallbacks for these
   paths in port-forward, sync, and healthcheck (C).
-- [ ] **4.5 `VPN_TABLE==51820` rewrite / `QBT_VPN_RULE_PRIORITY` default (P).**
+- [x] **4.5 `VPN_TABLE==51820` rewrite / `QBT_VPN_RULE_PRIORITY` default (P).**
   Installer now reconciles both keys and the verifier requires them; the
   fallback in `proton-instance-common.sh` could become a hard error.
-- [ ] **4.6 Policy-rule cleanup for rules nothing creates (P).** wg-up/wg-down
+- [x] **4.6 Policy-rule cleanup for rules nothing creates (P).** wg-up/wg-down
   delete priority-100 `fwmark` rules and `DOCKER_VPN_RULE_PRIORITY` (110) rules;
   the watcher does so every tick. `VPN_FWMARK` is read only by these deletes;
   `RULE_PRIORITY` is a legacy alias. Remove once every host is past migration
@@ -368,7 +368,7 @@ source-only, not installed):
 Section 4 progress, 2026-09-23 (canonical Linux checkout, source-only, not
 installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done
 (finished later; see below).
-4.5 and 4.6 are deferred on host evidence.
+4.5 and 4.6 are deferred on host evidence (resolved later; see below).
 
 - 4.1: the sync script has no DNAT refresh, `docker restart`, or
   `QBT_INTERNAL_PORT` path left. `QBT_PORT_APPLY_MODE=legacy-dnat` exits with
@@ -473,6 +473,33 @@ installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done
   - The reset script no longer removes `PROTON_INPUT`/`PROTON_OUTPUT`. It still
     removes `PROTON_DOCKER_FORWARD` and `PROTON_POSTROUTING`, which the
     iptables backend creates.
+
+- 4.5 and 4.6 resolved later on 2026-09-23, after the section 5 install:
+  - Live `ip rule` showed no priority-100 `fwmark` rules and no priority-110
+    rules; only mousehole's intentional 117 remains outside the manifest
+    priorities.
+  - 4.5: `proton_require_policy_routing` makes `VPN_TABLE` and
+    `QBT_VPN_RULE_PRIORITY` required. The `51820` rewrite and the
+    `51800 + subnet` / `110 + subnet` derivation are gone, as are the
+    `VPN_TABLE`/priority defaults in wg-up, wg-down, and the watcher. A
+    missing or invalid value, the retired table `51820`, or a reserved kernel
+    table stops the instance with an error. `proton-ipv6-rollout.sh
+    activate-canary` also requires `VPN_TABLE`, and now checks it and
+    `VPN_INTERFACE` before changing the instance env.
+  - 4.6: the priority-100 `fwmark` deletes and the priority-110
+    Docker-subnet deletes are gone from wg-up, wg-down, and the watcher,
+    with `VPN_FWMARK`, `DOCKER_VPN_RULE_PRIORITY`, and the `RULE_PRIORITY`
+    alias. `VPN_FWMARK` left the common template. No sweep was added;
+    scripts still delete only rules they create.
+  - Test fixtures now take both keys from `qbittorrent-instances.tsv` through
+    `append_manifest_routing`. Five mid-test `! grep` assertions, two of them
+    new and three older, never failed because Bats ignores `!` except on a
+    test's last line; they now use `if grep ...; then return 1; fi`. The
+    three older ones still pass.
+  - The root-only instance files could not be read here. The installer
+    writes both keys and the verifier requires them; run
+    `sudo /usr/local/bin/proton/proton-qbt-fleet-verify.sh --config` before
+    installing.
 
 ## 5. Duplication to consolidate
 

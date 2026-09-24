@@ -425,6 +425,11 @@ activate_canary() {
 	instance_env="${INSTANCE_ROOT}/${instance}/proton.env"
 	backup="${RUNTIME_ROOT}/${instance}/proton.env.pre-ipv6"
 	[[ -f "$instance_env" ]] || die "Instance environment not found: $instance_env"
+	# Refuse before changing anything.
+	vpn_if="$(env_value VPN_INTERFACE "$instance_env")"
+	[[ -n "$vpn_if" ]] || die "VPN_INTERFACE is missing from $instance_env"
+	vpn_table="$(env_value VPN_TABLE "$instance_env")"
+	[[ -n "$vpn_table" ]] || die "VPN_TABLE is missing from $instance_env"
 	mkdir -p "$(dirname "$backup")"
 	cp -a "$instance_env" "$backup"
 	set_env_value "$instance_env" WG_IPV6_ENABLED on
@@ -434,15 +439,6 @@ activate_canary() {
 		die "Canary preflight failed; restored $instance environment without restarting services"
 	fi
 
-	vpn_if="$(env_value VPN_INTERFACE "$instance_env")"
-	[[ -n "$vpn_if" ]] || die "VPN_INTERFACE is missing from $instance_env"
-	vpn_table="$(env_value VPN_TABLE "$instance_env")"
-	if [[ -z "$vpn_table" ]]; then
-		local subnet
-		subnet="$(env_value WG_ADDRESS_SUBNET "$instance_env")"
-		[[ "$subnet" =~ ^[0-9]+$ ]] || die "Cannot derive VPN_TABLE for $instance"
-		vpn_table="$((51800 + 10#$subnet))"
-	fi
 	mapfile -t units < <(instance_units "$instance")
 
 	log "CANARY: restarting only $instance Proton services"

@@ -39,6 +39,7 @@ RECOVERY_LOCK_FILE=$RECOVERY_LOCK_FILE
 WG_POOL_DIR=$WG_POOL_DIR
 WG_ADDRESS_SUBNET=2
 EOF
+  append_manifest_routing sonarr "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
 QBITTORRENT_URL=http://127.0.0.1:8083

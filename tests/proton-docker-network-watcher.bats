@@ -41,6 +41,7 @@ STATE_DIR=$STATE_DIR/$instance
 LAST_FILE=$STATE_DIR/$instance/docker-network-watcher.last
 DOCKER_NETWORK_CIDR_STATE_FILE=$STATE_DIR/$instance/docker-network-cidr
 EOF
+    append_manifest_routing "$instance" "$PROTON_INSTANCE_ROOT/$instance/proton.env"
     cat > "$PROTON_INSTANCE_ROOT/$instance/qbittorrent.env" <<EOF
 QBITTORRENT_URL=http://127.0.0.1:$port
 QBT_CONTAINER_NAME=qbittorrent-$instance
@@ -123,6 +124,8 @@ EOF
   [ "$status" -eq 0 ]
   grep -F -- 'rule add from 192.168.96.17/32 lookup 51804 priority 114' "$IP_LOG"
   grep -F -- 'rule add from 192.168.96.0/20 lookup 51804 priority 130' "$IP_LOG"
+  # Rules nothing creates (fwmark at 100, Docker subnet at 110) are not touched.
+  ! grep -E 'fwmark|priority (100|110)$' "$IP_LOG"
 }
 
 @test "IPv4 fallback non-owner receives only its qBittorrent owner rule" {

@@ -41,6 +41,7 @@ STATE_FILE=$STATE_FILE
 CACHE_FILE=$CACHE_FILE
 DOCKER_CONFIG_DIR=$DOCKER_CONFIG_DIR
 EOF
+  append_manifest_routing sonarr "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
 
   stub_systemd_cat
 

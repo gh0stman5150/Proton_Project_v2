@@ -29,8 +29,6 @@ SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
 KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-/usr/local/bin/proton/proton-killswitch-dispatch.sh}"
-VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
-VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
 DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
 QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
@@ -41,8 +39,6 @@ LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
 DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
-DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
-QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 DOCKER_FALLBACK_VPN_ROUTING="${DOCKER_FALLBACK_VPN_ROUTING:-on}"
 DOCKER_FALLBACK_INSTANCE="${DOCKER_FALLBACK_INSTANCE:-sonarr}"
@@ -539,8 +535,6 @@ if ((!KEEP_TUNNEL)); then
 fi
 
 inject_routes() {
-	proton_delete_ip_rule_all 4 fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
-	proton_delete_ip_rule_all 4 not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
 	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	if ipv6_enabled; then
 		ip -6 route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
@@ -587,7 +581,6 @@ inject_routes() {
 				proton_replace_ip_rule 4 from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
 			fi
 
-			proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
 			proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 			if docker_ipv4_fallback_enabled; then
 				ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"

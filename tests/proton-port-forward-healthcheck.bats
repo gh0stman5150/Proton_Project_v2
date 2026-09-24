@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load common-stubs
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
@@ -11,7 +13,7 @@ setup() {
 
   mkdir -p "$TMPBIN" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$PROTON_COMMON_ENV"
-  : > "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
+  append_manifest_routing sonarr "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
   printf 'QBITTORRENT_URL=http://qb.test:8084/\n' > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env"
 
   cat > "$TMPBIN/curl" <<'EOF'

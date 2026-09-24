@@ -29,8 +29,6 @@ WG_RUNTIME_DIR="${WG_RUNTIME_DIR:-/etc/wireguard/proton-runtime}"
 WG_QUICK_TIMEOUT_SECONDS=90
 WG_CONFIG="${WG_CONFIG:-/etc/wireguard/${WG_PROFILE}.conf}"
 FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
-VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
-VPN_TABLE="${VPN_TABLE:-51820}"
 WG_IPV6_ENABLED="${WG_IPV6_ENABLED:-off}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
 DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
@@ -38,8 +36,6 @@ QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
 QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
 QBT_CONTAINER_IP_STATE_FILE="${QBT_CONTAINER_IP_STATE_FILE:-${STATE_DIR}/qbt-container-ip}"
 QBT_CONTAINER_IP6_STATE_FILE="${QBT_CONTAINER_IP6_STATE_FILE:-${STATE_DIR}/qbt-container-ip6}"
-DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
-QBT_VPN_RULE_PRIORITY="${QBT_VPN_RULE_PRIORITY:-$DOCKER_VPN_RULE_PRIORITY}"
 DOCKER_FALLBACK_VPN_RULE_PRIORITY="${DOCKER_FALLBACK_VPN_RULE_PRIORITY:-130}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 
@@ -125,8 +121,6 @@ for source_ip in "$QBT_CONTAINER_IP" "$CACHED_QBT_CONTAINER_IP"; do
 	proton_delete_ip_rule_all 4 from "$source_rule" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY"
 done
 
-proton_delete_ip_rule_all 4 fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
-proton_delete_ip_rule_all 4 not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
 proton_flush_route_table 4 "$VPN_TABLE"
 if ipv6_enabled; then
 	CACHED_QBT_CONTAINER_IPV6="$(read_cached_qbt_container_ipv6 || true)"
@@ -145,7 +139,6 @@ fi
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 		[[ -n "$cidr" ]] || continue
-		proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
 		proton_delete_ip_rule_all 4 from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
 
 		if command -v iptables >/dev/null 2>&1; then

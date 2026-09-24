@@ -70,3 +70,18 @@ LEASE_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
 LEASE_GENERATION=fixture-generation
 EOF
 }
+
+# manifest_value INSTANCE COLUMN: a qbittorrent-instances.tsv field by header name.
+manifest_value() {
+  awk -F '\t' -v instance="$1" -v column="$2" '
+    NR == 1 { sub(/^# /, ""); for (i = 1; i <= NF; i++) if ($i == column) field = i; next }
+    $1 == instance { print $field; exit }
+  ' "$BATS_TEST_DIRNAME/../qbittorrent-instances.tsv"
+}
+
+# append_manifest_routing INSTANCE FILE: the instance's routing table and rule
+# priority, as the installer writes them into its proton.env.
+append_manifest_routing() {
+  printf 'VPN_TABLE=%s\nQBT_VPN_RULE_PRIORITY=%s\n' \
+    "$(manifest_value "$1" vpn_table)" "$(manifest_value "$1" qbt_rule_priority)" >> "$2"
+}

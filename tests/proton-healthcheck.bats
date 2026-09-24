@@ -22,6 +22,7 @@ setup() {
 STATE_DIR=$TEST_TMPDIR
 QBITTORRENT_ENV_FILE=$QBITTORRENT_ENV_FILE
 EOF
+  append_manifest_routing sonarr "$PROTON_INSTANCE_ROOT/sonarr/proton.env"
 
   cat > "$PROTON_INSTANCE_ROOT/sonarr/qbittorrent.env" <<'EOF'
 QBITTORRENT_URL=http://qb.test:8080
