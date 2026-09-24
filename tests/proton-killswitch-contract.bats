@@ -1,10 +1,19 @@
 #!/usr/bin/env bats
 
-@test "both firewall backends serialize their shared host-wide ruleset" {
-  grep -Fq 'KILLSWITCH_LOCK_FILE="${KILLSWITCH_LOCK_FILE:-/run/proton/killswitch.lock}"' proton-killswitch-nft.sh
-  grep -Fq 'KILLSWITCH_LOCK_FILE="${KILLSWITCH_LOCK_FILE:-/run/proton/killswitch.lock}"' proton-killswitch-safe.sh
-  grep -Fq 'flock -w 30 9' proton-killswitch-nft.sh
-  grep -Fq 'flock -w 30 9' proton-killswitch-safe.sh
+@test "both firewall backends refuse to touch the ruleset while the shared lock is held" {
+  for backend in nft safe; do
+    run bash -c '
+      exec 8>"$KILLSWITCH_LOCK_FILE"
+      flock -x 8
+      PROTON_FIREWALL_LOCK_WAIT_SECONDS=0 DOCKER_NETWORK_CIDR=172.18.0.0/16 VPN_INTERFACE=proton \
+        bash "./proton-killswitch-$1.sh"
+    ' _ "$backend"
+    [ "$status" -ne 0 ]
+    grep -F "Timed out waiting for kill-switch lock: $KILLSWITCH_LOCK_FILE" "$SYSTEMD_LOG"
+  done
+  [ ! -e "$NFT_LOG" ]
+  [ ! -e "$NFT_STDIN" ]
+  [ ! -e "$IPTABLES_LOG" ]
 }
 
 setup() {

@@ -208,9 +208,10 @@ profile_port_forward_category() {
 	fi
 }
 
+# constrained=1 skips unproven profiles while a proven-good allowlist exists.
 profile_passes_port_forward_filter() {
 	local profile="$1"
-	local allow_unproven="${2:-0}"
+	local constrained="${2:-0}"
 	local category
 
 	if ! port_forward_required; then
@@ -228,7 +229,7 @@ profile_passes_port_forward_filter() {
 		return 0
 		;;
 	unproven)
-		if port_forward_allowlist_active && [[ "$allow_unproven" != "1" ]]; then
+		if [[ "$constrained" == "1" ]]; then
 			log "Skipping $profile because it is unproven and the selector is currently constrained to proven-good port-forward nodes"
 			return 1
 		fi
@@ -299,18 +300,16 @@ config_endpoint_value() {
 	awk -F '=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$1"
 }
 
-config_endpoint_host() {
-	local endpoint
-	endpoint="$(config_endpoint_value "$1")"
+endpoint_value_host() {
+	local endpoint="$1"
 	endpoint="${endpoint%:*}"
 	endpoint="${endpoint#[}"
 	endpoint="${endpoint%]}"
 	echo "$endpoint"
 }
 
-config_endpoint_port() {
-	local endpoint
-	endpoint="$(config_endpoint_value "$1")"
+endpoint_value_port() {
+	local endpoint="$1"
 	echo "${endpoint##*:}"
 }
 
@@ -376,7 +375,8 @@ allow_missing_dns() {
 
 lint_config() {
 	local config="$1"
-	local dns_value expected_dns address_value allowed_ips_value
+	local expected_dns="$2"
+	local dns_value address_value allowed_ips_value
 
 	if ipv6_enabled; then
 		address_value="$(config_address_value "$config")"
@@ -401,7 +401,6 @@ lint_config() {
 	fi
 
 	dns_value="$(normalize_dns_csv "$(config_dns_value "$config")")"
-	expected_dns="$(normalize_dns_csv "$WG_EXPECTED_DNS")"
 
 	if [[ -z "$dns_value" ]]; then
 		if allow_missing_dns; then
@@ -668,9 +667,20 @@ select_best_server() (
 	done
 	current_profile_name="$(current_profile)"
 
+	# Loop invariants: the lock held for this whole command keeps the allowlist
+	# stable during a pass.
+	local pf_constrained=0 expected_dns budget_expired=0
+	if [[ "$allow_unproven" != "1" ]] && port_forward_allowlist_active; then
+		pf_constrained=1
+	fi
+	expected_dns="$(normalize_dns_csv "$WG_EXPECTED_DNS")"
+
 	while IFS= read -r config; do
-		local profile endpoint_host endpoint_ip endpoint_port latency_ms
-		((SECONDS < selection_deadline)) || break
+		local profile endpoint endpoint_host endpoint_ip endpoint_port latency_ms
+		if ((SECONDS >= selection_deadline)); then
+			budget_expired=1
+			break
+		fi
 
 		[[ -f "$config" ]] || continue
 		profile="$(config_profile "$config")"
@@ -680,11 +690,11 @@ select_best_server() (
 			continue
 		fi
 
-		if ! profile_passes_port_forward_filter "$profile" "$allow_unproven"; then
+		if ! profile_passes_port_forward_filter "$profile" "$pf_constrained"; then
 			continue
 		fi
 
-		if ! lint_config "$config"; then
+		if ! lint_config "$config" "$expected_dns"; then
 			continue
 		fi
 
@@ -703,8 +713,9 @@ select_best_server() (
 			continue
 		fi
 
-		endpoint_host="$(config_endpoint_host "$config")"
-		endpoint_port="$(config_endpoint_port "$config")"
+		endpoint="$(config_endpoint_value "$config")"
+		endpoint_host="$(endpoint_value_host "$endpoint")"
+		endpoint_port="$(endpoint_value_port "$endpoint")"
 		endpoint_ip="$(resolve_endpoint_ip "$endpoint_host" || true)"
 
 		if [[ -z "$endpoint_host" || -z "$endpoint_port" || -z "$endpoint_ip" ]]; then
@@ -736,7 +747,13 @@ select_best_server() (
 		fi
 	done < <(candidate_configs)
 
-	if [[ -z "$best_profile" && "$allow_unproven" != "1" ]] && port_forward_allowlist_active; then
+	# Retries share this command's budget, so an expired budget cannot retry.
+	if [[ -z "$best_profile" ]] && ((budget_expired)); then
+		log "ERROR: Server selection budget of ${SERVER_SELECTION_BUDGET_SECONDS:-20}s expired before any candidate qualified."
+		exit 1
+	fi
+
+	if [[ -z "$best_profile" ]] && ((pf_constrained)); then
 		log "No eligible proven-good port-forward candidates were available; retrying with unproven nodes"
 		select_best_server "$allow_bad" 1
 		return $?

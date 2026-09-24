@@ -225,3 +225,89 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = 45678 ]
 }
+
+@test "shared rule-source normalization validates addresses and prefixes" {
+  run bash -c '
+    source ./proton-instance-common.sh
+    normalize_ipv4_rule_source " 192.168.96.4 "
+    normalize_ipv4_rule_source 192.168.96.0/20
+    normalize_ipv6_rule_source fd00::4/64
+    for bad in "" 256.1.1.1 192.168.96.4/33 192.168.96.4/x not-an-ip; do
+      if normalize_ipv4_rule_source "$bad"; then echo "accepted $bad"; fi
+    done
+    if normalize_ipv6_rule_source 192.168.96.4; then echo "accepted IPv4 as IPv6"; fi
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'192.168.96.4/32\n192.168.96.0/20\nfd00::4/128' ]
+}
+
+@test "shared container address lookup uses only the named network when one is set" {
+  mkdir -p "$TEST_TMPDIR/bin"
+  cat > "$TEST_TMPDIR/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+[[ "${DOCKER_ACTIVE:-1}" == 1 ]]
+EOF
+  cat > "$TEST_TMPDIR/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *GlobalIPv6Address* ]]; then
+  printf 'other_network=fd00::9\nstarr_network=fd00::4\n'
+else
+  printf 'other_network=172.18.0.9\nstarr_network=192.168.96.4\n'
+fi
+EOF
+  chmod +x "$TEST_TMPDIR/bin/systemctl" "$TEST_TMPDIR/bin/docker"
+
+  run env PATH="$TEST_TMPDIR/bin:$PATH" bash -c '
+    source ./proton-instance-common.sh
+    QBT_CONTAINER_NAME=qbittorrent-sonarr
+    QBT_NETWORK_NAME=starr_network
+    resolve_qbt_container_ip
+    resolve_qbt_container_ipv6
+    QBT_NETWORK_NAME=missing_network
+    if resolve_qbt_container_ip; then echo "fell back to another network"; fi
+    QBT_NETWORK_NAME=
+    resolve_qbt_container_ip
+    QBT_NETWORK_NAME=starr_network
+    if DOCKER_ACTIVE=0 resolve_qbt_container_ip; then echo "resolved without Docker"; fi
+    QBT_CONTAINER_NAME=
+    if resolve_qbt_container_ip; then echo "resolved without a container"; fi
+  '
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'192.168.96.4\nfd00::4\n172.18.0.9' ]
+}
+
+@test "shared wg-quick runner applies the caller timeout, secures runtime configs, and filters known noise" {
+  mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/runtime"
+  touch "$TEST_TMPDIR/runtime/pvsonarr.conf"
+  chmod 0644 "$TEST_TMPDIR/runtime/pvsonarr.conf"
+  chmod 0755 "$TEST_TMPDIR/runtime"
+  cat > "$TEST_TMPDIR/bin/timeout" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$TIMEOUT_LOG"
+shift 2
+"$@"
+EOF
+  cat > "$TEST_TMPDIR/bin/wg-quick" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "stat: cannot read table of mounted file systems: Permission denied" >&2
+printf '%s\n' "Warning: \`$2' is world accessible" >&2
+printf '%s\n' "real error" >&2
+exit 3
+EOF
+  chmod +x "$TEST_TMPDIR/bin/timeout" "$TEST_TMPDIR/bin/wg-quick"
+
+  run env PATH="$TEST_TMPDIR/bin:$PATH" TIMEOUT_LOG="$TEST_TMPDIR/timeout.log" bash -c '
+    source ./proton-instance-common.sh
+    WG_RUNTIME_DIR="$1"
+    WG_QUICK_TIMEOUT_SECONDS=90
+    run_wg_quick down "$1/pvsonarr.conf" 2>&1
+  ' _ "$TEST_TMPDIR/runtime"
+
+  [ "$status" -eq 3 ]
+  [ "$output" = "real error" ]
+  [ "$(cat "$TEST_TMPDIR/timeout.log")" = "--kill-after=5s 90s wg-quick down $TEST_TMPDIR/runtime/pvsonarr.conf" ]
+  [ "$(stat -c %a "$TEST_TMPDIR/runtime")" = 700 ]
+  [ "$(stat -c %a "$TEST_TMPDIR/runtime/pvsonarr.conf")" = 600 ]
+}

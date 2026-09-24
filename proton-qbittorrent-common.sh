@@ -8,25 +8,43 @@ curl() {
 	command curl --connect-timeout 5 --max-time "${QBT_HTTP_TIMEOUT_SECONDS:-15}" "$@"
 }
 
+# The single zombie/persistent-D gate for every recreation path. On refusal,
+# QBT_RECREATE_REFUSAL names the reason for the caller's error message.
 qbt_container_safe_for_recreate() {
 	local container="$1" allow_absent="${2:-0}"
 	local status listing tasks current persistent="" sample task
 	local samples="${QBT_DSTATE_SAMPLES:-3}" delay="${QBT_DSTATE_DELAY:-1}"
-	[[ "$samples" =~ ^[0-9]+$ && "$delay" =~ ^[0-9]+$ ]] && ((samples >= 2)) || return 1
+	QBT_RECREATE_REFUSAL=""
+	if [[ ! "$samples" =~ ^[0-9]+$ || ! "$delay" =~ ^[0-9]+$ ]] || ((samples < 2)); then
+		QBT_RECREATE_REFUSAL="invalid D-state sampling settings"
+		return 1
+	fi
 	if ! status="$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null)"; then
-		listing="$(docker container ls -a --filter "name=^/${container}$" --format '{{.ID}}')" || return 1
-		[[ -z "$listing" && "$allow_absent" == 1 ]]
-		return $?
+		listing="$(docker container ls -a --filter "name=^/${container}$" --format '{{.ID}}')" || {
+			QBT_RECREATE_REFUSAL="Docker could not list the container"
+			return 1
+		}
+		[[ -z "$listing" && "$allow_absent" == 1 ]] && return 0
+		QBT_RECREATE_REFUSAL="container state is unknown"
+		[[ -n "$listing" ]] || QBT_RECREATE_REFUSAL="container is absent"
+		return 1
 	fi
 	case "$status" in
 	exited | created) return 0 ;;
 	running) ;;
-	*) return 1 ;;
+	*)
+		QBT_RECREATE_REFUSAL="container status is ${status:-unknown}"
+		return 1
+		;;
 	esac
 	for ((sample = 1; sample <= samples; sample++)); do
-		tasks="$(docker top "$container" -eLo pid,lwp,stat)" || return 1
-		awk 'NR > 1 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[SRIDTZtWX]/ { found=1 } END { exit !found }' <<<"$tasks" || return 1
+		if ! tasks="$(docker top "$container" -eLo pid,lwp,stat)" ||
+			! awk 'NR > 1 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[SRIDTZtWX]/ { found=1 } END { exit !found }' <<<"$tasks"; then
+			QBT_RECREATE_REFUSAL="Docker could not list the container's tasks"
+			return 1
+		fi
 		if awk 'NR > 1 && $3 ~ /^Z/ { found=1 } END { exit !found }' <<<"$tasks"; then
+			QBT_RECREATE_REFUSAL="zombie process"
 			return 1
 		fi
 		current="$(awk 'NR > 1 && $3 ~ /^D/ { print $2 }' <<<"$tasks")"
@@ -44,6 +62,7 @@ qbt_container_safe_for_recreate() {
 		[[ -n "$persistent" ]] || return 0
 		((sample == samples)) || sleep "$delay"
 	done
+	QBT_RECREATE_REFUSAL="persistent uninterruptible D-state task (LWP: ${persistent//$'\n'/, })"
 	return 1
 }
 
@@ -67,7 +86,7 @@ qbt_fleet_preflight() {
 	while IFS=$'\t' read -r instance _; do
 		[[ -n "$instance" && "$instance" != \#* ]] || continue
 		qbt_container_safe_for_recreate "qbittorrent-$instance" "$allow_absent" || {
-			printf 'ERROR: Unsafe or unknown task state for %s; refusing the entire rollout.\n' "$instance" >&2
+			printf 'ERROR: Unsafe or unknown task state for %s (%s); refusing the entire rollout.\n' "$instance" "$QBT_RECREATE_REFUSAL" >&2
 			return 1
 		}
 	done <"$manifest"
@@ -153,12 +172,12 @@ qbt_webui_http_status() {
 }
 
 qbt_webui_reachable() {
-	local max_time="${1:-5}"
-	local http_status
+	qbt_webui_status_reachable "$(qbt_webui_http_status "${1:-5}")"
+}
 
-	http_status="$(qbt_webui_http_status "$max_time")"
-
-	case "$http_status" in
+# An auth refusal or redirect still proves the Web UI is answering.
+qbt_webui_status_reachable() {
+	case "$1" in
 	200 | 204 | 301 | 302 | 303 | 307 | 308 | 401 | 403)
 		return 0
 		;;

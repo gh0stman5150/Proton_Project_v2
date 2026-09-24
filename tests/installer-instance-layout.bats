@@ -85,11 +85,43 @@
   grep -Fq 'QBT_FLEET_VERIFY_SCRIPT:-/usr/local/bin/proton/proton-qbt-fleet-verify.sh' tools/reconcile-qbittorrent-fleet.sh
 }
 
-@test "fleet reconciler distinguishes transient I/O waits from persistent D-state tasks" {
+@test "fleet preflight distinguishes transient I/O waits from persistent D-state tasks" {
   grep -Fq 'QBT_FLEET_DSTATE_SAMPLES:-3' tools/reconcile-qbittorrent-fleet.sh
-  grep -Fq 'docker top "$container" -eLo pid,lwp,stat' tools/reconcile-qbittorrent-fleet.sh
-  grep -Fq 'container_persistent_dstate_lwps "$container"' tools/reconcile-qbittorrent-fleet.sh
-  grep -Fq 'persistent uninterruptible D-state task' tools/reconcile-qbittorrent-fleet.sh
+  grep -Fq 'qbt_fleet_preflight "$MANIFEST_FILE"' tools/reconcile-qbittorrent-fleet.sh
+  bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\necho "cifs rw,cache=none"\n' > "$bin/findmnt"
+  # Sample counts are per container. sonarr keeps LWPs 22 and 23 in D; lidarr
+  # has one D sample that clears; any other container has none.
+  cat > "$bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+inspect) echo running ;;
+top)
+  count_file="$SAMPLE_DIR/$2"
+  count=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+  echo "$count" > "$count_file"
+  printf 'PID LWP STAT\n1 11 Ssl\n'
+  case "$2:$count" in
+  qbittorrent-sonarr:*) printf '1 22 Dsl\n1 23 D\n' ;;
+  qbittorrent-lidarr:1) printf '1 12 D\n' ;;
+  esac
+  ;;
+esac
+EOF
+  chmod +x "$bin/findmnt" "$bin/docker"
+  mkdir -p "$BATS_TEST_TMPDIR/samples"
+
+  run env PATH="$bin:$PATH" SAMPLE_DIR="$BATS_TEST_TMPDIR/samples" QBT_DSTATE_DELAY=0 \
+    QBT_FLEET_LOCK_FILE="$BATS_TEST_TMPDIR/fleet.lock" bash -c '
+      source ./proton-qbittorrent-common.sh
+      qbt_fleet_preflight qbittorrent-instances.tsv
+    '
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Unsafe or unknown task state for sonarr (persistent uninterruptible D-state task (LWP: 22, 23)); refusing the entire rollout."* ]]
+  [ "$(cat "$BATS_TEST_TMPDIR/samples/qbittorrent-lidarr")" = 2 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/samples/qbittorrent-sonarr")" = 3 ]
 }
 
 @test "installer includes prowlarr manual-download instance defaults" {

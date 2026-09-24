@@ -175,6 +175,12 @@ services may add their own rules into an instance's table (on this host,
 mousehole routes itself through prowlarr's tunnel), so instance scripts delete
 only the exact rules they create.
 
+WireGuard start, stop, and the watcher share one container-address lookup in
+`proton-instance-common.sh`. It reads the qBittorrent container's address on
+`QBT_NETWORK_NAME` only; an address on another network is never used for the
+instance's policy rule. When the lookup fails, start and stop fall back to the
+last cached address, and the watcher skips that pass without changing rules.
+
 The watcher also reconciles periodically when no event arrives. Every pass
 reasserts policy routes and the kill switch; a periodic pass queues
 allocation and sync only when the Docker CIDRs or qBittorrent addresses changed

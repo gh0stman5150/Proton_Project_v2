@@ -48,20 +48,6 @@ chmod 700 "$STATE_DIR" 2>/dev/null || true
 # shellcheck disable=SC2153
 touch "$LAST_FILE" 2>/dev/null || true
 
-detect_lan_cidr() {
-	if [[ -n "$LAN_CIDR" ]]; then
-		return 0
-	fi
-
-	if [[ -z "$LAN_IF" ]]; then
-		LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
-	fi
-
-	if [[ -n "$LAN_IF" ]]; then
-		LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
-	fi
-}
-
 find_network_cidr() {
 	local cidr=""
 
@@ -115,127 +101,8 @@ find_network_cidr6() {
 	printf '%s\n' "$cidr"
 }
 
-trim_field() {
-	local value="$1"
-	value="${value#"${value%%[![:space:]]*}"}"
-	value="${value%"${value##*[![:space:]]}"}"
-	printf '%s\n' "$value"
-}
-
-is_ipv4_address() {
-	local value="$1"
-	local octet
-	local -a octets=()
-
-	[[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-	IFS='.' read -r -a octets <<<"$value"
-	[[ "${#octets[@]}" -eq 4 ]] || return 1
-
-	for octet in "${octets[@]}"; do
-		[[ "$octet" =~ ^[0-9]+$ ]] || return 1
-		((10#$octet <= 255)) || return 1
-	done
-}
-
-normalize_ipv4_rule_source() {
-	local value="$1"
-	local addr=""
-	local prefix=""
-
-	value="$(trim_field "$value")"
-	[[ -n "$value" ]] || return 1
-	if [[ "$value" == */* ]]; then
-		addr="${value%%/*}"
-		prefix="${value#*/}"
-		is_ipv4_address "$addr" || return 1
-		[[ "$prefix" =~ ^[0-9]+$ ]] || return 1
-		((prefix >= 0 && prefix <= 32)) || return 1
-		printf '%s/%s\n' "$addr" "$prefix"
-	else
-		is_ipv4_address "$value" || return 1
-		printf '%s/32\n' "$value"
-	fi
-}
-
-normalize_ipv6_rule_source() {
-	local value="$1"
-
-	value="$(trim_field "$value")"
-	[[ "$value" == *:* ]] || return 1
-	printf '%s/128\n' "${value%%/*}"
-}
-
-docker_fallback_vpn_routing_enabled() {
-	case "$DOCKER_FALLBACK_VPN_ROUTING" in
-	1 | true | yes | on)
-		return 0
-		;;
-	*)
-		return 1
-		;;
-	esac
-}
-
 docker_ipv4_fallback_enabled() {
 	docker_fallback_vpn_routing_enabled && [[ "$INSTANCE" == "$DOCKER_FALLBACK_INSTANCE" ]]
-}
-
-resolve_qbt_container_ip() {
-	local networks=""
-	local ip=""
-
-	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null)" || return 1
-	[[ -n "$networks" ]] || return 1
-
-	if [[ -n "$QBT_NETWORK_NAME" ]]; then
-		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
-		[[ -n "$ip" ]] || return 1
-	fi
-
-	if [[ -z "$ip" ]]; then
-		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-
-	[[ -n "$ip" ]] || return 1
-	printf '%s\n' "$ip"
-}
-
-resolve_qbt_container_ipv6() {
-	local networks=""
-	local ip=""
-
-	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null)" || return 1
-	[[ -n "$networks" ]] || return 1
-	if [[ -n "$QBT_NETWORK_NAME" ]]; then
-		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-	if [[ -z "$QBT_NETWORK_NAME" ]]; then ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"; fi
-	[[ -n "$ip" ]] || return 1
-	printf '%s\n' "$ip"
-}
-
-read_cached_qbt_container_ip() {
-	[[ -f "$QBT_CONTAINER_IP_STATE_FILE" ]] || return 1
-	cat "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
-}
-
-persist_qbt_container_ip() {
-	local value="${1:-}"
-
-	proton_persist_route_state "$QBT_CONTAINER_IP_STATE_FILE" "$value"
-}
-
-read_cached_qbt_container_ipv6() {
-	[[ -f "$QBT_CONTAINER_IP6_STATE_FILE" ]] || return 1
-	cat "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
-}
-
-persist_qbt_container_ipv6() {
-	local value="${1:-}"
-	proton_persist_route_state "$QBT_CONTAINER_IP6_STATE_FILE" "$value"
 }
 
 docker_ipv6_fallback_enabled() {

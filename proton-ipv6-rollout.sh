@@ -74,11 +74,11 @@ status() {
 	local docker_ipv6="unavailable"
 
 	if type -P docker >/dev/null 2>&1; then
-		docker_ipv6="$(docker network inspect starr_network --format '{{.EnableIPv6}}' 2>/dev/null || printf 'unknown')"
+		docker_ipv6="$(docker network inspect "$DOCKER_NETWORK_NAME" --format '{{.EnableIPv6}}' 2>/dev/null || printf 'unknown')"
 	fi
 
 	printf 'WG_IPV6_ENABLED=%s\n' "$(env_value WG_IPV6_ENABLED || true)"
-	printf 'starr_network.EnableIPv6=%s\n' "$docker_ipv6"
+	printf '%s.EnableIPv6=%s\n' "$DOCKER_NETWORK_NAME" "$docker_ipv6"
 	printf '%s\n' 'IPv6 policy rules:'
 	ip -6 rule show 2>/dev/null || true
 	printf '%s\n' 'IPv6 default routes:'
@@ -111,15 +111,15 @@ preflight() {
 	fi
 
 	if type -P docker >/dev/null 2>&1 &&
-		[[ "$(docker network inspect starr_network --format '{{.EnableIPv6}}' 2>/dev/null || true)" == "true" ]]; then
-		printf '%s\n' 'FAIL: starr_network already has IPv6 enabled; current state is not the expected IPv4-only baseline' >&2
+		[[ "$(docker network inspect "$DOCKER_NETWORK_NAME" --format '{{.EnableIPv6}}' 2>/dev/null || true)" == "true" ]]; then
+		printf 'FAIL: %s already has IPv6 enabled; current state is not the expected IPv4-only baseline\n' "$DOCKER_NETWORK_NAME" >&2
 		failed=1
 	fi
 
-	if [[ -d /archive ]] || [[ -d "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archive" ]]; then
-		printf '%s\n' 'INFO: archive directory exists and must be reviewed before activation'
+	if [[ -d /archive ]] && [[ -n "$(ls -A /archive 2>/dev/null)" ]]; then
+		printf '%s\n' 'INFO: /archive exists and must be reviewed before activation'
 	else
-		printf '%s\n' 'INFO: /archive is absent; no archive comparison is available'
+		printf '%s\n' 'INFO: /archive is absent or empty; no archive comparison is available'
 	fi
 
 	((failed == 0)) || return 1
@@ -277,9 +277,9 @@ canary_preflight() {
 		die "Global WG_IPV6_ENABLED must remain off for a single-instance canary"
 	fi
 
-	docker_ipv6="$(docker network inspect starr_network --format '{{.EnableIPv6}}' 2>/dev/null || true)"
+	docker_ipv6="$(docker network inspect "$DOCKER_NETWORK_NAME" --format '{{.EnableIPv6}}' 2>/dev/null || true)"
 	[[ "$docker_ipv6" == "false" ]] ||
-		die "starr_network must remain IPv4-only during the tunnel canary"
+		die "$DOCKER_NETWORK_NAME must remain IPv4-only during the tunnel canary"
 
 	while IFS= read -r instance_env; do
 		case "$(env_value WG_IPV6_ENABLED "$instance_env")" in
@@ -567,7 +567,7 @@ snapshot() {
 	record_command "${manifest}/ip6-route.txt" ip -6 route show table all
 	record_command "${manifest}/wg-show.txt" wg show
 	record_command "${manifest}/nft-ruleset.txt" nft list ruleset
-	record_command "${manifest}/docker-networks.json" docker network inspect starr_network
+	record_command "${manifest}/docker-networks.json" docker network inspect "$DOCKER_NETWORK_NAME"
 	systemctl list-units --state=active --plain --no-legend 'proton*.service' |
 		awk '{print $1}' >"${manifest}/active-services.txt" || true
 	systemctl list-unit-files --plain --no-legend 'proton*.service' \

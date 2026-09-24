@@ -57,12 +57,9 @@ source "$QBT_COMMON_SCRIPT"
 QBITTORRENT_URL="${QBITTORRENT_URL%/}"
 
 HTTP_STATUS="$(qbt_webui_http_status 5)"
-case "$HTTP_STATUS" in
-200 | 204 | 301 | 302 | 303 | 307 | 308 | 401 | 403) ;;
-*)
+if ! qbt_webui_status_reachable "$HTTP_STATUS"; then
 	echo "WARNING: qBittorrent Web API is not reachable at $QBITTORRENT_URL (HTTP ${HTTP_STATUS:-000}); continuing and relying on the sync loop to retry later." >&2
-	;;
-esac
+fi
 
 COOKIE_JAR="$(mktemp)"
 cleanup() {

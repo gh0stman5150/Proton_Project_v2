@@ -22,6 +22,9 @@ WG_IPV6_ENABLED="${WG_IPV6_ENABLED:-off}"
 # warm so natpmpc stops timing out intermittently. Set to 0/empty to disable.
 WG_PERSISTENT_KEEPALIVE="${WG_PERSISTENT_KEEPALIVE:-25}"
 WG_RUNTIME_DIR="${WG_RUNTIME_DIR:-/etc/wireguard/proton-runtime}"
+# run_wg_quick in proton-instance-common.sh reads this.
+# shellcheck disable=SC2034
+WG_QUICK_TIMEOUT_SECONDS=45
 SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
@@ -108,68 +111,6 @@ trap cleanup_start EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-runtime_wg_config_path() {
-	local target="${1:-}"
-
-	[[ "$target" == "$WG_RUNTIME_DIR"/*.conf ]]
-}
-
-secure_runtime_wg_config() {
-	local target="${1:-$WG_CONFIG_TO_USE}"
-
-	chmod 700 "$WG_RUNTIME_DIR" 2>/dev/null || true
-
-	if runtime_wg_config_path "$target" && [[ -f "$target" ]]; then
-		chmod 600 "$target" 2>/dev/null || true
-	fi
-}
-
-filter_wg_quick_stderr() {
-	local target="$1"
-	local line
-
-	while IFS= read -r line; do
-		case "$line" in
-		"stat: cannot read table of mounted file systems: Permission denied")
-			continue
-			;;
-		"/usr/bin/wg-quick: line 47: ((: ( &  & 0007) == 0: syntax error: operand expected (error token is \"&  & 0007) == 0\")")
-			continue
-			;;
-		esac
-
-		if runtime_wg_config_path "$target" && [[ "$line" == "Warning: \`$target' is world accessible" ]]; then
-			continue
-		fi
-
-		printf '%s\n' "$line" >&2
-	done
-}
-
-run_wg_quick() {
-	local action="$1"
-	local target="$2"
-	local stderr_file=""
-	local rc=0
-
-	if runtime_wg_config_path "$target"; then
-		secure_runtime_wg_config "$target"
-	fi
-
-	stderr_file="$(mktemp)"
-
-	if timeout --kill-after=5s 45s wg-quick "$action" "$target" 2>"$stderr_file"; then
-		rc=0
-	else
-		rc=$?
-	fi
-
-	filter_wg_quick_stderr "$target" <"$stderr_file"
-	rm -f "$stderr_file"
-
-	return "$rc"
-}
-
 server_pool_requested() {
 	case "$SERVER_POOL_ENABLED" in
 	1 | true | yes | on)
@@ -177,24 +118,6 @@ server_pool_requested() {
 		;;
 	auto)
 		compgen -G "$WG_POOL_DIR/*.conf" >/dev/null
-		;;
-	*)
-		return 1
-		;;
-	esac
-}
-
-resolved_dns_enabled() {
-	case "$MANAGE_RESOLVED_DNS" in
-	1 | true | yes | on)
-		if command -v resolvectl >/dev/null 2>&1; then
-			return 0
-		fi
-		log "ERROR: MANAGE_RESOLVED_DNS is enabled but resolvectl is not installed."
-		exit 1
-		;;
-	auto)
-		command -v resolvectl >/dev/null 2>&1
 		;;
 	*)
 		return 1
@@ -251,152 +174,12 @@ ipv6_enabled() {
 	esac
 }
 
-trim_field() {
-	local value="$1"
-	value="${value#"${value%%[![:space:]]*}"}"
-	value="${value%"${value##*[![:space:]]}"}"
-	printf '%s\n' "$value"
-}
-
-is_ipv4_address() {
-	local value="$1"
-	local octet
-	local -a octets=()
-
-	[[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-	IFS='.' read -r -a octets <<<"$value"
-	[[ "${#octets[@]}" -eq 4 ]] || return 1
-
-	for octet in "${octets[@]}"; do
-		[[ "$octet" =~ ^[0-9]+$ ]] || return 1
-		((10#$octet <= 255)) || return 1
-	done
-}
-
-normalize_ipv4_rule_source() {
-	local value="$1"
-	local addr=""
-	local prefix=""
-
-	value="$(trim_field "$value")"
-	[[ -n "$value" ]] || return 1
-	if [[ "$value" == */* ]]; then
-		addr="${value%%/*}"
-		prefix="${value#*/}"
-		is_ipv4_address "$addr" || return 1
-		[[ "$prefix" =~ ^[0-9]+$ ]] || return 1
-		((prefix >= 0 && prefix <= 32)) || return 1
-		printf '%s/%s\n' "$addr" "$prefix"
-	else
-		is_ipv4_address "$value" || return 1
-		printf '%s/32\n' "$value"
-	fi
-}
-
-normalize_ipv6_rule_source() {
-	local value="$1"
-
-	value="$(trim_field "$value")"
-	[[ "$value" == *:* ]] || return 1
-	printf '%s/128\n' "${value%%/*}"
-}
-
-docker_fallback_vpn_routing_enabled() {
-	case "$DOCKER_FALLBACK_VPN_ROUTING" in
-	1 | true | yes | on)
-		return 0
-		;;
-	*)
-		return 1
-		;;
-	esac
-}
-
 docker_ipv4_fallback_enabled() {
 	docker_fallback_vpn_routing_enabled && [[ "$INSTANCE" == "$DOCKER_FALLBACK_INSTANCE" ]]
 }
 
-resolve_qbt_container_ip() {
-	proton_docker_ready || return 1
-	local networks=""
-	local ip=""
-
-	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
-	[[ -n "$networks" ]] || return 1
-
-	if [[ -n "$QBT_NETWORK_NAME" ]]; then
-		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-
-	if [[ -z "$ip" ]]; then
-		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-
-	[[ -n "$ip" ]] || return 1
-	printf '%s\n' "$ip"
-}
-
-resolve_qbt_container_ipv6() {
-	proton_docker_ready || return 1
-	local networks=""
-	local ip=""
-
-	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
-	[[ -n "$networks" ]] || return 1
-
-	if [[ -n "$QBT_NETWORK_NAME" ]]; then
-		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-	if [[ -z "$ip" ]]; then
-		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-
-	[[ -n "$ip" ]] || return 1
-	printf '%s\n' "$ip"
-}
-
-read_cached_qbt_container_ipv6() {
-	[[ -f "$QBT_CONTAINER_IP6_STATE_FILE" ]] || return 1
-	cat "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
-}
-
-persist_qbt_container_ipv6() {
-	local value="${1:-}"
-
-	proton_persist_route_state "$QBT_CONTAINER_IP6_STATE_FILE" "$value"
-}
-
 docker_ipv6_fallback_enabled() {
 	ipv6_enabled && docker_fallback_vpn_routing_enabled && [[ "$INSTANCE" == "$DOCKER_IPV6_FALLBACK_INSTANCE" ]]
-}
-
-read_cached_qbt_container_ip() {
-	[[ -f "$QBT_CONTAINER_IP_STATE_FILE" ]] || return 1
-	cat "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
-}
-
-persist_qbt_container_ip() {
-	local value="${1:-}"
-
-	proton_persist_route_state "$QBT_CONTAINER_IP_STATE_FILE" "$value"
-}
-
-detect_lan_cidr() {
-	if [[ -n "$LAN_CIDR" ]]; then
-		return 0
-	fi
-
-	if [[ -z "$LAN_IF" ]]; then
-		LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
-	fi
-
-	if [[ -n "$LAN_IF" ]]; then
-		LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
-	fi
 }
 
 ensure_docker_raw_return_rule() {

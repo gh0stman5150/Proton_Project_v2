@@ -213,6 +213,24 @@ EOF
   grep -F 'SELECTED_WG_PROFILE=wg-b' "$SERVER_SELECTION_FILE"
 }
 
+@test "an expired selection budget fails with its own reason instead of empty retries" {
+  write_pool_config wg-a host-a
+  printf 'wg-a\t1\t40000\n' > "$PF_CAPABLE_PROFILES_FILE"
+  cat > "$TMPBIN/systemd-cat" <<'EOF'
+#!/usr/bin/env bash
+cat - >> "$SELECTOR_LOG"
+EOF
+
+  run env SELECTOR_LOG="$TEST_TMPDIR/selector.log" SERVER_SELECTION_BUDGET_SECONDS=0 \
+    bash ./proton-server-manager.sh select
+
+  [ "$status" -eq 1 ]
+  [ ! -e "$SERVER_SELECTION_FILE" ]
+  grep -F 'Server selection budget of 0s expired before any candidate qualified' "$TEST_TMPDIR/selector.log"
+  run grep -E 'retrying with|No pools available' "$TEST_TMPDIR/selector.log"
+  [ "$status" -eq 1 ]
+}
+
 @test "select skips port-forward incapable profiles when no allowlist exists yet" {
   write_pool_config wg-a host-a
   write_pool_config wg-b host-b

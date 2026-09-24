@@ -306,22 +306,24 @@ LAST_IP="$(load_state_ip)"
 CURRENT_PORT="$(proton_lease_read || true)"
 FAILURES=0
 TRANSIENT_KEEPS=0
+SYNCED_PORT=""
 
-load_selected_server
-
-if [[ "$MODE" == "once" ]]; then
+# One NAT-PMP renewal shared by both modes: reload the selected server, then
+# refresh the current mapping or request a new one. Leaves IP empty when the
+# tunnel has no address; otherwise sets PORT, empty when no mapping was granted.
+renew_mapping() {
 	load_selected_server
+	PORT=""
 	IP="$(get_ip)"
-
-	if [[ -z "$IP" ]]; then
-		log "No VPN IP; one-shot NAT-PMP refresh cannot run"
-		exit 1
-	fi
+	[[ -n "$IP" ]] || return 0
 
 	if [[ "$IP" != "$LAST_IP" ]]; then
 		log "VPN IP changed: ${LAST_IP:-unknown} -> $IP"
 		LAST_IP="$IP"
 		CURRENT_PORT=""
+		SYNCED_PORT=""
+		FAILURES=0
+		TRANSIENT_KEEPS=0
 	fi
 
 	if [[ -n "$CURRENT_PORT" ]]; then
@@ -334,6 +336,15 @@ if [[ "$MODE" == "once" ]]; then
 
 	parse_natpmp_mapping "$OUT"
 	PORT="$NATPMP_MAPPED_PORT"
+}
+
+if [[ "$MODE" == "once" ]]; then
+	renew_mapping
+
+	if [[ -z "$IP" ]]; then
+		log "No VPN IP; one-shot NAT-PMP refresh cannot run"
+		exit 1
+	fi
 
 	if [[ -z "$PORT" ]]; then
 		log "One-shot NAT-PMP refresh failed"
@@ -354,7 +365,6 @@ fi
 
 SYNC_PID=""
 SYNC_TARGET_PORT=""
-SYNCED_PORT=""
 LAST_SYNC_STARTED=""
 MARKED_CAPABLE=""
 
@@ -391,8 +401,7 @@ trap 'exit 130' INT
 
 while true; do
 	ITERATION_STARTED="$SECONDS"
-	load_selected_server
-	IP="$(get_ip)"
+	renew_mapping
 
 	if [[ -z "$IP" ]]; then
 		log "No VPN IP, reconnecting..."
@@ -400,26 +409,6 @@ while true; do
 		sleep "$CHECK_INTERVAL"
 		continue
 	fi
-
-	if [[ "$IP" != "$LAST_IP" ]]; then
-		log "VPN IP changed: ${LAST_IP:-unknown} -> $IP"
-		LAST_IP="$IP"
-		CURRENT_PORT=""
-		SYNCED_PORT=""
-		FAILURES=0
-		TRANSIENT_KEEPS=0
-	fi
-
-	if [[ -n "$CURRENT_PORT" ]]; then
-		log "Refreshing port $CURRENT_PORT..."
-		OUT="$(refresh_port "$CURRENT_PORT" || true)"
-	else
-		log "Requesting new port..."
-		OUT="$(request_port || true)"
-	fi
-
-	parse_natpmp_mapping "$OUT"
-	PORT="$NATPMP_MAPPED_PORT"
 
 	if [[ -n "$PORT" ]]; then
 		log "Got port: $PORT"

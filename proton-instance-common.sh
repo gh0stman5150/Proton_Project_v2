@@ -70,13 +70,18 @@ proton_lease_read() {
 	printf '%s\n' "$port"
 }
 
-proton_with_firewall_lock() (
+# Holds the host-wide firewall lock on fd 9 until the calling shell exits.
+proton_firewall_lock_acquire() {
 	local lock_file="${KILLSWITCH_LOCK_FILE:-/run/proton/killswitch.lock}"
 	local wait_seconds="${PROTON_FIREWALL_LOCK_WAIT_SECONDS:-30}"
 	[[ "$wait_seconds" =~ ^[0-9]+$ ]] || return 1
 	mkdir -p "$(dirname "$lock_file")" || return 1
 	exec 9>"$lock_file" || return 1
 	flock -w "$wait_seconds" 9 || return 1
+}
+
+proton_with_firewall_lock() (
+	proton_firewall_lock_acquire || return 1
 	"$@"
 )
 
@@ -264,6 +269,210 @@ proton_persist_route_state() (
 	printf '%s' "$value" >"$temporary" || return 1
 	mv -f "$temporary" "$file"
 )
+
+# Helpers shared by WireGuard start/stop and the Docker network watcher. They
+# read the caller's QBT_*, LAN_*, DOCKER_FALLBACK_VPN_ROUTING,
+# MANAGE_RESOLVED_DNS, WG_RUNTIME_DIR, and WG_QUICK_TIMEOUT_SECONDS settings.
+trim_field() {
+	local value="$1"
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s\n' "$value"
+}
+
+is_ipv4_address() {
+	local value="$1"
+	local octet
+	local -a octets=()
+
+	[[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+	IFS='.' read -r -a octets <<<"$value"
+	[[ "${#octets[@]}" -eq 4 ]] || return 1
+
+	for octet in "${octets[@]}"; do
+		[[ "$octet" =~ ^[0-9]+$ ]] || return 1
+		((10#$octet <= 255)) || return 1
+	done
+}
+
+normalize_ipv4_rule_source() {
+	local value="$1"
+	local addr=""
+	local prefix=""
+
+	value="$(trim_field "$value")"
+	[[ -n "$value" ]] || return 1
+	if [[ "$value" == */* ]]; then
+		addr="${value%%/*}"
+		prefix="${value#*/}"
+		is_ipv4_address "$addr" || return 1
+		[[ "$prefix" =~ ^[0-9]+$ ]] || return 1
+		((prefix >= 0 && prefix <= 32)) || return 1
+		printf '%s/%s\n' "$addr" "$prefix"
+	else
+		is_ipv4_address "$value" || return 1
+		printf '%s/32\n' "$value"
+	fi
+}
+
+normalize_ipv6_rule_source() {
+	local value="$1"
+
+	value="$(trim_field "$value")"
+	[[ "$value" == *:* ]] || return 1
+	printf '%s/128\n' "${value%%/*}"
+}
+
+# Prints the container's address on QBT_NETWORK_NAME. Any network is accepted
+# only when no network is named: an address on another network would install a
+# policy rule for traffic that never reaches the tunnel table.
+resolve_qbt_container_address() {
+	local address_field="$1"
+	local networks=""
+	local ip=""
+
+	proton_docker_ready || return 1
+	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
+
+	networks="$(docker inspect -f "{{range \$name, \$network := .NetworkSettings.Networks}}{{printf \"%s=%s\n\" \$name \$network.${address_field}}}{{end}}" "$QBT_CONTAINER_NAME" 2>/dev/null)" || return 1
+
+	if [[ -n "$QBT_NETWORK_NAME" ]]; then
+		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
+	else
+		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
+	fi
+
+	[[ -n "$ip" ]] || return 1
+	printf '%s\n' "$ip"
+}
+
+resolve_qbt_container_ip() {
+	resolve_qbt_container_address IPAddress
+}
+
+resolve_qbt_container_ipv6() {
+	resolve_qbt_container_address GlobalIPv6Address
+}
+
+read_cached_qbt_container_ip() {
+	[[ -f "$QBT_CONTAINER_IP_STATE_FILE" ]] || return 1
+	cat "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
+}
+
+read_cached_qbt_container_ipv6() {
+	[[ -f "$QBT_CONTAINER_IP6_STATE_FILE" ]] || return 1
+	cat "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
+}
+
+persist_qbt_container_ip() {
+	proton_persist_route_state "$QBT_CONTAINER_IP_STATE_FILE" "${1:-}"
+}
+
+persist_qbt_container_ipv6() {
+	proton_persist_route_state "$QBT_CONTAINER_IP6_STATE_FILE" "${1:-}"
+}
+
+detect_lan_cidr() {
+	if [[ -n "$LAN_CIDR" ]]; then
+		return 0
+	fi
+
+	if [[ -z "$LAN_IF" ]]; then
+		LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
+	fi
+
+	if [[ -n "$LAN_IF" ]]; then
+		LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
+	fi
+}
+
+docker_fallback_vpn_routing_enabled() {
+	case "$DOCKER_FALLBACK_VPN_ROUTING" in
+	1 | true | yes | on)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+resolved_dns_enabled() {
+	case "$MANAGE_RESOLVED_DNS" in
+	1 | true | yes | on)
+		if command -v resolvectl >/dev/null 2>&1; then
+			return 0
+		fi
+		log "ERROR: MANAGE_RESOLVED_DNS is enabled but resolvectl is not installed."
+		exit 1
+		;;
+	auto)
+		command -v resolvectl >/dev/null 2>&1
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+runtime_wg_config_path() {
+	local target="${1:-}"
+
+	[[ "$target" == "$WG_RUNTIME_DIR"/*.conf ]]
+}
+
+secure_runtime_wg_config() {
+	local target="$1"
+
+	if runtime_wg_config_path "$target" && [[ -f "$target" ]]; then
+		chmod 700 "$WG_RUNTIME_DIR" 2>/dev/null || true
+		chmod 600 "$target" 2>/dev/null || true
+	fi
+}
+
+filter_wg_quick_stderr() {
+	local target="$1"
+	local line
+
+	while IFS= read -r line; do
+		case "$line" in
+		"stat: cannot read table of mounted file systems: Permission denied")
+			continue
+			;;
+		"/usr/bin/wg-quick: line 47: ((: ( &  & 0007) == 0: syntax error: operand expected (error token is \"&  & 0007) == 0\")")
+			continue
+			;;
+		esac
+
+		if runtime_wg_config_path "$target" && [[ "$line" == "Warning: \`$target' is world accessible" ]]; then
+			continue
+		fi
+
+		printf '%s\n' "$line" >&2
+	done
+}
+
+run_wg_quick() {
+	local action="$1"
+	local target="$2"
+	local stderr_file=""
+	local rc=0
+
+	secure_runtime_wg_config "$target"
+
+	stderr_file="$(mktemp)"
+
+	if timeout --kill-after=5s "${WG_QUICK_TIMEOUT_SECONDS}s" wg-quick "$action" "$target" 2>"$stderr_file"; then
+		rc=0
+	else
+		rc=$?
+	fi
+
+	filter_wg_quick_stderr "$target" <"$stderr_file"
+	rm -f "$stderr_file"
+
+	return "$rc"
+}
 
 proton_flush_route_table() {
 	local family="$1" table="$2" failure

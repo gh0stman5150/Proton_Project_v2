@@ -68,8 +68,7 @@ ensure_directory() {
 ensure_directory "$STATE_DIR" 700
 ensure_directory "${KILLSWITCH_LOCK_FILE%/*}" 700
 
-exec 9>"$KILLSWITCH_LOCK_FILE"
-if ! flock -w 30 9; then
+if ! proton_firewall_lock_acquire; then
 	log "ERROR: Timed out waiting for kill-switch lock: $KILLSWITCH_LOCK_FILE"
 	exit 1
 fi

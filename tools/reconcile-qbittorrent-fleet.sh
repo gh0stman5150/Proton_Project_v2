@@ -96,47 +96,11 @@ while IFS=$'\t' read -r instance _; do
 	instances+=("$instance")
 done <"$MANIFEST_FILE"
 
-container_dstate_lwps() {
-	local container="$1"
-
-	docker top "$container" -eLo pid,lwp,stat 2>/dev/null |
-		awk 'NR > 1 && $3 ~ /^D/ { print $2 }' |
-		sort -u
-}
-
-container_persistent_dstate_lwps() {
-	local container="$1"
-	local persistent_lwps=""
-	local current_lwps=""
-	local retained_lwps=""
-	local lwp=""
-	local sample=0
-
-	persistent_lwps="$(container_dstate_lwps "$container")"
-	[[ -n "$persistent_lwps" ]] || return 1
-
-	for ((sample = 2; sample <= DSTATE_SAMPLES; sample++)); do
-		sleep "$DSTATE_DELAY"
-		current_lwps="$(container_dstate_lwps "$container")"
-		retained_lwps=""
-		while IFS= read -r lwp; do
-			if grep -Fxq "$lwp" <<<"$current_lwps"; then
-				retained_lwps+="${lwp}"$'\n'
-			fi
-		done <<<"$persistent_lwps"
-		persistent_lwps="${retained_lwps%$'\n'}"
-		[[ -n "$persistent_lwps" ]] || return 1
-	done
-
-	printf '%s\n' "$persistent_lwps"
-}
-
-# Refuse before changing the first service if any fleet member is already in a
-# state that normal Compose recreation cannot repair. This prevents a partial
-# structural rollout and avoids repeating the Sonarr kernel/CIFS wedge.
+# qbt_fleet_preflight above already refused zombies and persistent D-state
+# tasks. Also refuse before changing the first service unless every member is
+# a healthy running baseline, so a structural rollout is never partial.
 for instance in "${instances[@]}"; do
 	container="qbittorrent-${instance}"
-	persistent_dstate_lwps=""
 	if ! docker inspect "$container" >/dev/null 2>&1; then
 		echo "ERROR: $container is absent; refusing fleet recreation." >&2
 		exit 1
@@ -145,16 +109,6 @@ for instance in "${instances[@]}"; do
 	container_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
 	if [[ "$container_status" != running || "$container_health" != healthy ]]; then
 		echo "ERROR: $container is not a healthy running baseline (status=$container_status health=$container_health); refusing fleet recreation." >&2
-		exit 1
-	fi
-	if docker top "$container" -eo pid,stat,cmd 2>/dev/null |
-		awk 'NR > 1 && $2 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'; then
-		echo "ERROR: $container contains a zombie process; refusing the entire fleet recreation." >&2
-		exit 1
-	fi
-	persistent_dstate_lwps="$(container_persistent_dstate_lwps "$container" || true)"
-	if [[ -n "$persistent_dstate_lwps" ]]; then
-		echo "ERROR: $container has a persistent uninterruptible D-state task (LWP: ${persistent_dstate_lwps//$'\n'/, }); a host-level recovery is required before fleet recreation." >&2
 		exit 1
 	fi
 done

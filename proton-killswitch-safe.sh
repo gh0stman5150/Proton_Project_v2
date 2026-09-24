@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=proton-instance-common.sh
+source "$SCRIPT_DIR/proton-instance-common.sh"
+
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_IF="${VPN_IF:-${VPN_INTERFACE:-$WG_PROFILE}}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
@@ -66,8 +70,7 @@ ensure_directory() {
 ensure_directory "$STATE_DIR" 700
 ensure_directory "${KILLSWITCH_LOCK_FILE%/*}" 700
 
-exec 9>"$KILLSWITCH_LOCK_FILE"
-if ! flock -w 30 9; then
+if ! proton_firewall_lock_acquire; then
 	log "ERROR: Timed out waiting for kill-switch lock: $KILLSWITCH_LOCK_FILE"
 	exit 1
 fi
@@ -167,7 +170,8 @@ require_value "LAN_IF" "$LAN_IF"
 require_value "LAN_CIDR" "$LAN_CIDR"
 
 [[ "$VPN_IF" =~ ^[a-zA-Z0-9_-]{1,15}$ ]] || exit 1
-VPN_INTERFACES="$(printf '%s\n' "$VPN_IF" pvlidarr pvprowlarr pvradarr pvsonarr pvwhisparr | sort -u)"
+mapfile -t PROTON_INSTANCES < <(proton_allowed_instances)
+VPN_INTERFACES="$(printf '%s\n' "$VPN_IF" "${PROTON_INSTANCES[@]/#/pv}" | sort -u)"
 FILTER_SNAPSHOT="$(iptables-save -t filter)"
 NAT_SNAPSHOT="$(iptables-save -t nat)"
 BATCH="$(mktemp)"

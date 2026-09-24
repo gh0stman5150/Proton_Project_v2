@@ -361,6 +361,21 @@ EOF
   [ "$output" = 45678 ]
 }
 
+@test "one-shot renewal loads the selected server once" {
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+printf 'Mapped public port 45678 protocol %s lifetime 60\n' "$4"
+EOF
+  cat > "$SERVER_SELECTION_FILE" <<EOF
+printf 'loaded\n' >> "$TEST_TMPDIR/selection-loads"
+SELECTED_WG_PROFILE=wg-good
+EOF
+
+  run bash ./proton-port-forward-safe.sh sonarr once
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$TEST_TMPDIR/selection-loads")" -eq 1 ]
+}
+
 @test "repeated one-shot renewal preserves generation port and change timestamp" {
   cat > "$TMPBIN/natpmpc" <<'EOF'
 #!/usr/bin/env bash

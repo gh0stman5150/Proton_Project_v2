@@ -465,72 +465,20 @@ compose_published_ports_summary() {
     ' <<<"$ports"
 }
 
-compose_container_has_zombie_process() {
-	local container_ref="$1"
-
-	docker top "$container_ref" -eo pid,stat,cmd 2>/dev/null |
-		awk 'NR > 1 && $2 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
-}
-
-compose_container_dstate_lwps() {
-	local container_ref="$1"
-
-	docker top "$container_ref" -eLo pid,lwp,stat 2>/dev/null |
-		awk 'NR > 1 && $3 ~ /^D/ { print $2 }' |
-		sort -u
-}
-
-compose_container_has_uninterruptible_task() {
-	local container_ref="$1"
-	local persistent_lwps=""
-	local current_lwps=""
-	local retained_lwps=""
-	local lwp=""
-	local sample=0
-
-	persistent_lwps="$(compose_container_dstate_lwps "$container_ref")"
-	[[ -n "$persistent_lwps" ]] || return 1
-
-	for ((sample = 2; sample <= QBT_DSTATE_SAMPLES; sample++)); do
-		sleep "$QBT_DSTATE_DELAY"
-		current_lwps="$(compose_container_dstate_lwps "$container_ref")"
-		retained_lwps=""
-		while IFS= read -r lwp; do
-			if grep -Fxq "$lwp" <<<"$current_lwps"; then
-				retained_lwps+="${lwp}"$'\n'
-			fi
-		done <<<"$persistent_lwps"
-		persistent_lwps="${retained_lwps%$'\n'}"
-		[[ -n "$persistent_lwps" ]] || return 1
-	done
-
-	return 0
-}
-
 compose_container_is_wedged_for_recreate() {
 	local container_ref
 	local status
 	local ports
 
 	if ! qbt_container_safe_for_recreate "${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}" 1; then
-		log "ERROR: Unsafe or unknown container task state; refusing recreation. Follow the wedge-recovery runbook."
+		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE} is unsafe to recreate (${QBT_RECREATE_REFUSAL:-unknown task state}); refusing Compose recreation. Capture kernel/CIFS evidence and follow the wedge-recovery runbook; signals, repeated Docker removal, and forced cgroup/shim cleanup cannot release kernel-blocked I/O."
 		return 0
 	fi
 	container_ref="$(compose_container_ref_all)" || return 1
 	status="$(docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true)"
 	[[ "$status" == "running" ]] || return 1
 
-	if compose_container_has_uninterruptible_task "$container_ref"; then
-		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} has an uninterruptible D-state task; refusing Compose recreation. Capture kernel/CIFS evidence and recover the host before retrying; signals and repeated Docker removal cannot release kernel-blocked I/O."
-		return 0
-	fi
-
 	ports="$(compose_published_ports || true)"
-	if compose_container_has_zombie_process "$container_ref"; then
-		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with a zombie process (published ports: $(compose_published_ports_summary "$ports")); refusing Compose recreate to avoid hanging on Docker stop. Capture every task state and follow the wedge-recovery runbook; do not force cgroup/shim cleanup if any task is in uninterruptible D state."
-		return 0
-	fi
-
 	[[ -z "$ports" ]] || return 1
 	if force_recreate_enabled; then
 		log "Running qBittorrent container has no published ports; explicit forced recreation is authorized after lifecycle safety checks"
@@ -688,6 +636,7 @@ recreate_qbt_service_compose() {
 		return 1
 	fi
 
+	write_published_port_value "$target_port"
 	if ! run_compose_recreate "$target_port"; then
 		return 1
 	fi
@@ -734,12 +683,6 @@ if ! qbt_login "$COOKIE_JAR"; then
 	# self-heal instead of looping on "Web UI unreachable".
 	if require_compose_mode_ready; then
 		log "qBittorrent Web UI unreachable on startup; attempting self-heal recreate on port $PORT"
-		if compose_container_is_wedged_for_recreate; then
-			log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"
-			exit 1
-		fi
-
-		write_published_port
 		if recreate_qbt_service_compose "$PORT"; then
 			write_cache
 			log "qBittorrent recovered via self-heal recreate on port $PORT"
@@ -791,7 +734,6 @@ if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]] || ((!COMPOSE_PORTS_MATCH)) || for
 		rollback_port="$CURRENT_PUBLISHED_PORT"
 	fi
 
-	write_published_port
 	if ! recreate_qbt_service_compose "$PORT"; then
 		if [[ -n "$rollback_port" ]]; then
 			log "Restoring qBittorrent published port artifact -> $rollback_port"

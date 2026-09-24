@@ -454,7 +454,7 @@ installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done.
 
 ## 5. Duplication to consolidate
 
-- [ ] **5.1 Helpers copied across wg-up, wg-down, watcher (C).**
+- [x] **5.1 Helpers copied across wg-up, wg-down, watcher (C).**
   `resolve_qbt_container_ip`/`ipv6`, `read_cached_*`, `persist_*`,
   `detect_lan_cidr`, `trim_field`, `normalize_*_rule_source`,
   `docker_fallback_vpn_routing_enabled`, `run_wg_quick`/`filter_wg_quick_stderr`,
@@ -462,14 +462,14 @@ installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done.
   `normalize_ipv4_rule_source` skips validation the others do; the watcher's
   `resolve_qbt_container_ip` fails hard where the others fall back. Move into
   `proton-instance-common.sh` and add behavioral tests for the unified version.
-- [ ] **5.2 Kill-switch lock and interface list (C).**
+- [x] **5.2 Kill-switch lock and interface list (C).**
   `proton-killswitch-nft.sh` hand-rolls `flock -w 30` on `killswitch.lock`
   instead of `proton_with_firewall_lock`; both backends hard-code the five
   `pv*` interfaces.
-- [ ] **5.3 `proton-port-forward-healthcheck.sh` (C).** Re-implements env
+- [x] **5.3 `proton-port-forward-healthcheck.sh` (C).** Re-implements env
   existence/mode/owner checks and sourcing already done by
   `proton_instance_init`, and duplicates `qbt_webui_http_status`.
-- [ ] **5.4 Redundant wedge gates (P).** In the sync, zombie/persistent-D
+- [x] **5.4 Redundant wedge gates (P).** In the sync, zombie/persistent-D
   checks repeat right after `qbt_container_safe_for_recreate` on the same
   container, and self-heal calls `compose_container_is_wedged_for_recreate`
   twice (up to 4 D-state samplings). `tools/reconcile-qbittorrent-fleet.sh`
@@ -477,18 +477,70 @@ installed). Resolved: 4.1, 4.2, 4.3, 4.7, 4.8, and 4.9. 4.4 is partly done.
   gate per path — the gate itself is an `AGENTS.md` invariant; only the copies
   go. Preserve the no-published-ports refusal and the LWP error text a test
   greps for.
-- [ ] **5.5 Other (C).** `compose_container_ref_all` vs `compose_container_ref`
+- [x] **5.5 Other (C).** `compose_container_ref_all` vs `compose_container_ref`
   differ only by `--all`; `once` mode in `proton-port-forward-safe.sh` copies
   the loop body and calls `load_selected_server` twice; the seven-script
   firewall list appears in `deploy-live-ipv6-firewall.sh`,
   `proton-ipv6-rollout.sh`, and both of their tests; `proton-ipv6-rollout.sh`
   hard-codes `starr_network` in three places instead of `DOCKER_NETWORK_NAME`
   and checks a meaningless sibling `archive` directory.
-- [ ] **5.6 Server-manager selection loop (P, low).** Loop-invariant
+- [x] **5.6 Server-manager selection loop (P, low).** Loop-invariant
   `normalize_dns_csv` and `port_forward_allowlist_active` recomputed per
   candidate; configs parsed with several passes. Possible bug worth a separate
   look: retries share one `selection_deadline`, so a slow first pass can leave
   retries no time and end with "No pools available" despite candidates.
+
+Section 5 resolved, 2026-09-23 (canonical Linux checkout, source-only, not
+installed). Every item has behavioral tests, and each new test was
+mutation-checked: it fails when the change is reverted or the code is broken.
+
+- 5.1: the fourteen helpers now live once in `proton-instance-common.sh`
+  under their existing names. Each drifted copy was settled on one version:
+  - Rule-source normalization validates addresses everywhere. wg-down used
+    to accept any cached value unchecked.
+  - Container address lookup uses only `QBT_NETWORK_NAME` when it is set, as
+    the watcher did. wg-up and wg-down used to fall back to another network's
+    address; they now fall back to the cached address instead.
+  - `run_wg_quick` reads `WG_QUICK_TIMEOUT_SECONDS`, which each caller sets:
+    45 s for start, 90 s for stop, as before. It secures only runtime configs.
+- 5.2: both backends take the firewall lock through
+  `proton_firewall_lock_acquire`, which `proton_with_firewall_lock` also
+  uses. The iptables backend now sources the common library and builds its
+  interface list from `proton_allowed_instances`. The grep-only lock test was
+  replaced with a contention test for both backends.
+- 5.3: the preflight relies on `proton_instance_init` for the env checks and
+  uses the shared Web UI probe. The status list now lives only in
+  `qbt_webui_status_reachable`, which `proton-healthcheck.sh` uses too. The
+  role env path accepts the same `PROTON_PORT_FORWARD_ENV` override as the
+  loop, and the script has its first behavioral tests.
+- 5.4: `qbt_container_safe_for_recreate` is the only zombie/persistent-D gate.
+  - The sync's separate D-state sampler and zombie probe are gone.
+  - The self-heal pre-check is gone. `recreate_qbt_service_compose` now
+    writes the port artifact only after the gate passes, so a refusal still
+    leaves the artifact unchanged.
+  - The reconciler's repeated checks are gone. It keeps its absent and
+    healthy-baseline checks, which the preflight does not make.
+  - The gate sets `QBT_RECREATE_REFUSAL`, and every refusal message names it,
+    including the persistent-D LWP list. The no-published-ports refusal is
+    unchanged. The reconciler grep test became a behavioral test of the fleet
+    preflight.
+- 5.5:
+  - `compose_container_ref` had already been folded into its `--all` form
+    under 2.7.
+  - `deploy-live-ipv6-firewall.sh` went under 4.3, so the firewall list now
+    appears only in `docker_preflight` and its test fixture.
+  - `once` and `loop` share `renew_mapping`, which loads the selected server
+    once per renewal.
+  - `proton-ipv6-rollout.sh` uses `DOCKER_NETWORK_NAME` everywhere. It
+    reports `/archive` as absent or empty and no longer checks a sibling
+    `archive` directory.
+- 5.6: the proven-only constraint and the normalized expected DNS are computed
+  once per pass, and each config's `Endpoint` line is read once.
+  - The retry concern was real in a narrow case: when the budget expired
+    before any candidate qualified, both retries stopped at once and reported
+    "No pools available".
+  - That case now fails with its own message. Retries still share the budget
+    by design, because the budget bounds WireGuard start.
 
 ## 6. Tests
 

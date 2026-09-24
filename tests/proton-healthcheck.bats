@@ -34,6 +34,10 @@ qbt_webui_http_status() {
   echo 200
 }
 
+qbt_webui_status_reachable() {
+  [[ "$1" == 200 ]]
+}
+
 qbt_login() {
   if [[ -n "${QBT_TEST_LOGIN_ERROR:-}" ]]; then
     QBT_LOGIN_ERROR="$QBT_TEST_LOGIN_ERROR"

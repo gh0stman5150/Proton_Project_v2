@@ -445,6 +445,8 @@ If the Web UI is unavailable but processes are killable and the container is not
 
 If the named container remains running with no published ports or contains a zombie, normal self-heal is refused to prevent orphan/name-conflict loops. Missing port metadata alone does not prove a kernel wedge: an authorized forced fleet reconciliation may repair it after lifecycle safety checks. Zombie and persistent same-LWP `D`-state refusals still apply.
 
+Every recreation path uses one shared gate, `qbt_container_safe_for_recreate` in `proton-qbittorrent-common.sh`: the fleet preflight before a reconcile or bootstrap, and the sync before each Compose recreation, including self-heal. A refusal names its reason, for example `zombie process` or `persistent uninterruptible D-state task (LWP: …)`. A refused self-heal leaves the published-port artifact unchanged.
+
 ### Kernel I/O wedge
 
 Transient `D` state can occur during ordinary CIFS I/O. Automation samples LWP IDs and refuses recreation only when the same task remains uninterruptible across the configured samples. Persistent `D` state, especially with `folio_wait_bit_common` and a netfs/CIFS kernel trace, makes the host kernel the recovery boundary. Automation must not keep issuing Compose, Docker remove, cgroup kill, shim kill, or signal operations.

@@ -121,6 +121,15 @@ EOF
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"starr_network already has IPv6 enabled"* ]]
+
+  : > "$COMMAND_LOG"
+  run env TEST_DOCKER_IPV6=true PROTON_DOCKER_NETWORK_NAME=media_network bash ./proton-ipv6-rollout.sh preflight
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"media_network already has IPv6 enabled"* ]]
+  grep -F 'docker network inspect media_network --format {{.EnableIPv6}}' "$COMMAND_LOG"
+  run grep -F 'starr_network' "$COMMAND_LOG"
+  [ "$status" -eq 1 ]
 }
 
 @test "Docker preflight accepts a deployed nftables ULA baseline without mutations" {

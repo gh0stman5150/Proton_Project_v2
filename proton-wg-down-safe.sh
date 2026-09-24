@@ -24,6 +24,9 @@ LOG_TAG="${LOG_TAG:-proton-wg}"
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_INTERFACE="${VPN_INTERFACE:-$WG_PROFILE}"
 WG_RUNTIME_DIR="${WG_RUNTIME_DIR:-/etc/wireguard/proton-runtime}"
+# run_wg_quick in proton-instance-common.sh reads this.
+# shellcheck disable=SC2034
+WG_QUICK_TIMEOUT_SECONDS=90
 WG_CONFIG="${WG_CONFIG:-/etc/wireguard/${WG_PROFILE}.conf}"
 FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
@@ -68,102 +71,10 @@ require_command() {
 	fi
 }
 
-trim_field() {
-	local value="$1"
-	value="${value#"${value%%[![:space:]]*}"}"
-	value="${value%"${value##*[![:space:]]}"}"
-	printf '%s\n' "$value"
-}
-
-normalize_ipv4_rule_source() {
-	local value="$1"
-
-	[[ -n "$value" ]] || return 1
-	if [[ "$value" == */* ]]; then
-		printf '%s\n' "$value"
-	else
-		printf '%s/32\n' "$value"
-	fi
-}
-
-normalize_ipv6_rule_source() {
-	local value="$1"
-
-	value="$(trim_field "$value")"
-	[[ "$value" == *:* ]] || return 1
-	printf '%s/128\n' "${value%%/*}"
-}
-
 ipv6_enabled() {
 	case "$WG_IPV6_ENABLED" in
 	1 | true | yes | on)
 		return 0
-		;;
-	*)
-		return 1
-		;;
-	esac
-}
-
-resolve_qbt_container_ip() {
-	proton_docker_ready || return 1
-	local networks=""
-	local ip=""
-
-	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
-	[[ -n "$networks" ]] || return 1
-
-	if [[ -n "$QBT_NETWORK_NAME" ]]; then
-		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-
-	if [[ -z "$ip" ]]; then
-		ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-
-	[[ -n "$ip" ]] || return 1
-	printf '%s\n' "$ip"
-}
-
-resolve_qbt_container_ipv6() {
-	proton_docker_ready || return 1
-	local networks=""
-	local ip=""
-
-	[[ -n "$QBT_CONTAINER_NAME" ]] || return 1
-	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.GlobalIPv6Address}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
-	[[ -n "$networks" ]] || return 1
-	if [[ -n "$QBT_NETWORK_NAME" ]]; then
-		ip="$(awk -F= -v target="$QBT_NETWORK_NAME" '$1 == target && $2 != "" {print $2; exit}' <<<"$networks")"
-	fi
-	[[ -n "$ip" ]] || ip="$(awk -F= '$2 != "" {print $2; exit}' <<<"$networks")"
-	[[ -n "$ip" ]] || return 1
-	printf '%s\n' "$ip"
-}
-
-read_cached_qbt_container_ipv6() {
-	[[ -f "$QBT_CONTAINER_IP6_STATE_FILE" ]] || return 1
-	cat "$QBT_CONTAINER_IP6_STATE_FILE" 2>/dev/null || true
-}
-
-read_cached_qbt_container_ip() {
-	[[ -f "$QBT_CONTAINER_IP_STATE_FILE" ]] || return 1
-	cat "$QBT_CONTAINER_IP_STATE_FILE" 2>/dev/null || true
-}
-
-resolved_dns_enabled() {
-	case "$MANAGE_RESOLVED_DNS" in
-	1 | true | yes | on)
-		if command -v resolvectl >/dev/null 2>&1; then
-			return 0
-		fi
-		log "ERROR: MANAGE_RESOLVED_DNS is enabled but resolvectl is not installed."
-		exit 1
-		;;
-	auto)
-		command -v resolvectl >/dev/null 2>&1
 		;;
 	*)
 		return 1
@@ -184,64 +95,6 @@ teardown_resolved_dns() {
 for cmd in cat chmod flock ip mktemp rm timeout wg wg-quick; do
 	require_command "$cmd"
 done
-
-runtime_wg_config_path() {
-	local target="${1:-}"
-
-	[[ "$target" == "$WG_RUNTIME_DIR"/*.conf ]]
-}
-
-secure_runtime_wg_config() {
-	local target="$1"
-
-	if runtime_wg_config_path "$target" && [[ -f "$target" ]]; then
-		chmod 700 "$WG_RUNTIME_DIR" 2>/dev/null || true
-		chmod 600 "$target" 2>/dev/null || true
-	fi
-}
-
-filter_wg_quick_stderr() {
-	local target="$1"
-	local line
-
-	while IFS= read -r line; do
-		case "$line" in
-		"stat: cannot read table of mounted file systems: Permission denied")
-			continue
-			;;
-		"/usr/bin/wg-quick: line 47: ((: ( &  & 0007) == 0: syntax error: operand expected (error token is \"&  & 0007) == 0\")")
-			continue
-			;;
-		esac
-
-		if runtime_wg_config_path "$target" && [[ "$line" == "Warning: \`$target' is world accessible" ]]; then
-			continue
-		fi
-
-		printf '%s\n' "$line" >&2
-	done
-}
-
-run_wg_quick() {
-	local action="$1"
-	local target="$2"
-	local stderr_file=""
-	local rc=0
-
-	secure_runtime_wg_config "$target"
-	stderr_file="$(mktemp)"
-
-	if timeout --kill-after=5s 90s wg-quick "$action" "$target" 2>"$stderr_file"; then
-		rc=0
-	else
-		rc=$?
-	fi
-
-	filter_wg_quick_stderr "$target" <"$stderr_file"
-	rm -f "$stderr_file"
-
-	return "$rc"
-}
 
 if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
 	DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
