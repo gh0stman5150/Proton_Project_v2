@@ -1,5 +1,18 @@
 # Proton WireGuard Routing and qBittorrent Port Forwarding
 
+## 📚 Documentation
+
+| Document | Covers |
+| --- | --- |
+| [⚙️ Architecture](docs/architecture/qbittorrent-fleet-contract.md) | Fleet contract and invariants; see also [host routing and tunnels](docs/architecture/host-routing-and-tunnels.md) |
+| [📁 Structure](docs/structure.md) | Repository layout, source-to-installed mapping, what belongs where |
+| [🚀 Installation](#installation) | Installer, requirements and rollout (below), plus the [fleet change runbook](docs/runbooks/qbittorrent-fleet-changes.md) |
+| [🧠 Technical decisions](docs/decisions.md) | Why the design is shaped this way, with the incident behind each decision |
+| [🔧 Operations](docs/README.md) | Runbooks, deployment status, verification commands |
+| [🧪 Testing](#testing-procedures) | Validation commands live in [AGENTS.md](AGENTS.md#validation) |
+
+---
+
 ## Repository Purpose
 
 This repository implements and maintains host-level Proton WireGuard routing,
@@ -206,7 +219,7 @@ By default the selector lints each candidate before selection. It rejects config
 Useful knobs:
 
 1. `WG_POOL_DIR=/etc/wireguard/proton-pool`
-2. `SERVER_POOL_ENABLED=auto`
+2. `SERVER_POOL_ENABLED=auto` (script default; the shipped `proton-common.env` template sets `on`)
 3. `BAD_SERVER_COOLDOWN=900`
 4. `SERVER_SWITCH_MIN_IMPROVEMENT_MS=10`
 5. `SERVER_SWITCH_DEGRADED_LATENCY_MS=75`
