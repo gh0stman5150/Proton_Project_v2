@@ -65,7 +65,7 @@ shfmt and `shellcheck -x`, then runs Bats.
 
 ## Wedge Detection
 
-- A zombie is an immediate recreation refusal. A single `D`-state snapshot can be normal transient CIFS I/O. Only the same task remaining in `D` across samples is a persistent wedge.
+- A zombie is an immediate recreation refusal. A single `D`-state snapshot can be normal transient CIFS I/O. Only the same task remaining in `D` across samples is a persistent wedge. A task whose scheduler run count (`/proc/<pid>/task/<tid>/schedstat`) advances between those samples is slow I/O, not a wedge.
 - A persistent wedge (especially `folio_wait_bit_common` plus CIFS/netfs errors or a kernel oops) is a host-kernel recovery boundary: preserve evidence, require a coordinated reboot, and never escalate through signals/Docker cleanup as a repair.
 - Do not weaken the persistent-wedge guard to bypass a real blocked task, and do not call any specific kernel version the fix without exact patch provenance and workload validation.
 - Full decision table and kernel-package evidence: `docs/runbooks/qbittorrent-wedge-recovery.md`.

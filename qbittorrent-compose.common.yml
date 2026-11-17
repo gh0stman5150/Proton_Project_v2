@@ -6,7 +6,7 @@
 # all five services as documented in docs/runbooks/qbittorrent-fleet-changes.md.
 services:
   qbittorrent-common:
-    image: lscr.io/linuxserver/qbittorrent:libtorrentv1
+    image: lscr.io/linuxserver/qbittorrent:5.2.4_v2.0.15-ls481
     stop_grace_period: 90s
     environment:
       PUID: "1000"
@@ -20,7 +20,7 @@ services:
       - /mnt/data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS --max-time 8 http://127.0.0.1:$${WEBUI_PORT}/api/v2/app/version || exit 1"]
+      test: ["CMD-SHELL", "k=$$(sed -n 's/^WebUI\\\\APIKey=//p' /config/qBittorrent/qBittorrent.conf); [ -n \"$$k\" ] || exit 1; printf 'Authorization: Bearer %s\\n' \"$$k\" | curl -fsS --max-time 8 -H @- http://127.0.0.1:$${WEBUI_PORT}/api/v2/app/version || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

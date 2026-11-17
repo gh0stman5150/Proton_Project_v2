@@ -183,6 +183,7 @@ EOF
   mkdir -p "$BATS_TEST_TMPDIR/samples"
 
   run env PATH="$bin:$PATH" SAMPLE_DIR="$BATS_TEST_TMPDIR/samples" QBT_DSTATE_DELAY=0 \
+    QBT_PROC_ROOT="$BATS_TEST_TMPDIR/proc" \
     QBT_FLEET_LOCK_FILE="$BATS_TEST_TMPDIR/fleet.lock" bash -c '
       source ./proton-qbittorrent-common.sh
       qbt_fleet_preflight qbittorrent-instances.tsv

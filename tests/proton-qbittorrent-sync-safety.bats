@@ -81,6 +81,59 @@ load proton-qbittorrent-sync-helper
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
 }
 
+@test "self-heal leaves a recently started container alone during its startup grace" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+  stub_systemd_cat "$TEST_TMPDIR/journal.log"
+
+  run env QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running \
+    QBT_TEST_STARTED_AT="$(date -u -d '-240 seconds' +%FT%T.000000000Z)" bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 1 ]
+  run grep -E 'CMD=(top|compose (stop|up))' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
+  grep -E 'Web UI unreachable 2[0-9]{2}s after container start; within the 600s startup grace' "$TEST_TMPDIR/journal.log"
+  grep -Fx 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+}
+
+@test "self-heal resumes once the startup grace has elapsed or is disabled" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+  started="$(date -u -d '-240 seconds' +%FT%T.000000000Z)"
+
+  for grace in 120 0; do
+    rm -f "$DOCKER_LOG" "${DOCKER_LOG}".*
+    run env QBT_TEST_LOGIN_FAIL=until-compose QBT_TEST_CONTAINER_STATUS=running QBT_TEST_STARTED_AT="$started" \
+      QBT_SELF_HEAL_STARTUP_GRACE_SECONDS="$grace" bash ./proton-qbittorrent-sync-safe.sh sonarr
+    [ "$status" -eq 0 ]
+    grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+  done
+}
+
+@test "forced fleet recreation is not delayed by the self-heal startup grace" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBT_TEST_LOGIN_FAIL=until-compose QBT_TEST_CONTAINER_STATUS=running QBT_FORCE_RECREATE=1 \
+    QBT_TEST_STARTED_AT="$(date -u -d '-30 seconds' +%FT%T.000000000Z)" bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+}
+
+@test "an invalid self-heal startup grace is rejected" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  run env QBT_SELF_HEAL_STARTUP_GRACE_SECONDS=10m bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 1 ]
+  run grep -F 'CMD=' "$DOCKER_LOG"
+  [ "$status" -ne 0 ]
+}
+
 @test "compose-recreate mode refuses self-heal when running container has no published ports" {
   write_qbt_env compose-recreate
   write_lease 40001
@@ -130,6 +183,33 @@ load proton-qbittorrent-sync-helper
   run grep -F 'CMD=compose up ' "$DOCKER_LOG"
   [ "$status" -eq 1 ]
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+}
+
+@test "a D-state task that is never scheduled between samples blocks recreation" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBT_TEST_CONTAINER_STATUS=running QBT_TEST_DOCKER_DSTATE=1 QBT_TEST_DSTATE_RUNS=frozen QBT_DSTATE_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 1 ]
+  run grep -E 'CMD=compose (stop|up)' "$DOCKER_LOG"
+  [ "$status" -eq 1 ]
+  [ "$(grep -c 'CMD=top qbittorrent ' "$DOCKER_LOG")" -eq 3 ]
+  grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+}
+
+@test "a D-state task that keeps being scheduled is slow I/O, not a wedge" {
+  write_qbt_env compose-recreate
+  write_lease 40001
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBT_TEST_CONTAINER_STATUS=running QBT_TEST_DOCKER_DSTATE=1 QBT_TEST_DSTATE_RUNS=advancing QBT_DSTATE_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'CMD=top qbittorrent ' "$DOCKER_LOG")" -eq 2 ]
+  grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+  grep -Fx 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
 }
 
 @test "compose-recreate mode allows a transient D-state I/O wait to clear" {

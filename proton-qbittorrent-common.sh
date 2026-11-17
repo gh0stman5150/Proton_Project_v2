@@ -8,12 +8,19 @@ curl() {
 	command curl --connect-timeout 5 --max-time "${QBT_HTTP_TIMEOUT_SECONDS:-15}" "$@"
 }
 
+# A task's scheduler run count (readable without ptrace); a task frozen in
+# uninterruptible sleep never advances it.
+qbt_task_run_count() {
+	awk '{ print $3 }' "${QBT_PROC_ROOT:-/proc}/$1/task/$2/schedstat" 2>/dev/null || true
+}
+
 # The single zombie/persistent-D gate for every recreation path. On refusal,
 # QBT_RECREATE_REFUSAL names the reason for the caller's error message.
 qbt_container_safe_for_recreate() {
 	local container="$1" allow_absent="${2:-0}"
-	local status listing tasks current persistent="" sample task
-	local samples="${QBT_DSTATE_SAMPLES:-3}" delay="${QBT_DSTATE_DELAY:-1}"
+	local status listing tasks current persistent="" sample pid task runs
+	local samples="${QBT_DSTATE_SAMPLES:-3}" delay="${QBT_DSTATE_DELAY:-5}"
+	local -A first_runs=()
 	QBT_RECREATE_REFUSAL=""
 	if [[ ! "$samples" =~ ^[0-9]+$ || ! "$delay" =~ ^[0-9]+$ ]] || ((samples < 2)); then
 		QBT_RECREATE_REFUSAL="invalid D-state sampling settings"
@@ -47,18 +54,22 @@ qbt_container_safe_for_recreate() {
 			QBT_RECREATE_REFUSAL="zombie process"
 			return 1
 		fi
-		current="$(awk 'NR > 1 && $3 ~ /^D/ { print $2 }' <<<"$tasks")"
-		if ((sample == 1)); then
-			persistent="$current"
-		else
-			listing=""
-			while IFS= read -r task; do
-				if [[ -n "$task" ]] && grep -Fxq "$task" <<<"$current"; then
-					listing+="$task"$'\n'
-				fi
-			done <<<"$persistent"
-			persistent="${listing%$'\n'}"
-		fi
+		current="$(awk 'NR > 1 && $2 ~ /^[0-9]+$/ && $3 ~ /^D/ { print $1, $2 }' <<<"$tasks")"
+		listing=""
+		while read -r pid task; do
+			[[ -n "$task" ]] || continue
+			runs="$(qbt_task_run_count "$pid" "$task")"
+			if ((sample == 1)); then
+				first_runs[$task]="$runs"
+			elif ! grep -Fxq "$task" <<<"$persistent"; then
+				continue
+			elif [[ -n "$runs" && -n "${first_runs[$task]:-}" && "$runs" != "${first_runs[$task]}" ]]; then
+				# Scheduled again since the first sample: slow I/O, not a frozen task.
+				continue
+			fi
+			listing+="$task"$'\n'
+		done <<<"$current"
+		persistent="${listing%$'\n'}"
 		[[ -n "$persistent" ]] || return 0
 		((sample == samples)) || sleep "$delay"
 	done

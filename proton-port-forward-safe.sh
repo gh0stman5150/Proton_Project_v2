@@ -38,9 +38,13 @@ QBT_SYNC_TIMEOUT_SECONDS="${QBT_SYNC_TIMEOUT_SECONDS:-120}"
 # Renewals that keep the same port only re-run the qBittorrent sync (which also
 # repairs listen-port, published-port, and route drift) at this cadence.
 QBT_SYNC_DRIFT_INTERVAL_SECONDS="${QBT_SYNC_DRIFT_INTERVAL_SECONDS:-300}"
+# A failed sync of the same port is retried after this delay, doubling per
+# consecutive failure up to the maximum. A new port still syncs immediately.
+QBT_SYNC_RETRY_BACKOFF_SECONDS="${QBT_SYNC_RETRY_BACKOFF_SECONDS:-30}"
+QBT_SYNC_RETRY_BACKOFF_MAX_SECONDS="${QBT_SYNC_RETRY_BACKOFF_MAX_SECONDS:-300}"
 NATPMP_KILL_AFTER_SECONDS=2
 LEASE_RENEW_MARGIN_SECONDS=5
-for setting in CHECK_INTERVAL PORT_LEASE_SECONDS NATPMP_TIMEOUT_SECONDS NATPMP_LOCK_WAIT_SECONDS QBT_SYNC_TIMEOUT_SECONDS QBT_SYNC_DRIFT_INTERVAL_SECONDS; do
+for setting in CHECK_INTERVAL PORT_LEASE_SECONDS NATPMP_TIMEOUT_SECONDS NATPMP_LOCK_WAIT_SECONDS QBT_SYNC_TIMEOUT_SECONDS QBT_SYNC_DRIFT_INTERVAL_SECONDS QBT_SYNC_RETRY_BACKOFF_SECONDS QBT_SYNC_RETRY_BACKOFF_MAX_SECONDS; do
 	if [[ ! "${!setting}" =~ ^(0|[1-9][0-9]{0,5})$ ]]; then
 		echo "ERROR: $setting must be a non-negative integer." >&2
 		exit 1
@@ -367,17 +371,29 @@ SYNC_PID=""
 SYNC_TARGET_PORT=""
 LAST_SYNC_STARTED=""
 MARKED_CAPABLE=""
+SYNC_FAILURE_STREAK=0
+SYNC_RETRY_AT=0
 
 # Collect a finished background sync. Only a successful sync records its port,
-# so a failed sync is retried on the next renewal.
+# so a failed sync is retried after a backoff.
 reap_sync() {
+	local backoff i
+
 	[[ -n "$SYNC_PID" ]] || return 0
 	kill -0 "$SYNC_PID" 2>/dev/null && return 0
 	if wait "$SYNC_PID"; then
 		SYNCED_PORT="$SYNC_TARGET_PORT"
+		SYNC_FAILURE_STREAK=0
 	else
-		log "WARNING: qBittorrent port sync failed"
 		SYNCED_PORT=""
+		SYNC_FAILURE_STREAK=$((SYNC_FAILURE_STREAK + 1))
+		backoff="$QBT_SYNC_RETRY_BACKOFF_SECONDS"
+		for ((i = 1; i < SYNC_FAILURE_STREAK && backoff > 0 && backoff < QBT_SYNC_RETRY_BACKOFF_MAX_SECONDS; i++)); do
+			backoff=$((backoff * 2))
+		done
+		if ((backoff > QBT_SYNC_RETRY_BACKOFF_MAX_SECONDS)); then backoff="$QBT_SYNC_RETRY_BACKOFF_MAX_SECONDS"; fi
+		SYNC_RETRY_AT=$((SECONDS + backoff))
+		log "WARNING: qBittorrent port sync failed ($SYNC_FAILURE_STREAK consecutive); retrying port $SYNC_TARGET_PORT in ${backoff}s"
 	fi
 	SYNC_PID=""
 }
@@ -385,7 +401,10 @@ reap_sync() {
 sync_due() {
 	local port="$1"
 
-	[[ "$port" != "$SYNCED_PORT" || -z "$LAST_SYNC_STARTED" ]] && return 0
+	if [[ "$port" != "$SYNCED_PORT" || -z "$LAST_SYNC_STARTED" ]]; then
+		[[ "$port" != "$SYNC_TARGET_PORT" ]] || ((SYNC_FAILURE_STREAK == 0 || SECONDS >= SYNC_RETRY_AT))
+		return
+	fi
 	((SECONDS - LAST_SYNC_STARTED >= QBT_SYNC_DRIFT_INTERVAL_SECONDS))
 }
 

@@ -78,7 +78,8 @@ QBT_DOCKER_RESTART_SLACK_SECONDS="${QBT_DOCKER_RESTART_SLACK_SECONDS:-10}"
 QBT_FORCE_RECREATE="${QBT_FORCE_RECREATE:-0}"
 QBT_SYNC_LOCK_WAIT_SECONDS="${QBT_SYNC_LOCK_WAIT_SECONDS:-30}"
 QBT_DSTATE_SAMPLES="${QBT_DSTATE_SAMPLES:-3}"
-QBT_DSTATE_DELAY="${QBT_DSTATE_DELAY:-1}"
+QBT_DSTATE_DELAY="${QBT_DSTATE_DELAY:-5}"
+QBT_SELF_HEAL_STARTUP_GRACE_SECONDS="${QBT_SELF_HEAL_STARTUP_GRACE_SECONDS:-600}"
 QBT_ROUTE_RECONCILE_SCRIPT="${QBT_ROUTE_RECONCILE_SCRIPT:-${SCRIPT_DIR}/proton-docker-network-watcher.sh}"
 
 reconcile_container_routes() {
@@ -132,6 +133,10 @@ if [[ ! "$QBT_DSTATE_SAMPLES" =~ ^[0-9]+$ ]] || ((QBT_DSTATE_SAMPLES < 2)); then
 fi
 if [[ ! "$QBT_DSTATE_DELAY" =~ ^[0-9]+$ ]]; then
 	log "ERROR: Invalid QBT_DSTATE_DELAY value: $QBT_DSTATE_DELAY"
+	exit 1
+fi
+if [[ ! "$QBT_SELF_HEAL_STARTUP_GRACE_SECONDS" =~ ^[0-9]+$ ]]; then
+	log "ERROR: Invalid QBT_SELF_HEAL_STARTUP_GRACE_SECONDS value: $QBT_SELF_HEAL_STARTUP_GRACE_SECONDS"
 	exit 1
 fi
 
@@ -346,6 +351,17 @@ compose_container_inspect() {
 
 compose_container_status() {
 	compose_container_inspect '{{.State.Status}}' --all
+}
+
+# Prints how many seconds ago the running container started; fails when it is
+# not running or its start time is unknown.
+running_container_uptime() {
+	local state started
+
+	state="$(compose_container_inspect '{{.State.Status}} {{.State.StartedAt}}' --all)" || return 1
+	[[ "$state" == "running "* ]] || return 1
+	started="$(date -d "${state#running }" +%s 2>/dev/null)" || return 1
+	printf '%s\n' "$(($(date +%s) - started))"
 }
 
 recent_manual_stop_event() {
@@ -712,13 +728,19 @@ if ! qbt_login "$COOKIE_JAR"; then
 	# A container that is wedged on a stale single-instance lock never binds its
 	# Web UI, so the very first login fails and the normal recreate path below is
 	# never reached. Attempt one lock-clearing recreate so the loop can
-	# self-heal instead of looping on "Web UI unreachable".
+	# self-heal instead of looping on "Web UI unreachable". A container that only
+	# just started may still be loading torrents, so give it a grace period.
 	if require_compose_mode_ready; then
-		log "qBittorrent Web UI unreachable on startup; attempting self-heal recreate on port $PORT"
-		if recreate_qbt_service_compose "$PORT"; then
-			write_cache
-			log "qBittorrent recovered via self-heal recreate on port $PORT"
-			exit 0
+		if ! force_recreate_enabled && container_uptime="$(running_container_uptime)" &&
+			((container_uptime < QBT_SELF_HEAL_STARTUP_GRACE_SECONDS)); then
+			log "qBittorrent Web UI unreachable ${container_uptime}s after container start; within the ${QBT_SELF_HEAL_STARTUP_GRACE_SECONDS}s startup grace, so not recreating it yet"
+		else
+			log "qBittorrent Web UI unreachable on startup; attempting self-heal recreate on port $PORT"
+			if recreate_qbt_service_compose "$PORT"; then
+				write_cache
+				log "qBittorrent recovered via self-heal recreate on port $PORT"
+				exit 0
+			fi
 		fi
 	fi
 	log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"

@@ -98,9 +98,13 @@ renewal or host scheduling fails to meet the budget.
 
 The loop keeps at most one sync child running. It starts one when the port
 differs from the last successfully synced port (including the first lease and
-after a tunnel address change), when the previous sync failed, or when
-`QBT_SYNC_DRIFT_INTERVAL_SECONDS` (default 300) has passed since the last sync
-started; an unchanged renewal otherwise skips the sync. The drift sync still
+after a tunnel address change), when the previous sync failed and its retry
+backoff has elapsed, or when `QBT_SYNC_DRIFT_INTERVAL_SECONDS` (default 300)
+has passed since the last sync started; an unchanged renewal otherwise skips
+the sync. A failed sync of the same port waits `QBT_SYNC_RETRY_BACKOFF_SECONDS`
+(default 30), doubling per consecutive failure up to
+`QBT_SYNC_RETRY_BACKOFF_MAX_SECONDS` (default 300); a new port syncs
+immediately. The drift sync still
 repairs listen-port, published-port, artifact, and route drift. Port-forward
 capability is recorded with the server manager once per profile and port, and
 retried on the next renewal if that call fails. Sync has a default 120-second
@@ -176,12 +180,12 @@ Web UI ports, bind IPs, and interfaces are in the
 1. `proton-wg@<instance>` establishes that instance's tunnel.
 2. `proton-port-forward@<instance>` requests or refreshes a NAT-PMP lease through that instance's derived gateway.
 3. The port-forward loop atomically publishes the validated lease and freshness metadata in `/run/proton/<instance>`.
-4. It starts at most one bounded `proton-qbittorrent-sync-safe.sh <instance>` child while renewal continues independently: immediately on a port change or after a failed sync, and otherwise every `QBT_SYNC_DRIFT_INTERVAL_SECONDS`.
+4. It starts at most one bounded `proton-qbittorrent-sync-safe.sh <instance>` child while renewal continues independently: immediately on a port change, after a failed sync once its retry backoff has elapsed, and otherwise every `QBT_SYNC_DRIFT_INTERVAL_SECONDS`.
 5. The synchronizer acquires `/run/proton/<instance>/qbt-sync.lock`; ordinary lease sync skips if busy, while forced fleet sync waits and fails on timeout.
 6. It rejects invalid ports, expired leases, and state from a different boot, tunnel address, or generation.
 7. It rejects `QBT_PORT_ENV_FILE` if it points to the Compose project's static `.env`.
 8. It honors an intentional manual stop.
-9. It refuses normal Compose work for zombie, no-port, or persistent same-LWP kernel `D`-state wedges after allowing transient CIFS waits to clear.
+9. It refuses normal Compose work for zombie, no-port, or persistent same-LWP kernel `D`-state wedges after allowing transient CIFS waits to clear; a `D`-state task that keeps being scheduled between samples is slow I/O and does not block recreation.
 10. It authenticates to the correct qBittorrent Web API.
 11. It disables qBittorrent random-port selection.
 12. It applies the active port to qBittorrent.
@@ -196,7 +200,7 @@ Web UI ports, bind IPs, and interfaces are in the
 `qbt-port.cache` is diagnostic only: it holds the last port the sync applied, or
 the port it restored after a failed recreation. No script reads it back.
 
-An unchanged lease does not normally recreate the container when the artifact and both Docker mappings match. Stale mappings or an unreachable Web UI can trigger guarded recreation. Forced fleet sync can repair absent port mappings after lifecycle checks, but never bypasses zombie or persistent `D`-state refusal. If the artifact is in the legacy two-key format, the script canonicalizes it to one key without an unnecessary restart.
+An unchanged lease does not normally recreate the container when the artifact and both Docker mappings match. Stale mappings or an unreachable Web UI can trigger guarded recreation. An unreachable Web UI on a container that started less than `QBT_SELF_HEAL_STARTUP_GRACE_SECONDS` ago (default 600; `0` disables the grace) is left alone and retried later, because killing a client that is still loading torrents forces an unclean stop and a longer recheck; forced fleet sync is not delayed by this grace. Forced fleet sync can repair absent port mappings after lifecycle checks, but never bypasses zombie or persistent `D`-state refusal. If the artifact is in the legacy two-key format, the script canonicalizes it to one key without an unnecessary restart.
 
 Recreation revalidates the live lease
 immediately before Compose startup and after post-start verification. A lease

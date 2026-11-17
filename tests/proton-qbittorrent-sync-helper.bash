@@ -25,6 +25,7 @@ setup() {
   export PROJECT_DIR="$TEST_TMPDIR/project"
   export QBT_ROUTE_RECONCILE_SCRIPT="$TEST_TMPDIR/routes.sh"
   export DOCKER_CONFIG_DIR="$TEST_TMPDIR/docker-config"
+  export QBT_PROC_ROOT="$TEST_TMPDIR/proc"
   mkdir -p "$PROJECT_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$PROTON_COMMON_ENV"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$QBT_ROUTE_RECONCILE_SCRIPT"
@@ -201,6 +202,12 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
     printf '%s\n' "${QBT_TEST_FINISHED_AT:-2026-09-12T00:00:00Z}"
     exit 0
   fi
+  if [[ "$3" == '{{.State.Status}} {{.State.StartedAt}}' ]]; then
+    status="${QBT_TEST_CONTAINER_STATUS:-running}"
+    [[ -f "${DOCKER_LOG}.status" ]] && status="$(cat "${DOCKER_LOG}.status")"
+    printf '%s %s\n' "$status" "${QBT_TEST_STARTED_AT:-2026-09-12T00:00:00Z}"
+    exit 0
+  fi
   if [[ "$3" == *'.NetworkSettings.Ports'* ]]; then
     if [[ "${QBT_TEST_DOCKER_NO_PORTS:-}" == "1" ]] ||
       { [[ "${QBT_TEST_DOCKER_NO_PORTS:-}" == "until-compose" ]] && ! compgen -G "${DOCKER_LOG}.compose-*.count" >/dev/null; }; then
@@ -226,6 +233,17 @@ if [[ "$1" == 'top' ]]; then
     exit 1
   fi
   if [[ "${QBT_TEST_DOCKER_DSTATE:-}" == "1" ]]; then
+    # QBT_TEST_DSTATE_RUNS=frozen keeps the task's scheduler run count fixed;
+    # advancing bumps it on every sample, as for slow but progressing I/O.
+    if [[ -n "${QBT_TEST_DSTATE_RUNS:-}" ]]; then
+      schedstat="$QBT_PROC_ROOT/2/task/22/schedstat"
+      mkdir -p "${schedstat%/*}"
+      runs=7
+      if [[ "$QBT_TEST_DSTATE_RUNS" == advancing && -f "$schedstat" ]]; then
+        runs="$(( $(awk '{ print $3 }' "$schedstat") + 1 ))"
+      fi
+      printf '100 200 %s\n' "$runs" > "$schedstat"
+    fi
     printf 'PID LWP STAT\n'
     printf '2 22 Dsl\n'
   elif [[ "${QBT_TEST_DOCKER_DSTATE:-}" == "transient" ]]; then

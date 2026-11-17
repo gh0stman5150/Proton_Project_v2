@@ -488,9 +488,46 @@ EOF
 
 @test "a failed sync is retried on a later renewal with the same port" {
   write_renewal_loop_stubs
-  run env ITERATIONS=5 SYNC_FAILURES=1 bash ./proton-port-forward-safe.sh sonarr loop
+  run env ITERATIONS=5 SYNC_FAILURES=1 QBT_SYNC_RETRY_BACKOFF_SECONDS=0 bash ./proton-port-forward-safe.sh sonarr loop
   [ "$status" -eq 42 ]
   [ "$(wc -l < "$STATE_DIR/sync-count")" -eq 2 ]
+}
+
+@test "a failed sync waits out its backoff before retrying the same port" {
+  write_renewal_loop_stubs
+  stub_systemd_cat '$STATE_DIR/journal.log'
+  run env ITERATIONS=5 SYNC_FAILURES=1 bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$STATE_DIR/sync-count")" -eq 1 ]
+  grep -F 'qBittorrent port sync failed (1 consecutive); retrying port 45678 in 30s' "$STATE_DIR/journal.log"
+}
+
+@test "a new port syncs immediately even while a failed sync backs off" {
+  write_renewal_loop_stubs
+  run env ITERATIONS=5 SYNC_FAILURES=1 PORT_CHANGE_AFTER=2 bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  [ "$(wc -l < "$STATE_DIR/sync-count")" -eq 2 ]
+}
+
+@test "sync retry backoff doubles per consecutive failure up to its maximum" {
+  write_renewal_loop_stubs
+  stub_systemd_cat '$STATE_DIR/journal.log'
+  # Real one-second renewals so the loop's SECONDS clock can reach each retry.
+  cat > "$TMPBIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+n="$(( $(cat "$STATE_DIR/iterations" 2>/dev/null || echo 0) + 1 ))"
+printf '%s\n' "$n" > "$STATE_DIR/iterations"
+command -p sleep 1.05
+if (( n >= ITERATIONS )); then exit 42; fi
+EOF
+  run env ITERATIONS=9 SYNC_FAILURES=99 QBT_SYNC_RETRY_BACKOFF_SECONDS=1 QBT_SYNC_RETRY_BACKOFF_MAX_SECONDS=2 \
+    bash ./proton-port-forward-safe.sh sonarr loop
+  [ "$status" -eq 42 ]
+  grep -F '(1 consecutive); retrying port 45678 in 1s' "$STATE_DIR/journal.log"
+  grep -F '(2 consecutive); retrying port 45678 in 2s' "$STATE_DIR/journal.log"
+  grep -F '(3 consecutive); retrying port 45678 in 2s' "$STATE_DIR/journal.log"
+  run grep -E 'retrying port 45678 in ([3-9]|[1-9][0-9]+)s' "$STATE_DIR/journal.log"
+  [ "$status" -eq 1 ]
 }
 
 @test "unchanged renewals still re-run the sync after the drift interval" {
